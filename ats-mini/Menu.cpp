@@ -52,15 +52,15 @@ Band bands[] =
   {"MW3",  MW_BAND_TYPE, AM,   1700,  3500,  2500, 1, 4, 0, 0},
   {"MW2",  MW_BAND_TYPE, AM,    495,  1701,   783, 2, 4, 0, 0},
   {"MW1",  MW_BAND_TYPE, AM,    150,  1800,   810, 3, 4, 0, 0},
-  {"160M", MW_BAND_TYPE, LSB,  1800,  2000,  1900, 5, 4, 0, 0},
-  {"80M",  SW_BAND_TYPE, LSB,  3500,  4000,  3800, 5, 4, 0, 0},
-  {"40M",  SW_BAND_TYPE, LSB,  7000,  7300,  7150, 5, 4, 0, 0},
-  {"30M",  SW_BAND_TYPE, LSB, 10000, 10200, 10125, 5, 4, 0, 0},
-  {"20M",  SW_BAND_TYPE, USB, 14000, 14400, 14100, 5, 4, 0, 0},
-  {"17M",  SW_BAND_TYPE, USB, 18000, 18200, 18115, 5, 4, 0, 0},
-  {"15M",  SW_BAND_TYPE, USB, 21000, 21500, 21225, 5, 4, 0, 0},
-  {"12M",  SW_BAND_TYPE, USB, 24800, 25000, 24940, 5, 4, 0, 0},
-  {"10M",  SW_BAND_TYPE, USB, 28000, 29700, 28500, 5, 4, 0, 0},
+  {"160M", MW_BAND_TYPE, USB,  1800,  2000,  1840, 5, 5, 0, 0},
+  {"80M",  SW_BAND_TYPE, USB,  3500,  4000,  3573, 5, 5, 0, 0},
+  {"40M",  SW_BAND_TYPE, USB,  7000,  7300,  7074, 5, 5, 0, 0},
+  {"30M",  SW_BAND_TYPE, USB, 10000, 10200, 10136, 5, 5, 0, 0},
+  {"20M",  SW_BAND_TYPE, USB, 14000, 14400, 14074, 5, 5, 0, 0},
+  {"17M",  SW_BAND_TYPE, USB, 18000, 18200, 18100, 5, 5, 0, 0},
+  {"15M",  SW_BAND_TYPE, USB, 21000, 21500, 21074, 5, 5, 0, 0},
+  {"12M",  SW_BAND_TYPE, USB, 24800, 25000, 24915, 5, 5, 0, 0},
+  {"10M",  SW_BAND_TYPE, USB, 28000, 29700, 28074, 5, 5, 0, 0},
   // https://www.hfunderground.com/wiki/CB
   // Also see MIN_CB_FREQUENCY and MAX_CB_FREQUENCY
   {"CB",   SW_BAND_TYPE, AM,  25000, 28000, 27135, 0, 4, 0, 0},
@@ -1009,6 +1009,7 @@ bool clickHandler(uint16_t cmd, bool shortPress)
 
 void selectBand(uint8_t idx, bool drawLoadingSSB)
 {
+  g_si4732Busy = true;
   // Silence click on some hardware versions
   // https://github.com/esp32-si4732/ats-mini/discussions/103
   muteOn(MUTE_TEMP, true);
@@ -1040,6 +1041,7 @@ void selectBand(uint8_t idx, bool drawLoadingSSB)
 
   // Unmute the sound
   muteOn(MUTE_TEMP, false);
+  g_si4732Busy = false;
 }
 
 //

@@ -823,6 +823,13 @@ void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
   if (mode == USB) {
     for (int i = 0; i < 9; i++) {
       if (freqKhz == ft8Khz[i]) {
+        SsbAgcIdx = 0;
+        SsbAvcIdx = 90;
+        SsbSoftMuteIdx = 0;
+        bands[bandIdx].bandwidthIdx = 5; // 4.0k wide flat passband for FT8
+        doAgc(0);
+        doAvc(0);
+        doBandwidth(0);
         ft8SetDigitalMode(FT8_DIG_FT8);
         uiLayoutIdx = UI_FT8;
         return;
@@ -830,6 +837,13 @@ void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
     }
     for (int i = 0; i < 8; i++) {
       if (freqKhz == ft4Khz[i]) {
+        SsbAgcIdx = 0;
+        SsbAvcIdx = 90;
+        SsbSoftMuteIdx = 0;
+        bands[bandIdx].bandwidthIdx = 5; // 4.0k wide flat passband for FT4
+        doAgc(0);
+        doAvc(0);
+        doBandwidth(0);
         ft8SetDigitalMode(FT8_DIG_FT4);
         uiLayoutIdx = UI_FT8;
         return;
@@ -852,10 +866,14 @@ void ft8TuneBandDigitalFreq(int bId, uint8_t digMode) {
   int idx = bId - 18;
   uint16_t khz = (digMode == FT8_DIG_FT4) ? ft4Khz[idx] : ft8Khz[idx];
   int16_t  bfo = (digMode == FT8_DIG_FT4) ? ft4Bfo[idx] : 0;
+  SsbAgcIdx = 0;
+  SsbAvcIdx = 90;
+  SsbSoftMuteIdx = 0;
   ft8SetDigitalMode(digMode);
   uiLayoutIdx = UI_FT8;
   bandIdx = (uint8_t)bId;
   bands[bId].bandMode = USB;
+  bands[bId].bandwidthIdx = 5; // 4.0k wide flat passband for FT8/FT4
   bands[bId].currentFreq = khz;
   selectBand((uint8_t)bId, false);
   updateFrequency(khz, false);

@@ -131,6 +131,7 @@ extern TFT_eSPI tft;
 
 extern bool pushAndRotate;
 extern bool seekStop;
+extern volatile bool g_si4732Busy;
 extern volatile int16_t webEncDelta;
 extern volatile uint8_t webBtnEvent;
 extern uint8_t rssi;

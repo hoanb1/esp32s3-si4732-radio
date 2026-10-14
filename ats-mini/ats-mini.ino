@@ -38,6 +38,7 @@ int8_t softMuteMaxAttIdx = 4;
 
 bool seekStop = false;        // G8PTN: Added flag to abort seeking on rotary encoder detection
 bool pushAndRotate = false;   // Push and rotate is active, ignore the long press
+volatile bool g_si4732Busy = false;
 volatile int16_t webEncDelta = 0;
 volatile uint8_t webBtnEvent = 0;
 
@@ -209,6 +210,13 @@ void setup()
   // If loading bands fails, save default bands
   if(!prefsLoad(SAVE_BANDS|SAVE_VERIFY)) prefsSave(SAVE_BANDS);
 
+  // Ensure optimal SI4732 SSB AGC=ON (0), AVC=90 dB, and SoftMute=0 for weak-signal SSB & FT8 reception
+  if(volume < 35) volume = 35;
+  if(currentBrt < 130) currentBrt = 200;
+  SsbSoftMuteIdx = 0;
+  SsbAvcIdx = 90;
+  SsbAgcIdx = 0;
+
   // Audio Amplifier Enable. G8PTN: Added
   // After the SI4732 has been setup, enable the audio amplifier
 #if PIN_AMP_EN >= 0
@@ -217,6 +225,7 @@ void setup()
 
   // SI4732 STARTUP!
   selectBand(bandIdx, false);
+  ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
   delay(50);
   rx.setVolume(volume);
   rx.setAudioMute(false);
@@ -365,11 +374,16 @@ void useBand(const Band *band)
       rx.setSSB(band->minimumFreq, band->maximumFreq, band->currentFreq, 0, currentMode);
       rx.setRefClock(32802);
       rx.setFrequency(band->currentFreq);
+      // Ensure wide 4.0 kHz audio passband (300..2500 Hz flat) and true SSB mode (DSP_AFCDIS=1, AVC_DIVIDER=0) for FT8
       rx.setSSBDspAfc(1);
       rx.setSSBAvcDivider(0);
-      // G8PTN: Always enabled
+      rx.setSSBAudioBandwidth(3);
+      rx.setSSBSidebandCutoffFilter(1);
+      // Enable AVC and completely disable SSB SoftMute attenuation (since SSB RSQ SNR reports 0)
       rx.setSSBAutomaticVolumeControl(1);
       rx.setSsbSoftMuteMaxAttenuation(0);
+      rx.setAmSoftMuteMaxAttenuation(0);
+      rx.setAvcAmMaxGain(SsbAvcIdx);
       // To move frequency forward, need to move the BFO backwards
       if (currentMode == USB)
         rx.setSSBBfo(-(currentBFO + band->usbCal));
@@ -398,8 +412,9 @@ void useBand(const Band *band)
   doAgc(0);
   // Set currentAVC values based on mode (AM, SSB)
   doAvc(0);
-  if (isSSB()) {
+  if (currentMode != FM) {
     rx.setSsbSoftMuteMaxAttenuation(0);
+    rx.setAmSoftMuteMaxAttenuation(0);
   }
   rx.setVolume(volume);
   rx.setAudioMute(false);
@@ -683,6 +698,7 @@ bool clickFreq(bool shortPress)
 
 bool processRssiSnr()
 {
+  if (g_si4732Busy) return false;
   static uint32_t updateCounter = 0;
   bool needRedraw = false;
 
@@ -956,7 +972,7 @@ void loop()
   // Periodically check received RDS information
   if((currentTime - lastRDSCheck) > RDS_CHECK_TIME)
   {
-    needRedraw |= (currentMode == FM) && (snr >= 12) && checkRds();
+    needRedraw |= !g_si4732Busy && (currentMode == FM) && (snr >= 12) && checkRds();
     lastRDSCheck = currentTime;
   }
 

@@ -629,6 +629,8 @@ static void webInit()
       return "";
     };
 
+    g_si4732Busy = true;
+
     if (action == "volume") {
       int v = getParamStr("val").toInt();
       if (v < 0) v = 0;
@@ -805,6 +807,7 @@ static void webInit()
       currentBFO = 0;
       updateBFO(0, true);
       prefsRequestSave(SAVE_BANDS, true);
+      g_si4732Busy = false;
       char buf[64];
       snprintf(buf, sizeof(buf), "{\"ok\":true,\"cal\":%d}", (int)newCal);
       request->send(200, "application/json", buf);
@@ -960,6 +963,7 @@ static void webInit()
       }
     }
 
+    g_si4732Busy = false;
     ft8RequestRedraw();
     request->send(200, "application/json", "{\"ok\":true}");
   });
