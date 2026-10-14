@@ -659,6 +659,13 @@ bool ft8TickWaterfall() {
     if (digActive && !slotDecoded && liveMon.wf.num_blocks >= 55) {
       ft8DecodeFromMonitor(&liveMon, false);
     }
+    if (isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0)) {
+      Serial.printf("[FT8] Recovering SI4732 SSB patch / GPIO34 bias (mean=%.0f, patch=0x%04X)...\r\n",
+                    lastAdcMean, rx.getPatchId());
+      unloadSSB();
+      selectBand(bandIdx, false);
+      rx.setVolume(volume);
+    }
     adcReadBlock = adcWriteBlock;
     adcSampleIdx = 0;
     adcEpochUs = 0;
@@ -824,7 +831,7 @@ void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
     for (int i = 0; i < 9; i++) {
       if (freqKhz == ft8Khz[i]) {
         SsbAgcIdx = 0;
-        SsbAvcIdx = 90;
+        SsbAvcIdx = 84;
         SsbSoftMuteIdx = 0;
         bands[bandIdx].bandwidthIdx = 5; // 4.0k wide flat passband for FT8
         doAgc(0);
@@ -838,7 +845,7 @@ void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
     for (int i = 0; i < 8; i++) {
       if (freqKhz == ft4Khz[i]) {
         SsbAgcIdx = 0;
-        SsbAvcIdx = 90;
+        SsbAvcIdx = 84;
         SsbSoftMuteIdx = 0;
         bands[bandIdx].bandwidthIdx = 5; // 4.0k wide flat passband for FT4
         doAgc(0);
@@ -861,13 +868,13 @@ void ft8TuneBandDigitalFreq(int bId, uint8_t digMode) {
   static const uint16_t ft4Khz[9] = { 1840, 3575, 7047, 10140, 14080, 18104, 21140, 24919, 28180 };
   static const int16_t  ft4Bfo[9] = {    0,  500,  500,     0,     0,     0,     0,     0,     0 };
   if (bId < 18 || bId > 26) {
-    bId = 22; // Default 20M amateur band
+    bId = 24; // Default 15M (21.074 MHz) amateur band
   }
   int idx = bId - 18;
   uint16_t khz = (digMode == FT8_DIG_FT4) ? ft4Khz[idx] : ft8Khz[idx];
   int16_t  bfo = (digMode == FT8_DIG_FT4) ? ft4Bfo[idx] : 0;
   SsbAgcIdx = 0;
-  SsbAvcIdx = 90;
+  SsbAvcIdx = 84;
   SsbSoftMuteIdx = 0;
   ft8SetDigitalMode(digMode);
   uiLayoutIdx = UI_FT8;
@@ -1033,10 +1040,10 @@ void ft8PrintDiag() {
   }
 
   Serial.println("\r\n========== HARDWARE & SIGNAL DIAGNOSTICS ==========");
-  Serial.printf("Si4732 Radio : %s %u kHz (BFO: %d Hz, Cal: %d Hz, BW: %s)\r\n",
+  Serial.printf("Si4732 Radio : %s %u kHz (BFO: %d Hz, Cal: %d Hz, BW: %s, PatchID: 0x%04X)\r\n",
                 bandModeDesc[currentMode], currentFrequency, currentBFO,
                 currentMode == USB ? getCurrentBand()->usbCal : getCurrentBand()->lsbCal,
-                getCurrentBandwidth()->desc);
+                getCurrentBandwidth()->desc, rx.getPatchId());
   Serial.printf("Si4732 Signal: RSSI = %u dBuV | SNR = %u dB | RF_AGC = %s | SSB_AVC = %d dB (Max) | Speaker_Vol = %u/63\r\n",
                 curRssi, curSnr, disableAgc ? "ATTN" : "ON(MaxSens)", isSSB() ? SsbAvcIdx : AmAvcIdx, volume);
   Serial.printf("Speaker Audio: %s | GPIO34 ADC Atten: 0dB (0..0.95V Max Hardware Sensitivity)\r\n", ft8SpeakerMuted ? "WHISPER(10/63)" : "QUIET(20/63)");

@@ -72,11 +72,23 @@ const char *getMACAddress()
 //
 void loadSSB(uint8_t bandwidth, bool draw)
 {
-  if(!ssbLoaded)
+  if(!ssbLoaded || rx.getPatchId() == 0)
   {
     if(draw) drawMessage("Loading SSB");
-    rx.loadPatch(ssb_patch_content, sizeof(ssb_patch_content), bandwidth);
-    ssbLoaded = true;
+    for(int attempt = 0; attempt < 2; attempt++)
+    {
+      rx.loadPatch(ssb_patch_content, sizeof(ssb_patch_content), bandwidth);
+      uint16_t pid = rx.getPatchId();
+      Serial.printf("[SSB] SI4732 Patch load attempt %d: patchID=0x%04X (size=%u, bw=%u)\r\n",
+                    attempt + 1, pid, (unsigned int)sizeof(ssb_patch_content), bandwidth);
+      if(pid != 0)
+      {
+        ssbLoaded = true;
+        return;
+      }
+      delay(20);
+    }
+    ssbLoaded = false;
   }
 }
 

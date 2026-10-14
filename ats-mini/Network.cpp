@@ -630,6 +630,7 @@ static void webInit()
     };
 
     g_si4732Busy = true;
+    delay(15);
 
     if (action == "volume") {
       int v = getParamStr("val").toInt();

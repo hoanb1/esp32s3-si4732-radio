@@ -62,7 +62,7 @@ int8_t SsbAgcIdx = 0;                   // Default SSB AGCON  : Range = 0 to 1, 
 
 // AVC index per mode (AM/SSB)
 int8_t AmAvcIdx = 48;                   // Default AM  = 48 (as per AN332), range = 12 to 90 in steps of 2
-int8_t SsbAvcIdx = 90;                  // Default SSB = 90 for weak signal & FT8 reception, range = 12 to 90 in steps of 2
+int8_t SsbAvcIdx = 84;                  // Default SSB = 84 dB (optimal 15h05 FT8 gain without op-amp saturation), range = 12 to 90 in steps of 2
 
 // SoftMute index per mode (AM/SSB)
 int8_t AmSoftMuteIdx = 4;               // Default AM  = 4, range = 0 to 32
@@ -210,11 +210,11 @@ void setup()
   // If loading bands fails, save default bands
   if(!prefsLoad(SAVE_BANDS|SAVE_VERIFY)) prefsSave(SAVE_BANDS);
 
-  // Ensure optimal SI4732 SSB AGC=ON (0), AVC=90 dB, and SoftMute=0 for weak-signal SSB & FT8 reception
-  if(volume < 35) volume = 35;
+  // Ensure optimal SI4732 SSB AGC=ON (0), AVC=84 dB (clean non-saturating FT8 gain), and SoftMute=0
+  volume = 36;
   if(currentBrt < 130) currentBrt = 200;
   SsbSoftMuteIdx = 0;
-  SsbAvcIdx = 90;
+  SsbAvcIdx = 84;
   SsbAgcIdx = 0;
 
   // Audio Amplifier Enable. G8PTN: Added

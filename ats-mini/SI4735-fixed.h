@@ -70,8 +70,7 @@ class SI4735_fixed: public SI4735
     } while (!currentStatus.resp.VALID && !currentStatus.resp.BLTF && (millis() - elapsed_seek) < maxSeekTime);
   }
 
-#if 0
-    // Speeding up SI4735::downloadPatch() function
+    // Reliable SI4732 SSB patch download waiting for CTS after every 8-byte frame
     bool downloadPatch(const uint8_t *ssb_patch_content, const uint16_t ssb_patch_content_size)
     {
       for(uint16_t offset=0 ; offset<ssb_patch_content_size ; offset+=8)
@@ -89,17 +88,29 @@ class SI4735_fixed: public SI4735
       return true;
     }
 
-    // Using the new downloadPatch() function here
+    // Load SSB patch and ensure currentTune is AM_TUNE_FREQ before setSSBConfig()
     void loadPatch(const uint8_t *ssb_patch_content, const uint16_t ssb_patch_content_size, uint8_t ssb_audiobw)
     {
-      queryLibraryId();                                                                                                       patchPowerUp();
-      delay(50);                                                                                                              downloadPatch(ssb_patch_content, ssb_patch_content_size);                                                               // Parameters                                                                                                           // AUDIOBW - SSB Audio bandwidth; 0 = 1.2kHz (default); 1=2.2kHz; 2=3kHz; 3=4kHz; 4=500Hz; 5=1kHz;
-      // SBCUTFLT SSB - side band cutoff filter for band passand low pass filter ( 0 or 1)                                    // AVC_DIVIDER  - set 0 for SSB mode; set 3 for SYNC mode.
-      // AVCEN - SSB Automatic Volume Control (AVC) enable; 0=disable; 1=enable (default).
-      // SMUTESEL - SSB Soft-mute Based on RSSI or SNR (0 or 1).
-      // DSP_AFCDIS - DSP AFC Disable or enable; 0=SYNC MODE, AFC enable; 1=SSB MODE, AFC disable.
-      setSSBConfig(ssb_audiobw, 1, 0, 0, 0, 1);
+      queryLibraryId();
+      patchPowerUp();
+      delay(50);
+      downloadPatch(ssb_patch_content, ssb_patch_content_size);
+      // Critical fix: patchPowerUp() switches SI4732 to FUNC=1 (AM/SSB), so update currentTune
+      // before setSSBConfig(), otherwise setSSBConfig() returns early when switching from FM!
+      this->currentTune = AM_TUNE_FREQ;
+      this->currentFrequencyParams.arg.FREEZE = 0;
+      this->currentFrequencyParams.arg.FAST = 1;
+      this->currentFrequencyParams.arg.DUMMY1 = 0;
+      this->currentFrequencyParams.arg.ANTCAPH = 0;
+      this->currentFrequencyParams.arg.ANTCAPL = 1;
+      setSSBConfig(ssb_audiobw, 1, 0, 1, 0, 1);
       delay(25);
     }
-#endif
+
+    // Query SI4732 GET_REV hardware register to verify SSB patch ID (0xA902 when loaded, 0x0000 if unpatched)
+    uint16_t getPatchId()
+    {
+      getFirmware();
+      return ((uint16_t)firmwareInfo.resp.PATCHH << 8) | (uint16_t)firmwareInfo.resp.PATCHL;
+    }
 };
