@@ -387,6 +387,8 @@ int remoteDoCommand(char key)
       event |= REMOTE_PREFS;
       break;
     case 'O':
+      sleepOn(true);
+      break;
     case 'o':
       sleepOn(false);
       break;
@@ -425,7 +427,7 @@ int remoteDoCommand(char key)
         ft8SetEpochTime(ep);
         Serial.printf("[TIME] Synced UTC Epoch: %lu\r\n", (unsigned long)ep);
       } else {
-        ntpSyncTime();
+        Serial.println(switchThemeEditor(!switchThemeEditor()) ? "Theme editor enabled" : "Theme editor disabled");
       }
       break;
     }
@@ -458,12 +460,9 @@ int remoteDoCommand(char key)
     case 'z': // Manually sync FT8 slot to :00s
       ft8SyncSlotManual();
       break;
-    case 'u': // Switch to FT8 layout & toggle view mode (Split / Waterfall / Log)
-      if (uiLayoutIdx != UI_FT8) {
-        uiLayoutIdx = UI_FT8;
-      } else {
-        ft8ToggleViewMode();
-      }
+    case 'u': // Cycle LCD layout (Default -> S-Meter -> FT8)
+      uiLayoutIdx = (uiLayoutIdx + 1) % (UI_FT8 + 1);
+      event |= REMOTE_PREFS;
       break;
     case '1': case '2': case '3': case '4': case '5':
     case '6': case '7':

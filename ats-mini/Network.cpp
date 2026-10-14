@@ -280,22 +280,15 @@ void netInit(uint8_t netMode, bool showStatus)
       break;
   }
 
+  if(netMode != NET_SYNC)
+  {
+    webInit();
+  }
+
   // Initialize WiFi and try connecting to saved networks (HH-1301, HH-1301_IoT, etc.)
   if(netMode > NET_AP_ONLY && wifiConnect())
   {
-    if(netMode != NET_SYNC)
-    {
-      webInit();
-    }
-
     if(netMode != NET_SYNC && showStatus) delay(200);
-
-    ntpClient.begin();
-    ntpClient.setUpdateInterval(5*60*1000);
-  }
-  else if(netMode != NET_SYNC)
-  {
-    webInit();
   }
 
   if(netMode == NET_SYNC)
@@ -492,24 +485,50 @@ static void webInit()
     String ip = isAp ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
     String ssid = isAp ? String(apSSID) : WiFi.SSID();
     int8_t curAvc = isSSB() ? SsbAvcIdx : AmAvcIdx;
+    int8_t curSm = isSSB() ? SsbSoftMuteIdx : AmSoftMuteIdx;
+    bool isStereo = (currentMode == FM) && rx.getCurrentPilot();
+    const char *tStr = clockGet();
+    if (!tStr) tStr = "--:--";
 
-    char json[800];
-    snprintf(json, sizeof(json),
-      "{\"freq_khz\":\"%s\",\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
+    auto cleanJsonStr = [](char *dst, const char *src, size_t maxLen) {
+      size_t j = 0;
+      if (src) {
+        for (size_t i = 0; src[i] != '\0' && j + 1 < maxLen; i++) {
+          char c = src[i];
+          if (c >= 32 && c != '"' && c != '\\') dst[j++] = c;
+        }
+      }
+      dst[j] = '\0';
+    };
+
+    static char stName[40], rdsTxt[64], cleanSsid[40];
+    cleanJsonStr(stName, getStationName(), sizeof(stName));
+    cleanJsonStr(rdsTxt, getRadioText(), sizeof(rdsTxt));
+    cleanJsonStr(cleanSsid, ssid.c_str(), sizeof(cleanSsid));
+
+    static char json[960];
+    int len = snprintf(json, sizeof(json),
+      "{\"freq_khz\":\"%s\",\"raw_freq\":%u,\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
+      "\"band_min\":%u,\"band_max\":%u,"
       "\"mode\":\"%s\",\"mode_id\":%u,\"dig_mode\":%u,\"bfo\":%d,\"cal\":%d,"
       "\"bw\":\"%s\",\"bw_idx\":%d,\"step\":\"%s\","
-      "\"agc\":%d,\"att_db\":%d,\"avc\":%d,\"squelch\":%u,"
-      "\"rssi\":%u,\"snr\":%u,\"s_level\":%d,"
-      "\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
+      "\"agc\":%d,\"att_db\":%d,\"avc\":%d,\"softmute\":%d,\"squelch\":%u,"
+      "\"rssi\":%u,\"snr\":%u,\"s_level\":%d,\"stereo\":%s,"
+      "\"station\":\"%s\",\"rds_text\":\"%s\",\"local_time\":\"%s\",\"vbat\":%.2f,"
+      "\"brt\":%u,\"theme\":%u,\"theme_name\":\"%s\",\"cmd\":%u,"
+      "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
       "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
       "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,"
       "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu}",
-      freqStr, unit, getCurrentBand()->bandName, bandIdx,
-      bandModeDesc[currentMode], (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
+      freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
+      (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
+      ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
       getCurrentBandwidth()->desc, (int)bands[bandIdx].bandwidthIdx, getCurrentStep()->desc,
-      (int)agcIdx, (int)agcNdx, (int)curAvc, (unsigned int)currentSquelch,
-      rssi, snr, getStrength(rssi),
-      ft8GetViewMode(), isAp ? "true" : "false", ip.c_str(), ssid.c_str(),
+      (int)agcIdx, (int)agcNdx, (int)curAvc, (int)curSm, (unsigned int)currentSquelch,
+      rssi, snr, getStrength(rssi), isStereo ? "true" : "false",
+      stName, rdsTxt, tStr, batteryMonitor(),
+      (unsigned int)currentBrt, (unsigned int)themeIdx, TH.name, (unsigned int)currentCmd,
+      (unsigned int)uiLayoutIdx, ft8GetViewMode(), isAp ? "true" : "false", ip.c_str(), cleanSsid,
       clockAvailable() ? "true" : "false", ntpIsAvailable() ? "NTP" : "Manual",
       ft8GetCurrentSlotSecond(), ft8IsDecodingNow() ? "true" : "false",
       (unsigned long)ft8GetLastDurationMs(), volume,
@@ -517,7 +536,11 @@ static void webInit()
       ft8GetAudioLevel(), (unsigned int)ESP.getFreeHeap(),
       (unsigned long)ft8GetTotalDecoded()
     );
-    request->send(200, "application/json", json);
+    if (len < 0) len = 0;
+    if (len >= (int)sizeof(json)) len = sizeof(json) - 1;
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
+    response->addHeader("Cache-Control", "no-store");
+    request->send(response);
   });
 
   // /api/bookmarks - Return saved radio bookmarks from NVS memories[]
@@ -606,23 +629,6 @@ static void webInit()
       return "";
     };
 
-    auto tuneBandDigitalFreq = [&](int bId, uint8_t digMode) {
-      // Standard FT8 & FT4 dial frequencies for bands[18..26] (160M..10M)
-      static const uint16_t ft8Khz[9] = { 1840, 3573, 7074, 10136, 14074, 18100, 21074, 24915, 28074 };
-      static const uint16_t ft4Khz[9] = { 1840, 3575, 7047, 10140, 14080, 18104, 21140, 24919, 28180 };
-      static const int16_t  ft4Bfo[9] = {    0,  500,  500,     0,     0,     0,     0,     0,     0 };
-      if (bId >= 18 && bId <= 26) {
-        int idx = bId - 18;
-        uint16_t khz = (digMode == FT8_DIG_FT4) ? ft4Khz[idx] : ft8Khz[idx];
-        int16_t  bfo = (digMode == FT8_DIG_FT4) ? ft4Bfo[idx] : 0;
-        bands[bId].bandMode = USB;
-        bands[bId].currentFreq = khz;
-        selectBand((uint8_t)bId, false);
-        updateFrequency(khz, false);
-        updateBFO(bfo, false);
-      }
-    };
-
     if (action == "volume") {
       int v = getParamStr("val").toInt();
       if (v < 0) v = 0;
@@ -632,28 +638,44 @@ static void webInit()
       prefsRequestSave(SAVE_SETTINGS);
     } else if (action == "mode") {
       int m = getParamStr("mode").toInt();
-      if (m >= 0 && m <= 3) {
+      if (m >= 0 && m <= 4) {
         ft8SetDigitalMode(FT8_DIG_OFF);
-        if (m == FM && bandIdx != 0) {
-          bandIdx = 0;
-        } else if (m != FM && bandIdx == 0) {
-          bandIdx = (m == AM) ? 16 : 22; // Default MW2 for AM or 20M for USB/LSB
+        if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
+        if (m == 4) {
+          // CW mode = USB + 0.5kHz narrow filter (ssbBandwidths[0] = "0.5k")
+          if (bandIdx == 0) bandIdx = 20; // Default 40M
+          bands[bandIdx].bandMode = USB;
+          bands[bandIdx].bandwidthIdx = 0;
+          currentMode = USB;
+          selectBand(bandIdx, false);
+        } else {
+          if (m == FM && bandIdx != 0) {
+            bandIdx = 0;
+          } else if (m != FM && bandIdx == 0) {
+            bandIdx = (m == AM) ? 16 : 22; // Default MW2 for AM or 20M for USB/LSB
+          }
+          if ((m == USB || m == LSB) && bands[bandIdx].bandwidthIdx == 0) {
+            bands[bandIdx].bandwidthIdx = 4; // Restore 3.0kHz SSB filter when leaving CW
+          }
+          bands[bandIdx].bandMode = (uint8_t)m;
+          currentMode = (uint8_t)m;
+          selectBand(bandIdx, false);
         }
-        bands[bandIdx].bandMode = (uint8_t)m;
-        currentMode = (uint8_t)m;
-        selectBand(bandIdx, false);
         prefsRequestSave(SAVE_ALL);
       }
     } else if (action == "dig_mode") {
       int dm = getParamStr("val").toInt();
       if (dm >= 0 && dm <= 2) {
-        ft8SetDigitalMode((uint8_t)dm);
         if (dm == FT8_DIG_FT8 || dm == FT8_DIG_FT4) {
           if (bandIdx < 18 || bandIdx > 26) {
             bandIdx = 22; // Default 20M amateur band
           }
-          tuneBandDigitalFreq(bandIdx, (uint8_t)dm);
+          ft8TuneBandDigitalFreq(bandIdx, (uint8_t)dm);
           prefsRequestSave(SAVE_ALL);
+        } else {
+          ft8SetDigitalMode(FT8_DIG_OFF);
+          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
+          prefsRequestSave(SAVE_SETTINGS);
         }
       }
     } else if (action == "freq") {
@@ -691,6 +713,7 @@ static void webInit()
         if (khzVal >= 64000.0 && khzVal <= 108000.0) {
           uint16_t fmFreq = (uint16_t)round(khzVal / 10.0);
           ft8SetDigitalMode(FT8_DIG_OFF);
+          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
           if (bandIdx != 0 || currentMode != FM) {
             bandIdx = 0;
             bands[0].bandMode = FM;
@@ -698,6 +721,7 @@ static void webInit()
             selectBand(0, false);
           }
           updateFrequency(fmFreq, false);
+          clearStationInfo();
           prefsRequestSave(SAVE_ALL);
         } else if (khzVal >= 150.0 && khzVal <= 30000.0) {
           uint32_t hz = (uint32_t)round(khzVal * 1000.0);
@@ -722,7 +746,9 @@ static void webInit()
           }
           updateFrequency(khz, false);
           if (isSSB()) updateBFO(remBfo, false);
-          if (currentMode != USB) ft8SetDigitalMode(FT8_DIG_OFF);
+          clearStationInfo();
+          identifyFrequency(currentFrequency + currentBFO / 1000);
+          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
           prefsRequestSave(SAVE_ALL);
         }
       }
@@ -730,6 +756,7 @@ static void webInit()
       int delta = getParamStr("delta").toInt();
       if (currentMode == FM) {
         updateFrequency(currentFrequency + delta * 10, true);
+        clearStationInfo();
       } else {
         int32_t newKhz = (int32_t)currentFrequency + delta;
         if (newKhz < 150) newKhz = 150;
@@ -751,6 +778,8 @@ static void webInit()
         }
         updateFrequency((uint16_t)newKhz, false);
         if (isSSB() && savedBfo != 0) updateBFO(savedBfo, false);
+        clearStationInfo();
+        identifyFrequency(currentFrequency + currentBFO / 1000);
       }
       prefsRequestSave(SAVE_CUR_BAND);
     } else if (action == "bfo_step") {
@@ -819,17 +848,55 @@ static void webInit()
       else AmAvcIdx = v;
       doAvc(0);
       prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "softmute") {
+      int v = getParamStr("val").toInt();
+      if (v < 0) v = 0;
+      if (v > 32) v = 32;
+      if (isSSB()) SsbSoftMuteIdx = v;
+      else AmSoftMuteIdx = v;
+      doSoftMute(0);
+      prefsRequestSave(SAVE_SETTINGS);
     } else if (action == "squelch") {
       int v = getParamStr("val").toInt();
       if (v < 0) v = 0;
       if (v > 127) v = 127;
       currentSquelch = (uint8_t)v;
       prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "brt") {
+      int v = getParamStr("val").toInt();
+      if (v < 10) v = 10;
+      if (v > 255) v = 255;
+      currentBrt = (uint16_t)v;
+      ledcWrite(PIN_LCD_BL, currentBrt);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "theme") {
+      int v = getParamStr("val").toInt();
+      if (v >= 0 && v < getTotalThemes()) {
+        themeIdx = (uint8_t)v;
+        prefsRequestSave(SAVE_SETTINGS);
+      } else {
+        themeIdx = (themeIdx + 1) % getTotalThemes();
+        prefsRequestSave(SAVE_SETTINGS);
+      }
+    } else if (action == "seek") {
+      int dir = getParamStr("dir").toInt();
+      webBtnEvent = (dir < 0) ? 5 : 4;
+    } else if (action == "enc") {
+      String type = getParamStr("type");
+      if (type == "rot") {
+        int d = getParamStr("dir").toInt();
+        webEncDelta = (int16_t)(d ? d : 1);
+      } else if (type == "click") {
+        webBtnEvent = 1;
+      } else if (type == "short") {
+        webBtnEvent = 2;
+      } else if (type == "long") {
+        webBtnEvent = 3;
+      }
     } else if (action == "bookmark_tune") {
       int slot = getParamStr("slot").toInt();
       if (slot >= 0 && slot < getTotalMemories() && memories[slot].freq) {
         tuneToMemory(&memories[slot]);
-        if (currentMode != USB) ft8SetDigitalMode(FT8_DIG_OFF);
         prefsRequestSave(SAVE_ALL);
       }
     } else if (action == "bookmark_save") {
@@ -859,10 +926,19 @@ static void webInit()
         memories[slot].name[0] = '\0';
         prefsRequestSave(SAVE_MEMORIES, true);
       }
+    } else if (action == "lcd_layout") {
+      int lay = getParamStr("val").toInt();
+      if (lay >= 0 && lay <= UI_FT8) {
+        uiLayoutIdx = (uint8_t)lay;
+        prefsRequestSave(SAVE_SETTINGS);
+      }
     } else if (action == "view") {
+      uiLayoutIdx = UI_FT8;
       ft8SetViewMode((uint8_t)getParamStr("mode").toInt());
+      prefsRequestSave(SAVE_SETTINGS);
     } else if (action == "view_toggle") {
-      ft8ToggleViewMode();
+      uiLayoutIdx = (uiLayoutIdx + 1) % (UI_FT8 + 1);
+      prefsRequestSave(SAVE_SETTINGS);
     } else if (action == "clear_traffic") {
       ft8ClearTraffic();
     } else if (action == "mute") {
@@ -875,10 +951,10 @@ static void webInit()
       int bId = getParamStr("id").toInt();
       if (bId >= 0 && bId < getTotalBands()) {
         if (bId >= 18 && bId <= 26 && ft8GetDigitalMode() != FT8_DIG_OFF) {
-          tuneBandDigitalFreq(bId, ft8GetDigitalMode());
+          ft8TuneBandDigitalFreq(bId, ft8GetDigitalMode());
         } else {
-          if (bId < 18 || bId > 26) ft8SetDigitalMode(FT8_DIG_OFF);
           selectBand((uint8_t)bId, false);
+          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
         }
         prefsRequestSave(SAVE_ALL);
       }

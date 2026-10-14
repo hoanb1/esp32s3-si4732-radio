@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "Menu.h"
 #include "Draw.h"
+#include "Layout-FT8.h"
 
 void drawLayoutDefault(const char *statusLine1, const char *statusLine2)
 {
@@ -24,7 +25,7 @@ void drawLayoutDefault(const char *statusLine1, const char *statusLine2)
   // Draw band and mode
   drawBandAndMode(
     getCurrentBand()->bandName,
-    bandModeDesc[currentMode],
+    ft8GetDisplayModeDesc(),
     BAND_OFFSET_X, BAND_OFFSET_Y
   );
 

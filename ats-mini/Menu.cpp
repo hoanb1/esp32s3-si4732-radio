@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Draw.h"
 #include "EIBI.h"
+#include "Layout-FT8.h"
 
 //
 // Bands Menu
@@ -19,7 +20,7 @@
 // at first time to RESET the preferences.
 //
 
-int bandIdx = 22; // Default 20M FT8 (14074 kHz USB)
+int bandIdx = 0;
 
 // Band limits are expanded to align with the nearest tuning scale mark
 // Do not forget to update the bands table in the manual.md
@@ -41,18 +42,25 @@ Band bands[] =
   {"60M",  SW_BAND_TYPE, AM,   4000,  5100,  4950, 1, 4, 0, 0},
   {"75M",  SW_BAND_TYPE, AM,   3500,  4000,  3950, 1, 4, 0, 0},
   {"90M",  SW_BAND_TYPE, AM,   3000,  3500,  3300, 1, 4, 0, 0},
+//  {"25M",  SW_BAND_TYPE, AM,  11600, 12100, 11850, 1, 4, 0},
+//  {"31M",  SW_BAND_TYPE, AM,   9400,  9900,  9650, 1, 4, 0},
+//  {"41M",  SW_BAND_TYPE, AM,   7200,  7500,  7300, 1, 4, 0},
+//  {"49M",  SW_BAND_TYPE, AM,   5900,  6200,  6000, 1, 4, 0},
+//  {"60M",  SW_BAND_TYPE, AM,   4700,  5100,  4950, 1, 4, 0},
+//  {"75M",  SW_BAND_TYPE, AM,   3900,  4000,  3950, 1, 4, 0},
+//  {"90M",  SW_BAND_TYPE, AM,   3200,  3400,  3300, 1, 4, 0},
   {"MW3",  MW_BAND_TYPE, AM,   1700,  3500,  2500, 1, 4, 0, 0},
   {"MW2",  MW_BAND_TYPE, AM,    495,  1701,   783, 2, 4, 0, 0},
   {"MW1",  MW_BAND_TYPE, AM,    150,  1800,   810, 3, 4, 0, 0},
-  {"160M", MW_BAND_TYPE, USB,  1800,  2000,  1840, 5, 4, 0, 0},
-  {"80M",  SW_BAND_TYPE, USB,  3500,  4000,  3573, 5, 4, 0, 0},
-  {"40M",  SW_BAND_TYPE, USB,  7000,  7300,  7074, 5, 4, 0, 0},
-  {"30M",  SW_BAND_TYPE, USB, 10000, 10200, 10136, 5, 4, 0, 0},
-  {"20M",  SW_BAND_TYPE, USB, 14000, 14400, 14074, 5, 4, 0, 0},
-  {"17M",  SW_BAND_TYPE, USB, 18000, 18200, 18100, 5, 4, 0, 0},
-  {"15M",  SW_BAND_TYPE, USB, 21000, 21500, 21074, 5, 4, 0, 0},
-  {"12M",  SW_BAND_TYPE, USB, 24800, 25000, 24915, 5, 4, 0, 0},
-  {"10M",  SW_BAND_TYPE, USB, 28000, 29700, 28074, 5, 4, 0, 0},
+  {"160M", MW_BAND_TYPE, LSB,  1800,  2000,  1900, 5, 4, 0, 0},
+  {"80M",  SW_BAND_TYPE, LSB,  3500,  4000,  3800, 5, 4, 0, 0},
+  {"40M",  SW_BAND_TYPE, LSB,  7000,  7300,  7150, 5, 4, 0, 0},
+  {"30M",  SW_BAND_TYPE, LSB, 10000, 10200, 10125, 5, 4, 0, 0},
+  {"20M",  SW_BAND_TYPE, USB, 14000, 14400, 14100, 5, 4, 0, 0},
+  {"17M",  SW_BAND_TYPE, USB, 18000, 18200, 18115, 5, 4, 0, 0},
+  {"15M",  SW_BAND_TYPE, USB, 21000, 21500, 21225, 5, 4, 0, 0},
+  {"12M",  SW_BAND_TYPE, USB, 24800, 25000, 24940, 5, 4, 0, 0},
+  {"10M",  SW_BAND_TYPE, USB, 28000, 29700, 28500, 5, 4, 0, 0},
   // https://www.hfunderground.com/wiki/CB
   // Also see MIN_CB_FREQUENCY and MAX_CB_FREQUENCY
   {"CB",   SW_BAND_TYPE, AM,  25000, 28000, 27135, 0, 4, 0, 0},
@@ -166,6 +174,7 @@ int getTotalModes() { return(ITEM_COUNT(bandModeDesc)); }
 
 uint8_t memoryIdx = 0;
 Memory memories[MEMORY_COUNT] = {
+  { 100000000UL,  0, FM,  "VOV FM"  },
   {  14074000UL, 22, USB, "20M FT8" },
   {   7074000UL, 20, USB, "40M FT8" },
   {  21074000UL, 24, USB, "15M FT8" },
@@ -175,7 +184,6 @@ Memory memories[MEMORY_COUNT] = {
   {  18100000UL, 23, USB, "17M FT8" },
   {   1840000UL, 18, USB, "160M FT8" },
   {  24915000UL, 25, USB, "12M FT8" },
-  { 100000000UL,  0, FM,  "VOV FM"  },
 };
 Memory newMemory;
 
@@ -243,7 +251,7 @@ int getTotalUTCOffsets() { return(ITEM_COUNT(utcOffsets)); }
 //
 // UI Layout Menu
 //
-uint8_t uiLayoutIdx = UI_FT8;
+uint8_t uiLayoutIdx = UI_DEFAULT;
 static const char *uiLayoutDesc[] =
 { "Default", "S-Meter", "FT8" };
 
@@ -671,6 +679,9 @@ bool tuneToMemory(const Memory *memory)
   // Update BFO if present in memory slot
   if(bfo) updateBFO(bfo);
 
+  // Synchronize digital mode (FT8/FT4 vs Voice) and LCD layout with Web UI
+  ft8CheckFrequencyDigitalMode(freq, memory->mode);
+
   return(true);
 }
 
@@ -734,18 +745,54 @@ void doAgc(int16_t enc)
   rx.setAutomaticGainControl(disableAgc, agcNdx);
 }
 
+// Non-FM selectable modes on LCD Mode menu: 0=LSB, 1=USB, 2=AM, 3=FT8, 4=FT4
+static const char * const hfModeMenuDesc[5] = { "LSB", "USB", "AM", "FT8", "FT4" };
+
+static int getHfModeMenuIdx()
+{
+  if (currentMode == USB) {
+    if (ft8GetDigitalMode() == FT8_DIG_FT8) return 3;
+    if (ft8GetDigitalMode() == FT8_DIG_FT4) return 4;
+    return 1;
+  }
+  if (currentMode == AM) return 2;
+  return 0; // LSB
+}
+
 void doMode(int16_t enc)
 {
   // This is our current mode for the current band
   currentMode = bands[bandIdx].bandMode;
 
-  // Cannot change away from FM mode
+  // Cannot change away from FM mode on VHF band
   if(currentMode==FM) return;
 
-  // Change AM/LSB/USB modes, do not allow FM mode
-  do
-    currentMode = wrap_range(currentMode, enc, 0, LAST_ITEM(bandModeDesc));
-  while(currentMode==FM);
+  int mIdx = wrap_range(getHfModeMenuIdx(), enc, 0, 4);
+  if (mIdx == 3 || mIdx == 4) {
+    uint8_t dig = (mIdx == 4) ? FT8_DIG_FT4 : FT8_DIG_FT8;
+    if (bandIdx >= 18 && bandIdx <= 26) {
+      ft8TuneBandDigitalFreq(bandIdx, dig);
+    } else {
+      currentMode = USB;
+      bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
+      bands[bandIdx].currentStepIdx = defaultStepIdx[USB];
+      bands[bandIdx].bandwidthIdx = defaultBwIdx[USB];
+      bands[bandIdx].bandMode = USB;
+      ft8SetDigitalMode(dig);
+      uiLayoutIdx = UI_FT8;
+      selectBand(bandIdx);
+    }
+    return;
+  }
+
+  ft8SetDigitalMode(FT8_DIG_OFF);
+  if (uiLayoutIdx == UI_FT8) {
+    uiLayoutIdx = UI_DEFAULT;
+  }
+
+  if (mIdx == 0) currentMode = LSB;
+  else if (mIdx == 1) currentMode = USB;
+  else currentMode = AM;
 
   // Save current band settings
   bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
@@ -784,8 +831,15 @@ void doBand(int16_t enc)
   // Change band
   bandIdx = wrap_range(bandIdx, enc, 0, LAST_ITEM(bands));
 
+  // If currently in FT8/FT4 digital mode and switching among Ham bands (18..26), keep FT8/FT4 mode synced
+  if (ft8GetDigitalMode() != FT8_DIG_OFF && bandIdx >= 18 && bandIdx <= 26) {
+    ft8TuneBandDigitalFreq(bandIdx, ft8GetDigitalMode());
+    return;
+  }
+
   // Enable the new band
   selectBand(bandIdx);
+  ft8CheckFrequencyDigitalMode(bands[bandIdx].currentFreq, bands[bandIdx].bandMode);
 }
 
 void doBandwidth(int16_t enc)
@@ -1071,19 +1125,28 @@ static void drawMode(int x, int y, int sx)
 {
   drawCommon(menu[MENU_MODE], x, y, sx, true);
 
-  int count = ITEM_COUNT(bandModeDesc);
+  if (currentMode == FM) {
+    drawZoomedMenu("FM");
+    spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
+    spr.setTextDatum(MC_DATUM);
+    spr.drawString("FM", 40+x+(sx/2), 64+y, 2);
+    return;
+  }
+
+  int count = 5;
+  int mIdx = getHfModeMenuIdx();
   for(int i=-2 ; i<3 ; i++)
   {
+    const char *label = hfModeMenuDesc[abs((mIdx+count+i)%count)];
     if(i==0) {
-      drawZoomedMenu(bandModeDesc[abs((currentMode+count+i)%count)]);
+      drawZoomedMenu(label);
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
       spr.setTextColor(TH.menu_item);
     }
 
     spr.setTextDatum(MC_DATUM);
-    if((currentMode!=FM) || (i==0))
-     spr.drawString(bandModeDesc[abs((currentMode+count+i)%count)], 40+x+(sx/2), 64+y+(i*16), 2);
+    spr.drawString(label, 40+x+(sx/2), 64+y+(i*16), 2);
   }
 }
 

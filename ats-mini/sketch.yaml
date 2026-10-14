@@ -25,4 +25,4 @@ profiles:
       - ESP Async WebServer (3.7.10)
       - NTPClient (3.2.1)
 
-default_profile: esp32s3-ospi
+# default_profile: esp32s3-ospi

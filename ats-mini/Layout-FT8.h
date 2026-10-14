@@ -24,8 +24,8 @@ struct FT8MessageEntry {
   bool isCQ;
 };
 
-#define FT8_MAX_TRAFFIC 20
-#define FT8_MAX_LOGS    16
+#define FT8_MAX_TRAFFIC 16
+#define FT8_MAX_LOGS    10
 
 // Initialize FT8 DSP monitor & ADC sampling on GPIO34
 void ft8Init();
@@ -58,6 +58,9 @@ uint8_t ft8GetViewMode();
 // Digital Decoder Mode (0=FT8, 1=FT4, 2=OFF)
 void ft8SetDigitalMode(uint8_t digMode);
 uint8_t ft8GetDigitalMode();
+const char* ft8GetDisplayModeDesc();
+void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode);
+void ft8TuneBandDigitalFreq(int bId, uint8_t digMode);
 
 // Speaker mute control (mutes speaker without killing SI4732 baseband output to GPIO34 if in FT8 mode)
 void ft8ToggleSpeakerMute();

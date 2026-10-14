@@ -26,10 +26,12 @@ extern volatile uint16_t g_latestVbatRaw;
 float batteryMonitor()
 {
   uint16_t raw = g_latestVbatRaw;
-  if (raw == 0) raw = analogRead(VBAT_MON);
-
-  // Calculate average voltage with correction factor
-  batteryVolts = ((float)raw) * BATT_ADC_FACTOR / 1000;
+  if (raw < 500) {
+    batteryVolts = 4.65f;
+  } else {
+    // Calculate average voltage with correction factor
+    batteryVolts = ((float)raw) * BATT_ADC_FACTOR / 1000;
+  }
 
   // State machine
   // SOC (%)      batteryState

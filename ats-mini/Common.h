@@ -14,10 +14,10 @@
 #define AUTHORS_LINE3  "Goshante, G8PTN (Dave), R9UCL (Max Arnold),"
 #define AUTHORS_LINE4  "Marat Fayzullin"
 
-#define VER_APP        235  // Firmware version
-#define VER_SETTINGS   75   // Settings version
-#define VER_MEMORIES   75   // Memories version
-#define VER_BANDS      75   // Bands version
+#define VER_APP        233  // Firmware version
+#define VER_SETTINGS   76   // Settings version
+#define VER_MEMORIES   76   // Memories version
+#define VER_BANDS      76   // Bands version
 
 // Modes
 #define FM            0
@@ -38,7 +38,7 @@
 #define SLEEP_UNLOCKED 1 // Do not lock the encoder
 #define SLEEP_LIGHT    2 // ESP32 light sleep
 
-// SI4732/5 PINs (Verified for ESP32-D0WD-V3 + ST7789 SPI + SI4732 FT8 Hardware)
+// SI4732/5 PINs
 #define PIN_POWER_ON  15            // GPIO15   External LDO regulator enable (1 = Enable)
 #define RESET_PIN     27            // GPIO27   SI4732/5 Reset
 #define ESP32_I2C_SCL 14            // GPIO14   SI4732/5 Clock
@@ -50,7 +50,7 @@
 #define PIN_LCD_BL    16            // GPIO16   LCD backlight (PWM brightness control)
 // All other pins are defined by the TFT_eSPI library (MOSI=23, SCLK=18, CS=5, DC=17, RST=4)
 
-// Rotary Encoder PINs (GPIO34 is dedicated to SI4732 Audio ADC1_CH6, GPIO35 is VBAT_MON)
+// Rotary Encoder PINs (GPIO34 is SI4732 Audio ADC1_CH6, GPIO35 is VBAT_MON)
 #define ENCODER_PIN_A       33      // GPIO33
 #define ENCODER_PIN_B       32      // GPIO32
 #define ENCODER_PUSH_BUTTON 25      // GPIO25
@@ -131,6 +131,8 @@ extern TFT_eSPI tft;
 
 extern bool pushAndRotate;
 extern bool seekStop;
+extern volatile int16_t webEncDelta;
+extern volatile uint8_t webBtnEvent;
 extern uint8_t rssi;
 extern uint8_t snr;
 

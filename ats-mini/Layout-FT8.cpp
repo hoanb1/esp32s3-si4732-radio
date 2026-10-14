@@ -5,26 +5,26 @@
 #include "Menu.h"
 #include "Draw.h"
 #include "Storage.h"
-#include "websdr_test1.h"
 
 #include <WiFi.h>
 #include <esp_timer.h>
 #include <stdarg.h>
 #include <math.h>
 #include <ft8_lib.h>
+#include <websdr_test1.h>
 
 #define FT8_ADC_PIN         34
 #define FT8_SAMPLE_RATE     6000
 #define FT8_BLOCK_SAMPLES   960   // 160 ms per FT8 symbol @ 6000 Hz
-#define FT8_RING_BLOCKS     3     // 3 x 160 ms = 480 ms ring buffer (zero dropped blocks, saves 5.8KB DRAM)
-#define FT8_MAX_CANDIDATES  130
+#define FT8_RING_BLOCKS     2     // 2 x 160 ms = 320 ms ring buffer (saves DRAM for 16-bit LCD sprite)
+#define FT8_MAX_CANDIDATES  100
 #define FT8_LDPC_ITERATIONS 35
 #define FT8_MIN_SYNC_SCORE  4     // Catch all weak & moderate off-air FT8 signals
 
 // Global latest battery ADC reading updated safely by the ADC timer task
 volatile uint16_t g_latestVbatRaw = 2400;
 
-// Lock-free 3-block ADC capture ring buffer (3 * 960 * 2 bytes = 5,760 bytes)
+// Lock-free 2-block ADC capture ring buffer (2 * 960 * 2 bytes = 3,840 bytes)
 static int16_t adcBuf[FT8_RING_BLOCKS][FT8_BLOCK_SAMPLES];
 static volatile uint8_t adcWriteBlock = 0;
 static volatile uint8_t adcReadBlock = 0;
@@ -45,7 +45,7 @@ static uint8_t ft8AudioLevel = 0;
 static monitor_t liveMon;
 static bool monInitialized = false;
 extern "C" {
-  float g_ft8_dspFrame[FT8_BLOCK_SAMPLES];
+  float g_ft8_dspFrame[1104]; // 960 samples for FFT + 1103 floats (522+581) for LDPC tov/toc
 }
 #define dspFrame g_ft8_dspFrame
 
@@ -75,7 +75,7 @@ static bool slotDecoded = false;
 static bool ft8IsDecoding = false;
 static uint32_t ft8LastDurationMs = 0;
 static uint8_t ft8ViewMode = FT8_VIEW_SPLIT;
-static uint8_t ft8DigitalMode = FT8_DIG_FT8;
+static uint8_t ft8DigitalMode = FT8_DIG_OFF;
 static bool ft8SpeakerMuted = false;
 
 // Hash table for FT8 nonstandard callsigns
@@ -295,12 +295,12 @@ void ft8Init() {
   analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
   lastValidAdc = (int16_t)analogRead(FT8_ADC_PIN);
 
-  // Initialize FT8 DSP monitor: 200..2200 Hz @ 6000 Hz, time_osr=2 (50% overlapping 80ms subblocks), freq_osr=1
+  // Initialize FT8 DSP monitor: 200..2200 Hz @ 6000 Hz, time_osr=1 (allocated in 32-bit IRAM), freq_osr=1
   monitor_config_t cfg;
   cfg.f_min = 200.0f;
   cfg.f_max = 2200.0f;
   cfg.sample_rate = FT8_SAMPLE_RATE;
-  cfg.time_osr = 2;
+  cfg.time_osr = 1;
   cfg.freq_osr = 1;
   cfg.protocol = FTX_PROTOCOL_FT8;
 
@@ -345,7 +345,7 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
   int minMag = 255;
   int maxMag = 0;
   for (int b = 0; b < numBins; b++) {
-    int v = rowMag0[b];
+    int v = wf_read_u8(&rowMag0[b]);
     sumMag += v;
     if (v < minMag) minMag = v;
     if (v > maxMag) maxMag = v;
@@ -371,7 +371,7 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
     int s = 0;
     uint8_t pk = 0;
     for (int b = bStart; b < bEnd; b++) {
-      uint8_t m = rowMag0[b];
+      uint8_t m = wf_read_u8(&rowMag0[b]);
       uint8_t m1 = wf_read_u8(&rowMag1[b]);
       if (m1 > m) m = m1;
       s += m;
@@ -507,7 +507,7 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
   ft8IsDecoding = true;
   uint32_t t0 = millis();
 
-  static ftx_candidate_t candidates[FT8_MAX_CANDIDATES];
+  ftx_candidate_t candidates[FT8_MAX_CANDIDATES];
   int numCandidates = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, candidates, FT8_MIN_SYNC_SCORE);
 
   uint16_t seenHashes[32];
@@ -659,31 +659,12 @@ bool ft8TickWaterfall() {
     if (digActive && !slotDecoded && liveMon.wf.num_blocks >= 55) {
       ft8DecodeFromMonitor(&liveMon, false);
     }
-    // Recharge GPIO34 AC-coupling capacitor whenever DC bias leaks below 580 raw so ESP32 ADC1 stays in its linear 600..980 sweet spot
-    if (lastAdcMean < 580.0f) {
-      Serial.printf("[FT8] Recharging GPIO34 DC bias capacitor (was %.0f)...\r\n", lastAdcMean);
-      if (currentMode == FM) {
-        rx.setAM(150, 30000, 15000, 5);
-      } else {
-        unloadSSB();
-        rx.setFM(6400, 10800, 9000, 10);
-      }
-      selectBand(bandIdx, false);
-      if (ft8SpeakerMuted) {
-        digitalWrite(PIN_POWER_ON, LOW);
-        rx.setVolume(36);
-      } else {
-        rx.setVolume(volume);
-      }
-      rx.setAvcAmMaxGain(90);
-      rx.setAudioMute(false);
-    }
     adcReadBlock = adcWriteBlock;
     adcSampleIdx = 0;
     adcEpochUs = 0;
     monitor_reset(&liveMon);
     slotDecoded = false;
-    needRedraw = true;
+    if (uiLayoutIdx == UI_FT8) needRedraw = true;
   }
   lastSlotSec = slotSec;
 
@@ -744,8 +725,8 @@ bool ft8TickWaterfall() {
       int blockIdx = liveMon.wf.num_blocks;
       monitor_process(&liveMon, dspFrame);
       pushMonitorRowToWaterfalls(&liveMon, blockIdx);
-      // Redraw TFT every 2 blocks (320ms) to keep SPI CPU load low
-      if ((blockIdx & 1) == 0) {
+      // Redraw TFT every 2 blocks (320ms) when in FT8 LCD layout
+      if (uiLayoutIdx == UI_FT8 && (blockIdx & 1) == 0) {
         needRedraw = true;
       }
     }
@@ -755,7 +736,7 @@ bool ft8TickWaterfall() {
   if (digActive && !slotDecoded && (liveMon.wf.num_blocks >= 85 || (slotSec == 14 && liveMon.wf.num_blocks >= 75))) {
     slotDecoded = true;
     int cnt = ft8DecodeFromMonitor(&liveMon, false);
-    if (cnt > 0) {
+    if (cnt > 0 && uiLayoutIdx == UI_FT8) {
       needRedraw = true;
     }
   }
@@ -816,14 +797,69 @@ uint8_t ft8GetViewMode() {
 }
 
 void ft8SetDigitalMode(uint8_t digMode) {
-  if (digMode > 2) digMode = FT8_DIG_FT8;
+  if (digMode > 2) digMode = FT8_DIG_OFF;
   ft8DigitalMode = digMode;
   if (monInitialized) monitor_reset(&liveMon);
   slotDecoded = false;
 }
 
 uint8_t ft8GetDigitalMode() {
+  if (currentMode != USB) return FT8_DIG_OFF;
   return ft8DigitalMode;
+}
+
+const char* ft8GetDisplayModeDesc() {
+  if (currentMode == USB) {
+    if (ft8DigitalMode == FT8_DIG_FT8) return "FT8";
+    if (ft8DigitalMode == FT8_DIG_FT4) return "FT4";
+    if (bands[bandIdx].bandwidthIdx == 0) return "CW";
+  }
+  return bandModeDesc[currentMode];
+}
+
+void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
+  static const uint16_t ft8Khz[9] = { 1840, 3573, 7074, 10136, 14074, 18100, 21074, 24915, 28074 };
+  static const uint16_t ft4Khz[8] = { 3575, 7047, 10140, 14080, 18104, 21140, 24919, 28180 };
+  if (mode == USB) {
+    for (int i = 0; i < 9; i++) {
+      if (freqKhz == ft8Khz[i]) {
+        ft8SetDigitalMode(FT8_DIG_FT8);
+        uiLayoutIdx = UI_FT8;
+        return;
+      }
+    }
+    for (int i = 0; i < 8; i++) {
+      if (freqKhz == ft4Khz[i]) {
+        ft8SetDigitalMode(FT8_DIG_FT4);
+        uiLayoutIdx = UI_FT8;
+        return;
+      }
+    }
+  }
+  ft8SetDigitalMode(FT8_DIG_OFF);
+  if (uiLayoutIdx == UI_FT8) {
+    uiLayoutIdx = UI_DEFAULT;
+  }
+}
+
+void ft8TuneBandDigitalFreq(int bId, uint8_t digMode) {
+  static const uint16_t ft8Khz[9] = { 1840, 3573, 7074, 10136, 14074, 18100, 21074, 24915, 28074 };
+  static const uint16_t ft4Khz[9] = { 1840, 3575, 7047, 10140, 14080, 18104, 21140, 24919, 28180 };
+  static const int16_t  ft4Bfo[9] = {    0,  500,  500,     0,     0,     0,     0,     0,     0 };
+  if (bId < 18 || bId > 26) {
+    bId = 22; // Default 20M amateur band
+  }
+  int idx = bId - 18;
+  uint16_t khz = (digMode == FT8_DIG_FT4) ? ft4Khz[idx] : ft8Khz[idx];
+  int16_t  bfo = (digMode == FT8_DIG_FT4) ? ft4Bfo[idx] : 0;
+  ft8SetDigitalMode(digMode);
+  uiLayoutIdx = UI_FT8;
+  bandIdx = (uint8_t)bId;
+  bands[bId].bandMode = USB;
+  bands[bId].currentFreq = khz;
+  selectBand((uint8_t)bId, false);
+  updateFrequency(khz, false);
+  updateBFO(bfo, false);
 }
 
 void ft8ToggleSpeakerMute() {
@@ -1000,7 +1036,7 @@ void ft8PrintDiag() {
     for (int b = 2; b < nBin - 2; b++) {
       int sumB = 0, maxB = 0;
       for (int r = 0; r < nBlk; r++) {
-        uint8_t m = liveMon.wf.mag[r * stride + b];
+        uint8_t m = wf_read_u8(&liveMon.wf.mag[r * stride + b]);
         sumB += m;
         if (m > maxB) maxB = m;
       }
@@ -1068,13 +1104,13 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
   spr.fillRect(0, 0, 320, 20, 0x10A2); // Dark slate header
 
   // Band & Frequency on left
-  char freqBuf[32];
+  char freqBuf[36];
   if (currentMode == FM) {
-    snprintf(freqBuf, sizeof(freqBuf), "%s %.2fM", getCurrentBand()->bandName, currentFrequency / 100.0f);
+    snprintf(freqBuf, sizeof(freqBuf), "%s %.2fM FM", getCurrentBand()->bandName, currentFrequency / 100.0f);
   } else {
     uint32_t fHz = (uint32_t)currentFrequency * 1000UL + currentBFO;
     snprintf(freqBuf, sizeof(freqBuf), "%s %lu.%02lu %s",
-             getCurrentBand()->bandName, fHz / 1000UL, (fHz % 1000UL) / 10UL, bandModeDesc[currentMode]);
+             getCurrentBand()->bandName, fHz / 1000UL, (fHz % 1000UL) / 10UL, ft8GetDisplayModeDesc());
   }
   spr.setTextDatum(ML_DATUM);
   spr.setTextColor(0x07FF, 0x10A2); // Cyan
@@ -1084,8 +1120,14 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
   uint8_t utcH = 0, utcM = 0, utcS = 0;
   ft8GetCurrentUTC(&utcH, &utcM, &utcS);
   uint8_t slotSec = utcS % 15;
+  bool isDigMode = (ft8GetDigitalMode() != FT8_DIG_OFF);
   char timeBuf[24];
-  snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u:%02u [%02us]", utcH, utcM, utcS, slotSec);
+  if (isDigMode) {
+    snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u:%02u [%02us]", utcH, utcM, utcS, slotSec);
+  } else {
+    uint8_t locH = (utcH + utcOffsets[utcOffsetIdx].offset / 4) % 24;
+    snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u:%02u", locH, utcM, utcS);
+  }
   spr.setTextDatum(MR_DATUM);
   spr.setTextColor(ft8IsDecoding ? 0xF81F : 0xFFE0, 0x10A2);
   spr.drawString(timeBuf, 216, 10, 1);
@@ -1094,8 +1136,9 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
   drawWiFiIndicator(226, 2);
   drawBattery(288, 2);
 
-  // 15s Slot Progress Bar + Audio VU bar (y = 20..24)
-  int slotW = (slotSec * 200) / 15;
+  // 15s Slot Progress Bar (or S-Meter bar in Voice/FM/AM mode) + Audio VU bar (y = 20..24)
+  int slotW = isDigMode ? ((slotSec * 200) / 15) : ((getStrength(rssi) * 200) / 15);
+  if (slotW > 200) slotW = 200;
   spr.fillRect(0, 20, 200, 4, 0x2104);
   spr.fillRect(0, 20, slotW, 4, ft8IsDecoding ? 0xF81F : 0x07E0);
 
@@ -1128,12 +1171,38 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
       }
     }
 
-    // Right Half (x = 148..319): Decoded FT8 Traffic Table (y = 25..152)
+    // Right Half (x = 148..319): Decoded FT8 Traffic Table (in FT8/FT4 mode) or Radio Parameters (in FM/AM/SSB Voice mode)
     spr.drawRect(148, 25, 172, 128, 0x3186);
     spr.setTextDatum(TL_DATUM);
-    if (ft8TrafficCount == 0) {
+    if (!isDigMode) {
+      spr.setTextColor(0x07FF, TFT_BLACK);
+      char hdrLine[32];
+      snprintf(hdrLine, sizeof(hdrLine), "Che do: %s (%s)", ft8GetDisplayModeDesc(), getCurrentBand()->bandName);
+      spr.drawString(hdrLine, 154, 30, 2);
+
+      spr.setTextColor(0xFFFF, TFT_BLACK);
+      char pLine1[36];
+      snprintf(pLine1, sizeof(pLine1), "Step:%s  BW:%s", getCurrentStep()->desc, getCurrentBandwidth()->desc);
+      spr.drawString(pLine1, 154, 50, 2);
+
+      char pLine2[36];
+      snprintf(pLine2, sizeof(pLine2), "AGC:%s  Vol:%u/63", agcIdx == 0 ? "On" : "Att", volume);
+      spr.drawString(pLine2, 154, 70, 2);
+
+      spr.setTextColor(0x07E0, TFT_BLACK);
+      char sigBuf[32];
+      snprintf(sigBuf, sizeof(sigBuf), "RSSI:%udBuV SNR:%udB", rssi, snr);
+      spr.drawString(sigBuf, 154, 92, 2);
+
+      String ipStr = (WiFi.status() == WL_CONNECTED) ? ("Web: " + WiFi.localIP().toString()) : "AP: 10.1.1.1";
+      spr.setTextColor(0xFFE0, TFT_BLACK);
+      spr.drawString(ipStr.c_str(), 154, 114, 2);
+
       spr.setTextColor(0xAD55, TFT_BLACK);
-      spr.drawString("Dang thu FT8 (GPIO34)", 154, 34, 2);
+      spr.drawString("Pho am thanh 200..2600Hz", 154, 136, 1);
+    } else if (ft8TrafficCount == 0) {
+      spr.setTextColor(0xAD55, TFT_BLACK);
+      spr.drawString(ft8GetDigitalMode() == FT8_DIG_FT4 ? "Dang thu FT4 (GPIO34)" : "Dang thu FT8 (GPIO34)", 154, 34, 2);
       char blkBuf[36];
       snprintf(blkBuf, sizeof(blkBuf), "Vol:%u | Vpp:%d | RMS:%.0f", volume, lastAdcVpp, lastBlockRms);
       spr.setTextColor(0x07FF, TFT_BLACK);
@@ -1151,7 +1220,7 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
       snprintf(sigBuf, sizeof(sigBuf), "RSSI:%udBuV SNR:%udB", rssi, snr);
       spr.drawString(sigBuf, 154, 94, 2);
       spr.setTextColor(0xFFE0, TFT_BLACK);
-      spr.drawString("BW: 150..2550Hz (2.4kHz)", 154, 118, 1);
+      spr.drawString("BW: 200..2600Hz (SSB)", 154, 118, 1);
     } else {
       int maxRows = ft8TrafficCount < 7 ? ft8TrafficCount : 7;
       for (int i = 0; i < maxRows; i++) {
