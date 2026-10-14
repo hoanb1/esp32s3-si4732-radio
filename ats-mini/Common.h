@@ -14,10 +14,10 @@
 #define AUTHORS_LINE3  "Goshante, G8PTN (Dave), R9UCL (Max Arnold),"
 #define AUTHORS_LINE4  "Marat Fayzullin"
 
-#define VER_APP        233  // Firmware version
-#define VER_SETTINGS   71   // Settings version
-#define VER_MEMORIES   71   // Memories version
-#define VER_BANDS      72   // Bands version
+#define VER_APP        235  // Firmware version
+#define VER_SETTINGS   75   // Settings version
+#define VER_MEMORIES   75   // Memories version
+#define VER_BANDS      75   // Bands version
 
 // Modes
 #define FM            0
@@ -38,22 +38,22 @@
 #define SLEEP_UNLOCKED 1 // Do not lock the encoder
 #define SLEEP_LIGHT    2 // ESP32 light sleep
 
-// SI4732/5 PINs
-#define PIN_POWER_ON  33            // GPIO15   External LDO regulator enable (1 = Enable)
-#define RESET_PIN     27            // GPIO16   SI4732/5 Reset
-#define ESP32_I2C_SCL 14            // GPIO17   SI4732/5 Clock
-#define ESP32_I2C_SDA 13            // GPIO18   SI4732/5 Data
-#define AUDIO_MUTE     -1            // GPIO3    Hardware L/R mute, controlled via SI4735 code (1 = Mute)
-#define PIN_AMP_EN    -1            // GPIO10   Hardware Audio Amplifer enable (1 = Enable)
+// SI4732/5 PINs (Verified for ESP32-D0WD-V3 + ST7789 SPI + SI4732 FT8 Hardware)
+#define PIN_POWER_ON  15            // GPIO15   External LDO regulator enable (1 = Enable)
+#define RESET_PIN     27            // GPIO27   SI4732/5 Reset
+#define ESP32_I2C_SCL 14            // GPIO14   SI4732/5 Clock
+#define ESP32_I2C_SDA 13            // GPIO13   SI4732/5 Data
+#define AUDIO_MUTE    -1            // Hardware L/R mute disabled
+#define PIN_AMP_EN    -1            // Hardware Audio Amplifier enable
 
 // Display PINs
-#define PIN_LCD_BL    16            // GPIO38   LCD backlight (PWM brightness control)
-// All other pins are defined by the TFT_eSPI library
+#define PIN_LCD_BL    16            // GPIO16   LCD backlight (PWM brightness control)
+// All other pins are defined by the TFT_eSPI library (MOSI=23, SCLK=18, CS=5, DC=17, RST=4)
 
-// Rotary Enconder PINs
-#define ENCODER_PIN_A  34            // GPIO02
-#define ENCODER_PIN_B  35            // GPIO01
-#define ENCODER_PUSH_BUTTON 32      // GPIO21
+// Rotary Encoder PINs (GPIO34 is dedicated to SI4732 Audio ADC1_CH6, GPIO35 is VBAT_MON)
+#define ENCODER_PIN_A       33      // GPIO33
+#define ENCODER_PIN_B       32      // GPIO32
+#define ENCODER_PUSH_BUTTON 25      // GPIO25
 
 // Compute number of items in an array
 #define ITEM_COUNT(array) (sizeof(array) / sizeof((array)[0]))

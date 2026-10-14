@@ -319,34 +319,34 @@ bool prefsLoad(uint32_t items)
 
 bool diskInit(bool force)
 {
+  esp_err_t err = nvs_flash_init_partition(STORAGE_PARTITION);
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    nvs_flash_erase_partition(STORAGE_PARTITION);
+    nvs_flash_init_partition(STORAGE_PARTITION);
+  }
+
   if(force)
   {
     LittleFS.end();
     LittleFS.format();
   }
 
-  bool mounted = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+  bool mounted = LittleFS.begin(false, "/littlefs", 2, "littlefs");
 
   if(!mounted)
   {
-    // Serial.println("Formatting LittleFS...");
-
     if(!LittleFS.format())
     {
-      // Serial.println("ERROR: format failed");
       return(false);
     }
 
-    // Serial.println("Re-mounting LittleFS...");
-    mounted = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+    mounted = LittleFS.begin(false, "/littlefs", 2, "littlefs");
     if(!mounted)
     {
-      // Serial.println("ERROR: remount failed");
       return(false);
     }
   }
 
-  // Serial.println("Mounted LittleFS!");
   return(true);
 }
 

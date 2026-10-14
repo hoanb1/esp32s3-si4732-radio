@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "Menu.h"
 #include "Draw.h"
+#include "Layout-FT8.h"
 
 static uint32_t remoteTimer = millis();
 static uint8_t remoteSeqnum = 0;
@@ -386,8 +387,6 @@ int remoteDoCommand(char key)
       event |= REMOTE_PREFS;
       break;
     case 'O':
-      sleepOn(true);
-      break;
     case 'o':
       sleepOn(false);
       break;
@@ -416,13 +415,112 @@ int remoteDoCommand(char key)
       break;
 
     case 'T':
-      Serial.println(switchThemeEditor(!switchThemeEditor()) ? "Theme editor enabled" : "Theme editor disabled");
+    {
+      delay(15);
+      uint32_t ep = 0;
+      while (Serial.available() > 0 && isDigit(Serial.peek())) {
+        ep = ep * 10 + (uint32_t)(Serial.read() - '0');
+      }
+      if (ep >= 1700000000UL) {
+        ft8SetEpochTime(ep);
+        Serial.printf("[TIME] Synced UTC Epoch: %lu\r\n", (unsigned long)ep);
+      } else {
+        ntpSyncTime();
+      }
       break;
+    }
     case '!':
       if(switchThemeEditor()) remoteSetColorTheme();
       break;
     case '@':
       if(switchThemeEditor()) remoteGetColorTheme();
+      break;
+
+    case 'c': // Clear decoded FT8 traffic list
+      ft8ClearTraffic();
+      event |= REMOTE_CHANGED;
+      break;
+    case 'D': // Run FT8 15s test vector decode
+      ft8RunTestDecode();
+      break;
+    case 'F': // Force immediate decode on live waterfall
+      ft8ForceLiveDecode();
+      break;
+    case 'd': // Print hardware & FT8 signal diagnostics
+      ft8PrintDiag();
+      break;
+    case 'g': // Test SI4732 LOUT/ROUT mute masks vs GPIO34 ADC routing
+      ft8TestAudioRouting();
+      break;
+    case 'k': // Toggle speaker mute (preserving GPIO34 ADC signal)
+      ft8ToggleSpeakerMute();
+      break;
+    case 'z': // Manually sync FT8 slot to :00s
+      ft8SyncSlotManual();
+      break;
+    case 'u': // Switch to FT8 layout & toggle view mode (Split / Waterfall / Log)
+      if (uiLayoutIdx != UI_FT8) {
+        uiLayoutIdx = UI_FT8;
+      } else {
+        ft8ToggleViewMode();
+      }
+      break;
+    case '1': case '2': case '3': case '4': case '5':
+    case '6': case '7':
+    {
+      extern bool tuneToMemory(const Memory *memory);
+      uint8_t mIdx = (uint8_t)(key - '1');
+      if (mIdx < getTotalMemories() && memories[mIdx].freq) {
+        tuneToMemory(&memories[mIdx]);
+        Serial.printf("[TUNE] Switched to FT8 Preset #%d: %s %lu Hz (%s)\r\n",
+                      mIdx + 1, bands[bandIdx].bandName, (unsigned long)memories[mIdx].freq, bandModeDesc[currentMode]);
+        event |= REMOTE_PREFS;
+      }
+      break;
+    }
+    case '8': // Quick tune FM 90.00 MHz
+    {
+      bandIdx = 0; // VHF FM band
+      bands[bandIdx].bandMode = FM;
+      bands[bandIdx].currentFreq = 9000;
+      selectBand(bandIdx, false);
+      Serial.println("[TUNE] Switched to FM 90.00 MHz");
+      event |= REMOTE_PREFS;
+      break;
+    }
+    case '9': // Quick tune AM 17.740 MHz (16m broadcast)
+    {
+      for (int i = getTotalBands() - 1; i >= 0; i--) {
+        if (bands[i].bandMode != FM && 17740 >= bands[i].minimumFreq && 17740 <= bands[i].maximumFreq) {
+          bandIdx = i;
+          break;
+        }
+      }
+      bands[bandIdx].bandMode = AM;
+      bands[bandIdx].currentFreq = 17740;
+      selectBand(bandIdx, false);
+      updateFrequency(17740, false);
+      Serial.println("[TUNE] Switched to AM 17.740 MHz");
+      event |= REMOTE_PREFS;
+      break;
+    }
+    case '[': // BFO -100 Hz
+      if (isSSB()) {
+        updateBFO(currentBFO - 100, true);
+        Serial.printf("[BFO] %s %u kHz | BFO = %+d Hz\r\n", bands[bandIdx].bandName, currentFrequency, currentBFO);
+      }
+      break;
+    case ']': // BFO +100 Hz
+      if (isSSB()) {
+        updateBFO(currentBFO + 100, true);
+        Serial.printf("[BFO] %s %u kHz | BFO = %+d Hz\r\n", bands[bandIdx].bandName, currentFrequency, currentBFO);
+      }
+      break;
+    case '0': // BFO Reset to 0 Hz
+      if (isSSB()) {
+        updateBFO(0, true);
+        Serial.printf("[BFO] %s %u kHz | BFO = 0 Hz\r\n", bands[bandIdx].bandName, currentFrequency);
+      }
       break;
 
     default:

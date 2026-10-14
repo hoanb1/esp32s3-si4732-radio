@@ -29,6 +29,7 @@ bool muteOn(uint8_t mode, int x = 2);
 const char *clockGet();
 bool clockAvailable();
 bool clockGetHM(uint8_t *hours, uint8_t *minutes);
+bool clockGetHMS(uint8_t *hours, uint8_t *minutes, uint8_t *seconds, uint16_t *millis_rem = 0);
 bool clockSet(uint8_t hours, uint8_t minutes, uint8_t seconds = 0);
 void clockReset();
 bool clockTickTime();

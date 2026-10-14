@@ -2,7 +2,7 @@
 #include "Themes.h"
 #include "Utils.h"
 
-#define VBAT_MON  4                 // GPIO04 -- Battery Monitor PIN
+#define VBAT_MON  35                // GPIO35 -- Battery Monitor PIN
 
 #define BATT_ADC_READS          10  // ADC reads for average calculation (Maximum value = 16 to avoid rollover in average calculation)
 #define BATT_ADC_FACTOR      1.702  // ADC correction factor used for the battery monitor
@@ -18,18 +18,18 @@ static uint8_t batteryState = 255;
 // Current battery voltage
 static float batteryVolts = 4.0;
 
+extern volatile uint16_t g_latestVbatRaw;
+
 //
 // Measure and return battery voltage
 //
 float batteryMonitor()
 {
-  int i, j;
-
-  // Read ADC multiple times
-  for(i=j=0 ; i<BATT_ADC_READS ; i++) j += analogRead(VBAT_MON);
+  uint16_t raw = g_latestVbatRaw;
+  if (raw == 0) raw = analogRead(VBAT_MON);
 
   // Calculate average voltage with correction factor
-  batteryVolts = ((float)j / BATT_ADC_READS) * BATT_ADC_FACTOR / 1000;
+  batteryVolts = ((float)raw) * BATT_ADC_FACTOR / 1000;
 
   // State machine
   // SOC (%)      batteryState

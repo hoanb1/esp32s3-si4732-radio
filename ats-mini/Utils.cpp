@@ -157,20 +157,30 @@ bool muteOn(uint8_t mode, int x)
 
   if(mute) {
     // Disable audio amplifier to silence speaker
+#if PIN_AMP_EN >= 0
     digitalWrite(PIN_AMP_EN, LOW);
+#endif
     // Activate the mute circuit
+#if AUDIO_MUTE >= 0
     digitalWrite(AUDIO_MUTE, HIGH);
-    delay(50);
-    rx.setAudioMute(true);
+#endif
+    if(!isSSB()) {
+      delay(50);
+      rx.setAudioMute(true);
+    }
   }
 
   if(unmute) {
     // Deactivate the mute circuit
+#if AUDIO_MUTE >= 0
     digitalWrite(AUDIO_MUTE, LOW);
-    delay(50);
+#endif
+    delay(20);
     rx.setAudioMute(false);
     // Enable audio amplifier to restore speaker output
+#if PIN_AMP_EN >= 0
     digitalWrite(PIN_AMP_EN, HIGH);
+#endif
   }
 
   switch(mode) {
@@ -291,6 +301,20 @@ bool clockGetHM(uint8_t *hours, uint8_t *minutes)
   }
 }
 
+bool clockGetHMS(uint8_t *hours, uint8_t *minutes, uint8_t *seconds, uint16_t *millis_rem)
+{
+  if(!clockHasBeenSet) return(false);
+  uint32_t elapsedUs = micros() - clockTimer;
+  uint32_t addSec = elapsedUs / 1000000UL;
+  uint32_t remMs = (elapsedUs % 1000000UL) / 1000UL;
+  uint32_t totSec = (uint32_t)clockHours * 3600UL + (uint32_t)clockMinutes * 60UL + (uint32_t)clockSeconds + addSec;
+  *hours   = (totSec / 3600UL) % 24UL;
+  *minutes = (totSec / 60UL) % 60UL;
+  *seconds = totSec % 60UL;
+  if(millis_rem) *millis_rem = (uint16_t)remMs;
+  return(true);
+}
+
 void clockReset()
 {
   clockHasBeenSet = false;
@@ -314,7 +338,7 @@ void clockRefreshTime()
 bool clockSet(uint8_t hours, uint8_t minutes, uint8_t seconds)
 {
   // Verify input before setting clock
-  if(!clockHasBeenSet && hours < 24 && minutes < 60 && seconds < 60)
+  if(hours < 24 && minutes < 60 && seconds < 60)
   {
     clockHasBeenSet = true;
     clockTimer   = micros();

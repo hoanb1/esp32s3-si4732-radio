@@ -19,7 +19,7 @@
 // at first time to RESET the preferences.
 //
 
-int bandIdx = 0;
+int bandIdx = 22; // Default 20M FT8 (14074 kHz USB)
 
 // Band limits are expanded to align with the nearest tuning scale mark
 // Do not forget to update the bands table in the manual.md
@@ -41,25 +41,18 @@ Band bands[] =
   {"60M",  SW_BAND_TYPE, AM,   4000,  5100,  4950, 1, 4, 0, 0},
   {"75M",  SW_BAND_TYPE, AM,   3500,  4000,  3950, 1, 4, 0, 0},
   {"90M",  SW_BAND_TYPE, AM,   3000,  3500,  3300, 1, 4, 0, 0},
-//  {"25M",  SW_BAND_TYPE, AM,  11600, 12100, 11850, 1, 4, 0},
-//  {"31M",  SW_BAND_TYPE, AM,   9400,  9900,  9650, 1, 4, 0},
-//  {"41M",  SW_BAND_TYPE, AM,   7200,  7500,  7300, 1, 4, 0},
-//  {"49M",  SW_BAND_TYPE, AM,   5900,  6200,  6000, 1, 4, 0},
-//  {"60M",  SW_BAND_TYPE, AM,   4700,  5100,  4950, 1, 4, 0},
-//  {"75M",  SW_BAND_TYPE, AM,   3900,  4000,  3950, 1, 4, 0},
-//  {"90M",  SW_BAND_TYPE, AM,   3200,  3400,  3300, 1, 4, 0},
   {"MW3",  MW_BAND_TYPE, AM,   1700,  3500,  2500, 1, 4, 0, 0},
   {"MW2",  MW_BAND_TYPE, AM,    495,  1701,   783, 2, 4, 0, 0},
   {"MW1",  MW_BAND_TYPE, AM,    150,  1800,   810, 3, 4, 0, 0},
-  {"160M", MW_BAND_TYPE, LSB,  1800,  2000,  1900, 5, 4, 0, 0},
-  {"80M",  SW_BAND_TYPE, LSB,  3500,  4000,  3800, 5, 4, 0, 0},
-  {"40M",  SW_BAND_TYPE, LSB,  7000,  7300,  7150, 5, 4, 0, 0},
-  {"30M",  SW_BAND_TYPE, LSB, 10000, 10200, 10125, 5, 4, 0, 0},
-  {"20M",  SW_BAND_TYPE, USB, 14000, 14400, 14100, 5, 4, 0, 0},
-  {"17M",  SW_BAND_TYPE, USB, 18000, 18200, 18115, 5, 4, 0, 0},
-  {"15M",  SW_BAND_TYPE, USB, 21000, 21500, 21225, 5, 4, 0, 0},
-  {"12M",  SW_BAND_TYPE, USB, 24800, 25000, 24940, 5, 4, 0, 0},
-  {"10M",  SW_BAND_TYPE, USB, 28000, 29700, 28500, 5, 4, 0, 0},
+  {"160M", MW_BAND_TYPE, USB,  1800,  2000,  1840, 5, 4, 0, 0},
+  {"80M",  SW_BAND_TYPE, USB,  3500,  4000,  3573, 5, 4, 0, 0},
+  {"40M",  SW_BAND_TYPE, USB,  7000,  7300,  7074, 5, 4, 0, 0},
+  {"30M",  SW_BAND_TYPE, USB, 10000, 10200, 10136, 5, 4, 0, 0},
+  {"20M",  SW_BAND_TYPE, USB, 14000, 14400, 14074, 5, 4, 0, 0},
+  {"17M",  SW_BAND_TYPE, USB, 18000, 18200, 18100, 5, 4, 0, 0},
+  {"15M",  SW_BAND_TYPE, USB, 21000, 21500, 21074, 5, 4, 0, 0},
+  {"12M",  SW_BAND_TYPE, USB, 24800, 25000, 24915, 5, 4, 0, 0},
+  {"10M",  SW_BAND_TYPE, USB, 28000, 29700, 28074, 5, 4, 0, 0},
   // https://www.hfunderground.com/wiki/CB
   // Also see MIN_CB_FREQUENCY and MAX_CB_FREQUENCY
   {"CB",   SW_BAND_TYPE, AM,  25000, 28000, 27135, 0, 4, 0, 0},
@@ -172,7 +165,18 @@ int getTotalModes() { return(ITEM_COUNT(bandModeDesc)); }
 //
 
 uint8_t memoryIdx = 0;
-Memory memories[MEMORY_COUNT];
+Memory memories[MEMORY_COUNT] = {
+  {  14074000UL, 22, USB, "20M FT8" },
+  {   7074000UL, 20, USB, "40M FT8" },
+  {  21074000UL, 24, USB, "15M FT8" },
+  {  28074000UL, 26, USB, "10M FT8" },
+  {  10136000UL, 21, USB, "30M FT8" },
+  {   3573000UL, 19, USB, "80M FT8" },
+  {  18100000UL, 23, USB, "17M FT8" },
+  {   1840000UL, 18, USB, "160M FT8" },
+  {  24915000UL, 25, USB, "12M FT8" },
+  { 100000000UL,  0, FM,  "VOV FM"  },
+};
 Memory newMemory;
 
 int getTotalMemories() { return(ITEM_COUNT(memories)); }
@@ -208,7 +212,7 @@ static const char *sleepModeDesc[] =
 // UTC Offset Menu
 // FIXME: add more offsets https://en.wikipedia.org/wiki/List_of_UTC_offsets
 //
-uint8_t utcOffsetIdx = 8;
+uint8_t utcOffsetIdx = 16; // Default UTC+7
 const UTCOffset utcOffsets[] =
 {
   { -8 * 4, "UTC-8", "Fairbanks" },
@@ -227,7 +231,7 @@ const UTCOffset utcOffsets[] =
   {  5 * 4, "UTC+5", "Astana" },
   {  5 * 4 + 2, "UTC+5:30", "Kolkata" },
   {  6 * 4, "UTC+6", "Omsk" },
-  {  7 * 4, "UTC+7", "Novosibirsk" },
+  {  7 * 4, "UTC+7", "Ha Noi" },
   {  8 * 4, "UTC+8", "Beijing" },
   {  9 * 4, "UTC+9", "Yakutsk" },
   { 10 * 4, "UTC+10", "Vladivostok" },
@@ -239,9 +243,9 @@ int getTotalUTCOffsets() { return(ITEM_COUNT(utcOffsets)); }
 //
 // UI Layout Menu
 //
-uint8_t uiLayoutIdx = 0;
+uint8_t uiLayoutIdx = UI_FT8;
 static const char *uiLayoutDesc[] =
-{ "Default", "S-Meter" };
+{ "Default", "S-Meter", "FT8" };
 
 //
 // Bluetooth Mode Menu
@@ -257,7 +261,7 @@ int getTotalBleModes() { return(ITEM_COUNT(bleModeDesc)); }
 // WiFi Mode Menu
 //
 
-uint8_t wifiModeIdx = NET_OFF;
+uint8_t wifiModeIdx = NET_AP_CONNECT;
 static const char *wifiModeDesc[] =
 { "Off", "AP Only", "AP+Connect", "Connect", "Sync Only" };
 

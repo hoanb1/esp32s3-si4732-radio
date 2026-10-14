@@ -1,0 +1,86 @@
+#ifndef LAYOUT_FT8_H
+#define LAYOUT_FT8_H
+
+#include "Common.h"
+#include <Arduino.h>
+
+// LCD View Modes in FT8 Layout
+#define FT8_VIEW_SPLIT      0
+#define FT8_VIEW_WATERFALL  1
+#define FT8_VIEW_LOG        2
+
+// Digital Decoder Modes (0=FT8 15s, 1=FT4 7.5s, 2=OFF for FM/AM/SSB Voice)
+#define FT8_DIG_FT8         0
+#define FT8_DIG_FT4         1
+#define FT8_DIG_OFF         2
+
+struct FT8MessageEntry {
+  char timeStr[12];
+  int8_t snr;
+  float dt;
+  uint16_t freq;
+  char call[16];
+  char msg[40];
+  bool isCQ;
+};
+
+#define FT8_MAX_TRAFFIC 20
+#define FT8_MAX_LOGS    16
+
+// Initialize FT8 DSP monitor & ADC sampling on GPIO34
+void ft8Init();
+
+// Called from main loop() to process completed 160ms ADC blocks and run automatic 15s slot decode
+bool ft8TickWaterfall();
+
+// Draw FT8 UI layout on the 320x170 sprite
+void drawLayoutFT8(const char *statusLine1 = 0, const char *statusLine2 = 0);
+
+// Trigger test decode using internal 15s WebSDR PCM vector (websdr_test1_pcm)
+void ft8RunTestDecode();
+void ft8RequestTestDecode();
+void ft8RequestRedraw();
+
+// Trigger immediate decode on current live waterfall
+void ft8ForceLiveDecode();
+
+// Synchronize 15s slot timer to :00s manually
+void ft8SyncSlotManual();
+
+// Set UTC clock from Unix epoch (used by Web UI /api/timesync)
+void ft8SetEpochTime(uint32_t epoch);
+
+// Toggle or set LCD view mode (0=SPLIT, 1=WATERFALL, 2=LOG)
+void ft8ToggleViewMode();
+void ft8SetViewMode(uint8_t mode);
+uint8_t ft8GetViewMode();
+
+// Digital Decoder Mode (0=FT8, 1=FT4, 2=OFF)
+void ft8SetDigitalMode(uint8_t digMode);
+uint8_t ft8GetDigitalMode();
+
+// Speaker mute control (mutes speaker without killing SI4732 baseband output to GPIO34 if in FT8 mode)
+void ft8ToggleSpeakerMute();
+bool ft8IsSpeakerMuted();
+
+// Clear decoded traffic list
+void ft8ClearTraffic();
+
+// Print hardware/DSP diagnostic summary to Serial ('d' command)
+void ft8PrintDiag();
+void ft8TestAudioRouting();
+
+// Getters for Web UI endpoints
+uint8_t ft8GetCurrentSlotSecond();
+bool ft8IsDecodingNow();
+uint32_t ft8GetLastDurationMs();
+uint8_t ft8GetAudioLevel();
+uint32_t ft8GetTotalDecoded();
+int ft8GetTrafficCount();
+const FT8MessageEntry* ft8GetTrafficEntry(int idx);
+const uint8_t* ft8GetWebWaterfallBuffer(); // 93 * 120 bytes
+void ft8AddLog(const char *fmt, ...);
+String ft8GetLogsJson();
+size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index); // WAV audio stream from live ADC ring buffer
+
+#endif // LAYOUT_FT8_H

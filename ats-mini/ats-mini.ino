@@ -12,12 +12,16 @@
 #include "Themes.h"
 #include "Utils.h"
 #include "EIBI.h"
+#include "Layout-FT8.h"
+#include "esp_bt.h"
+
+SET_LOOP_TASK_STACK_SIZE(8192);
 
 // SI473/5 and UI
 #define MIN_ELAPSED_TIME         5  // 300
 #define MIN_ELAPSED_RSSI_TIME  200  // RSSI check uses IN_ELAPSED_RSSI_TIME * 6 = 1.2s
 #define ELAPSED_COMMAND      10000  // time to turn off the last command controlled by encoder. Time to goes back to the VFO control // G8PTN: Increased time and corrected comment
-#define DEFAULT_VOLUME          35  // change it for your favorite sound volume
+#define DEFAULT_VOLUME          35  // Optimal linear SI4732 DAC volume (35/63) for FT8 decoding on GPIO34
 #define DEFAULT_SLEEP            0  // Default sleep interval, range = 0 (off) to 255 in steps of 5
 #define STRENGTH_CHECK_TIME   1500  // Not used
 #define RDS_CHECK_TIME         250  // Increased from 90
@@ -33,7 +37,7 @@
 int8_t agcIdx = 0;
 uint8_t disableAgc = 0;
 int8_t agcNdx = 0;
-int8_t softMuteMaxAttIdx = 4;
+int8_t softMuteMaxAttIdx = 0;
 
 bool seekStop = false;        // G8PTN: Added flag to abort seeking on rotary encoder detection
 bool pushAndRotate = false;   // Push and rotate is active, ignore the long press
@@ -57,12 +61,12 @@ int8_t AmAgcIdx = 0;                    // Default AM  AGCON  : Range = 0 to 37,
 int8_t SsbAgcIdx = 0;                   // Default SSB AGCON  : Range = 0 to 1,  0 = AGCON,      1 = ATTN 0
 
 // AVC index per mode (AM/SSB)
-int8_t AmAvcIdx = 48;                   // Default AM  = 48 (as per AN332), range = 12 to 90 in steps of 2
-int8_t SsbAvcIdx = 48;                  // Default SSB = 48, range = 12 to 90 in steps of 2
+int8_t AmAvcIdx = 60;                   // Default AM  = 60 (as per AN332), range = 12 to 90 in steps of 2
+int8_t SsbAvcIdx = 90;                  // Default SSB = 90 dB (MAXIMUM internal SI4732 DSP gain for FT8)
 
 // SoftMute index per mode (AM/SSB)
 int8_t AmSoftMuteIdx = 4;               // Default AM  = 4, range = 0 to 32
-int8_t SsbSoftMuteIdx = 4;              // Default SSB = 4, range = 0 to 32
+int8_t SsbSoftMuteIdx = 0;              // Default SSB = 0 (no softmute attenuation for weak FT8 signals)
 
 // Menu options
 uint8_t volume = DEFAULT_VOLUME;        // Volume, range = 0 (muted) - 63
@@ -104,6 +108,11 @@ void setup()
 {
   // Enable serial port
   Serial.begin(115200);
+  delay(50);
+  Serial.println("\r\n[BOOT] Starting ESP32 + SI4732 FT8 Radio Receiver...");
+
+  // Release unused Bluetooth controller DRAM (~36 KB) back to the heap
+  esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
 
   // Encoder pins. Enable internal pull-ups
   pinMode(ENCODER_PUSH_BUTTON, INPUT_PULLUP);
@@ -111,63 +120,47 @@ void setup()
   pinMode(ENCODER_PIN_B, INPUT_PULLUP);
 
   // Enable audio amplifier
-  // Initally disable the audio amplifier until the SI4732 has been setup
+#if PIN_AMP_EN >= 0
   pinMode(PIN_AMP_EN, OUTPUT);
   digitalWrite(PIN_AMP_EN, LOW);
+#endif
 
   // Enable SI4732 VDD
+#if PIN_POWER_ON >= 0
   pinMode(PIN_POWER_ON, OUTPUT);
   digitalWrite(PIN_POWER_ON, HIGH);
   delay(100);
+#endif
 
-  // The line below may be necessary to setup I2C pins on ESP32
+  // Setup I2C pins on ESP32
   Wire.begin(ESP32_I2C_SDA, ESP32_I2C_SCL);
 
   // TFT display brightness control (PWM)
-  // Note: At brightness levels below 100%, switching from the PWM may cause power spikes and/or RFI
   ledcAttach(PIN_LCD_BL, 16000, 8);  // Pin assignment, 16kHz, 8-bit
-  ledcWrite(PIN_LCD_BL, 0);          // Default value 0%
+  ledcWrite(PIN_LCD_BL, 200);        // Turn on backlight immediately so user sees boot status
 
-  // TFT display setup
+  // TFT display setup FIRST so 54.4 KB sprite always succeeds
   tft.begin();
   tft.setRotation(3);
-
-  // Detect and fix the mirrored & inverted display
-  // https://github.com/esp32-si4732/ats-mini/issues/41
-  uint8_t did3 = tft.readcommand8(ST7789_RDDID, 3);
-  // 0x048181B3 - the original display
-  // 0x04858552 - high gamma display
-  // 0x00009307 - inverted & mirrored display
-  if(did3 == 0x93)
-  {
-    tft.invertDisplay(0);
-    tft.writecommand(TFT_MADCTL);
-    tft.writedata(TFT_MAD_MV | TFT_MAD_MX | TFT_MAD_MY | TFT_MAD_BGR);
-  }
-  else if(did3 == 0x85)
-  {
-    tft.writecommand(0x26); // GAMSET
-    tft.writedata(8);       // Gamma Curve 3
-
-    tft.writecommand(0x55); // WRCACE (content adaptive brightness and color)
-    tft.writedata(0xB1);    // High enhancement, UI mode
-  }
-
   tft.fillScreen(TH.bg);
-  spr.createSprite(320, 170);
+  spr.setColorDepth(8);
+  void *sprPtr = spr.createSprite(320, 170);
+  Serial.printf("[BOOT] TFT Sprite (320x170): %p, free_heap=%u\r\n", sprPtr, (unsigned int)ESP.getFreeHeap());
   spr.setTextDatum(MC_DATUM);
   spr.setSwapBytes(true);
   spr.setFreeFont(&Orbitron_Light_24);
   spr.setTextColor(TH.text, TH.bg);
 
-  // Press and hold Encoder button to force an preferences reset
-  // Note: preferences reset is recommended after firmware updates
+  // Initialize real-time FT8 ADC capture & DSP monitor on GPIO34 right after TFT sprite
+  ft8Init();
+
+  // Press and hold Encoder button to force a preferences reset
   if(digitalRead(ENCODER_PUSH_BUTTON)==LOW)
   {
     nvsErase();
     diskInit(true);
 
-    ledcWrite(PIN_LCD_BL, 255);       // Default value 255 = 100%
+    ledcWrite(PIN_LCD_BL, 255);
     tft.setTextSize(2);
     tft.setTextColor(TH.text, TH.bg);
     tft.println(getVersion(true));
@@ -177,45 +170,35 @@ void setup()
     while(digitalRead(ENCODER_PUSH_BUTTON) == LOW) delay(100);
   }
 
-  // Initialize flash file system
+  // Initialize flash file system & NVS settings partition
+  Serial.println("[BOOT] Initializing NVS & LittleFS...");
   diskInit();
 
   // Check for SI4732 connected on I2C interface
-  // If the SI4732 is not detected, then halt with no further processing
-  rx.setI2CFastModeCustom(800000UL);
+  rx.setI2CFastModeCustom(400000UL);
 
-  // Looks for the I2C bus address and set it.  Returns 0 if error
   int16_t si4735Addr = rx.getDeviceI2CAddress(RESET_PIN);
   if(!si4735Addr)
   {
-    ledcWrite(PIN_LCD_BL, 255);       // Default value 255 = 100%
+    Serial.println("[ERROR] Si4732 not detected on I2C!");
+    ledcWrite(PIN_LCD_BL, 255);
     tft.setTextSize(2);
     tft.setTextColor(TH.text_warn, TH.bg);
     tft.println("Si4732 not detected");
-    while(1);
+    while(1) delay(100);
   }
+  Serial.printf("[BOOT] Si4732 detected at I2C address 0x%02X\r\n", si4735Addr);
 
   rx.setup(RESET_PIN, MW_BAND_TYPE);
-  // Comment the line above and uncomment the three lines below if you are using external ref clock (active crystal or signal generator)
-  // rx.setRefClock(32768);
-  // rx.setRefClockPrescaler(1);   // will work with 32768
-  // rx.setup(RESET_PIN, 0, MW_BAND_TYPE, SI473X_ANALOG_AUDIO, XOSCEN_RCLK);
 
-  // Attached pin to allows SI4732 library to mute audio as required to minimise loud clicks
+#if AUDIO_MUTE >= 0
   rx.setAudioMuteMcuPin(AUDIO_MUTE);
+#endif
 
-  // If loading preferences fails...
+  // If loading preferences fails, save default preferences without blocking boot
   if(!prefsLoad(SAVE_SETTINGS|SAVE_VERIFY))
   {
-    // Save default preferences
     prefsSave(SAVE_SETTINGS);
-    // Show initial screen with the QR code
-    spr.fillSprite(TH.bg);
-    ledcWrite(PIN_LCD_BL, currentBrt);
-    drawAboutHelp(0);
-    // Wait for an encoder click
-    while(digitalRead(ENCODER_PUSH_BUTTON)!=LOW) delay(100);
-    while(digitalRead(ENCODER_PUSH_BUTTON)==LOW) delay(100);
   }
 
   // If loading memories fails, save default memories
@@ -224,14 +207,23 @@ void setup()
   // If loading bands fails, save default bands
   if(!prefsLoad(SAVE_BANDS|SAVE_VERIFY)) prefsSave(SAVE_BANDS);
 
-  // Audio Amplifier Enable. G8PTN: Added
-  // After the SI4732 has been setup, enable the audio amplifier
+  // Set optimal linear SI4732 volume = 35/63 and SSB AVC = 90 dB for FT8 decoding
+  volume = 35;
+  if(currentBrt < 130) currentBrt = 200;
+  SsbSoftMuteIdx = 0;
+  SsbAvcIdx = 90;
+  SsbAgcIdx = 0;
+
+#if PIN_AMP_EN >= 0
   digitalWrite(PIN_AMP_EN, HIGH);
+#endif
 
   // SI4732 STARTUP!
+  Serial.printf("[BOOT] Tuning band %d (%s)...\r\n", bandIdx, bands[bandIdx].bandName);
   selectBand(bandIdx, false);
   delay(50);
   rx.setVolume(volume);
+  rx.setAudioMute(false);
   rx.setMaxSeekTime(SEEK_TIMEOUT);
 
   // Draw display for the first time
@@ -239,16 +231,16 @@ void setup()
   ledcWrite(PIN_LCD_BL, currentBrt);
 
   // Interrupt actions for Rotary encoder
-  // Note: Moved to end of setup to avoid inital interrupt actions
-  // ICACHE_RAM_ATTR void rotaryEncoder(); see rotaryEncoder implementation below.
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_A), rotaryEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCODER_PIN_B), rotaryEncoder, CHANGE);
 
-  // Connect WiFi, if necessary
+  // Connect WiFi (scans and connects to HH-1301_IoT or HH-1301 or saved WiFi)
+  Serial.println("[BOOT] Initializing WiFi & WebServer...");
   netInit(wifiModeIdx);
 
   // Start Bluetooth LE, if necessary
   bleInit(bleModeIdx);
+  Serial.printf("[BOOT] Setup complete! Free heap: %u bytes\r\n", (unsigned int)ESP.getFreeHeap());
 }
 
 
@@ -338,6 +330,8 @@ void useBand(const Band *band)
   {
     // rx.setMaxDelaySetFrequency(60);
     rx.setFM(band->minimumFreq, band->maximumFreq, band->currentFreq, getCurrentStep()->step);
+    rx.setRefClock(32802);
+    rx.setFrequency(band->currentFreq);
     // rx.setTuneFrequencyAntennaCapacitor(0);
     rx.setSeekFmLimits(band->minimumFreq, band->maximumFreq);
 
@@ -358,6 +352,9 @@ void useBand(const Band *band)
     if(band->bandMode==AM)
     {
       rx.setAM(band->minimumFreq, band->maximumFreq, band->currentFreq, getCurrentStep()->step);
+      rx.setRefClock(32802);
+      rx.setFrequency(band->currentFreq);
+      rx.setAmSoftMuteMaxAttenuation(0);
       // More sensitive seek thresholds
       // https://github.com/pu2clr/SI4735/issues/7#issuecomment-810963604
       rx.setSeekAmRssiThreshold(10); // default is 25
@@ -367,10 +364,18 @@ void useBand(const Band *band)
     {
       // Configure SI4732 for SSB (SI4732 step not used, set to 0)
       rx.setSSB(band->minimumFreq, band->maximumFreq, band->currentFreq, 0, currentMode);
-      // G8PTN: Always enabled
+      rx.setRefClock(32802);
+      rx.setFrequency(band->currentFreq);
+      // Ensure wide 4.0 kHz audio passband (300..2500 Hz flat) and true SSB mode (DSP_AFCDIS=1, AVC_DIVIDER=0) for FT8
+      rx.setSSBDspAfc(1);
+      rx.setSSBAvcDivider(0);
+      rx.setSSBAudioBandwidth(3);
+      rx.setSSBSidebandCutoffFilter(1);
+      // Enable AVC and completely disable SSB SoftMute attenuation (since SSB RSQ SNR reports 0)
       rx.setSSBAutomaticVolumeControl(1);
-      // G8PTN: Commented out
-      //rx.setSsbSoftMuteMaxAttenuation(softMuteMaxAttIdx);
+      rx.setSsbSoftMuteMaxAttenuation(0);
+      rx.setAmSoftMuteMaxAttenuation(0);
+      rx.setAvcAmMaxGain(SsbAvcIdx);
       // To move frequency forward, need to move the BFO backwards
       if (currentMode == USB)
         rx.setSSBBfo(-(currentBFO + band->usbCal));
@@ -399,6 +404,12 @@ void useBand(const Band *band)
   doAgc(0);
   // Set currentAVC values based on mode (AM, SSB)
   doAvc(0);
+  if (currentMode != FM) {
+    rx.setSsbSoftMuteMaxAttenuation(0);
+    rx.setAmSoftMuteMaxAttenuation(0);
+  }
+  rx.setVolume(volume);
+  rx.setAudioMute(false);
   // Wait a bit for things to calm down
   delay(100);
   // Clear signal strength readings
@@ -740,6 +751,7 @@ void loop()
   // Receive and execute serial command
   if(Serial.available()>0)
   {
+    elapsedSleep = currentTime;
     int revent = remoteDoCommand(Serial.read());
     needRedraw |= !!(revent & REMOTE_CHANGED);
     pb1st.wasClicked |= !!(revent & REMOTE_CLICK);
@@ -876,8 +888,10 @@ void loop()
       }
       else if(pb1st.wasShortPressed)
       {
-        // Volume shortcut (only active in VFO mode)
-        currentCmd = CMD_VOLUME;
+        if(uiLayoutIdx == UI_FT8)
+          ft8ToggleViewMode();
+        else
+          currentCmd = CMD_VOLUME;
         needRedraw = true;
       }
       else
@@ -916,6 +930,9 @@ void loop()
     // CPU sleep can take long time, renew the timestamps
     elapsedSleep = elapsedCommand = currentTime = millis();
   }
+
+  // Tick real-time FT8 ADC waterfall & automatic 15s slot decoder
+  needRedraw |= ft8TickWaterfall();
 
   if((currentTime - elapsedRSSI) > MIN_ELAPSED_RSSI_TIME)
   {
