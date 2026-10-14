@@ -13,6 +13,9 @@
 #include "Utils.h"
 #include "EIBI.h"
 #include "Layout-FT8.h"
+#include "esp_bt.h"
+
+SET_LOOP_TASK_STACK_SIZE(6144);
 
 // SI473/5 and UI
 #define MIN_ELAPSED_TIME         5  // 300
@@ -110,6 +113,9 @@ void setup()
   Serial.begin(115200);
   delay(50);
   Serial.println("\r\n[BOOT] Starting ATS-Mini ESP32 + SI4732 Receiver...");
+
+  // Release unused Bluetooth controller DRAM (~36 KB) back to the heap
+  esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
 
   // Encoder pins. Enable internal pull-ups
   pinMode(ENCODER_PUSH_BUTTON, INPUT_PULLUP);

@@ -262,19 +262,19 @@ details.card summary::-webkit-details-marker{display:none}
       </div>
     </div>
 
-    <!-- 3. Right Column: Live 1:1 Physical LCD Mirror & Virtual Rotary Encoder -->
+    <!-- 3. Right Column: Virtual Rotary Encoder & LCD Display Quick Controls (Zero Screenshot Overhead) -->
     <div class="ats-lcd-mirror">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:.75rem;font-weight:700;color:var(--cyan)">🖥️ Màn Hình LCD Thực Tế (320×170)</span>
-        <div style="display:flex;gap:4px;align-items:center">
-          <label style="font-size:.7rem;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:3px">
-            <input type="checkbox" id="autoLcdChk" checked> Tự động
-          </label>
-          <button onclick="refreshLcdMirror()" style="padding:2px 6px;font-size:.68rem">Làm mới</button>
-        </div>
+        <span style="font-size:.76rem;font-weight:700;color:var(--cyan)">🎛️ Núm Xoay Encoder &amp; Bố Cục LCD</span>
+        <span class="lbl-sm">Đồng bộ 2 chiều</span>
       </div>
-      <div class="lcd-screen-frame">
-        <img id="lcdLiveImg" src="/api/screenshot.bmp" alt="ATS-Mini LCD">
+      <div class="ctrl-group" style="padding:7px 9px">
+        <div class="ctrl-hdr"><span>Bố cục hiển thị trên LCD thiết bị:</span></div>
+        <div class="btn-row" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
+          <button onclick="sendCtrl('layout',{idx:0})" style="padding:5px 4px;font-size:.73rem">📻 Mặc định</button>
+          <button onclick="sendCtrl('layout',{idx:1})" style="padding:5px 4px;font-size:.73rem">📟 S-Meter</button>
+          <button onclick="sendCtrl('layout',{idx:2})" style="padding:5px 4px;font-size:.73rem">🌊 FT8 / Phổ</button>
+        </div>
       </div>
       <div class="enc-bar">
         <button onclick="sendCtrl('enc',{type:'rot',dir:-1})" title="Xoay núm Encoder sang trái">⟲ Trái</button>
@@ -701,7 +701,6 @@ async function sendCtrl(action, params = {}) {
     });
     setTimeout(async () => {
       await fetchStatus();
-      if (document.getElementById('autoLcdChk').checked) refreshLcdMirror();
     }, 90);
   } catch (e) { console.error(e); }
 }
@@ -877,14 +876,19 @@ function updateFt8Visibility() {
   banner.style.display = isDig ? 'none' : 'flex';
 }
 
-function refreshLcdMirror() {
-  const img = document.getElementById('lcdLiveImg');
-  if (img) img.src = '/api/screenshot.bmp?t=' + Date.now();
+async function fetchWithTimeout(url, opts = {}, ms = 2500) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
 }
 
 async function fetchStatus() {
   try {
-    const r = await fetch('/api/status');
+    const r = await fetchWithTimeout('/api/status');
     if (!r.ok) return;
     const d = await r.json();
     curStatus = d;
@@ -1143,7 +1147,7 @@ function colorMap(v, pal) {
 
 async function fetchWaterfall() {
   try {
-    const r = await fetch('/api/waterfall');
+    const r = await fetchWithTimeout('/api/waterfall', {}, 3000);
     if (!r.ok) return;
     const buf = new Uint8Array(await r.arrayBuffer());
     if (buf.length < 36 * 120) return;
@@ -1173,7 +1177,7 @@ async function fetchWaterfall() {
 // Traffic Log
 async function fetchTraffic() {
   try {
-    const r = await fetch('/api/ft8/traffic');
+    const r = await fetchWithTimeout('/api/ft8/traffic', {}, 2500);
     if (!r.ok) return;
     trafficCache = await r.json();
     renderTrafficTable();
@@ -1322,9 +1326,6 @@ async function sequentialPollLoop() {
     }
     if (pollTickCount % 2 === 0) {
       await fetchTraffic();
-    }
-    if (pollTickCount % 3 === 0 && !webAudioOn && document.getElementById('autoLcdChk').checked) {
-      refreshLcdMirror();
     }
     pollTickCount++;
   } catch (e) {}
