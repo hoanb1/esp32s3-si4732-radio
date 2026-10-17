@@ -178,7 +178,8 @@ bool muteOn(uint8_t mode, int x)
 #if AUDIO_MUTE >= 0
     digitalWrite(AUDIO_MUTE, HIGH);
 #endif
-    if(!isSSB() || mode != MUTE_TEMP) {
+    // FT8/FT4 decode the SI4732 line out on GPIO34, so there only the speaker amplifier is muted
+    if((!isSSB() || mode != MUTE_TEMP) && ft8GetDigitalMode() == FT8_DIG_OFF) {
       delay(50);
       rx.setAudioMute(true);
     }
@@ -191,6 +192,8 @@ bool muteOn(uint8_t mode, int x)
 #endif
     delay(20);
     rx.setAudioMute(false);
+    // Restore volume and the speaker amplifier (it stays off in FT8/FT4 while the speaker is muted)
+    ft8ApplyAudio();
   }
 
   switch(mode) {

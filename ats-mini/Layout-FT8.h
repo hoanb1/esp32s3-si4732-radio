@@ -64,7 +64,13 @@ void ft8TuneBandDigitalFreq(int bId, uint8_t digMode);
 
 // Speaker mute control (mutes speaker without killing SI4732 baseband output to GPIO34 if in FT8 mode)
 void ft8ToggleSpeakerMute();
+void ft8SetSpeakerMuted(bool muted);
 bool ft8IsSpeakerMuted();
+
+// Amateur bands with FT8/FT4 frequencies (indices into bands[]) and the one closest to a frequency
+#define FT8_FIRST_BAND 18
+#define FT8_LAST_BAND  26
+int ft8NearestBand(uint32_t khz);
 
 // Apply SI4732 volume + speaker amplifier state for the current mode/mute/sleep state
 void ft8ApplyAudio();

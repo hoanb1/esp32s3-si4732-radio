@@ -874,6 +874,15 @@ void loop()
       switch(currentCmd)
       {
         case CMD_NONE:
+          // FT8/FT4 sit on a fixed dial frequency: the knob flips between the decoder views
+          // (fine tuning is still available with push and rotate)
+          if(ft8GetDigitalMode() != FT8_DIG_OFF)
+          {
+            ft8SetViewMode(ft8GetViewMode() + (encCount > 0 ? 1 : 2));
+            needRedraw = true;
+            break;
+          }
+          // fall through
         case CMD_SCAN:
           // Tuning
           needRedraw |= doTune(encCountAccel);

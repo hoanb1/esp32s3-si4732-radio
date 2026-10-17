@@ -75,17 +75,19 @@ Band *getCurrentBand() { return(&bands[bandIdx]); }
 
 #define MENU_MODE         0
 #define MENU_BAND         1
-#define MENU_VOLUME       2
-#define MENU_STEP         3
-#define MENU_SEEK         4
-#define MENU_SCAN         5
-#define MENU_MEMORY       6
-#define MENU_SQUELCH      7
-#define MENU_BW           8
-#define MENU_AGC_ATT      9
-#define MENU_AVC         10
-#define MENU_SOFTMUTE    11
-#define MENU_SETTINGS    12
+#define MENU_FT8VIEW      2
+#define MENU_FT8CLEAR     3
+#define MENU_VOLUME       4
+#define MENU_STEP         5
+#define MENU_SEEK         6
+#define MENU_SCAN         7
+#define MENU_MEMORY       8
+#define MENU_SQUELCH      9
+#define MENU_BW          10
+#define MENU_AGC_ATT     11
+#define MENU_AVC         12
+#define MENU_SOFTMUTE    13
+#define MENU_SETTINGS    14
 
 int8_t menuIdx = MENU_VOLUME;
 
@@ -93,6 +95,8 @@ static const char *menu[] =
 {
   "Mode",
   "Band",
+  "View",
+  "Clear Log",
   "Volume",
   "Step",
   "Seek",
@@ -105,6 +109,28 @@ static const char *menu[] =
   "SoftMute",
   "Settings",
 };
+
+static inline bool isDigitalMode() { return(ft8GetDigitalMode() != FT8_DIG_OFF); }
+
+// Only offer what works in the current mode: FT8/FT4 run with fixed receiver
+// settings, FM has no AVC/SoftMute
+static bool menuAvailable(int idx)
+{
+  switch(idx)
+  {
+    case MENU_FT8VIEW:
+    case MENU_FT8CLEAR: return(isDigitalMode());
+    case MENU_STEP:
+    case MENU_SEEK:
+    case MENU_SCAN:
+    case MENU_SQUELCH:
+    case MENU_BW:
+    case MENU_AGC_ATT:  return(!isDigitalMode());
+    case MENU_AVC:
+    case MENU_SOFTMUTE: return(!isDigitalMode() && currentMode != FM);
+    default:            return(true);
+  }
+}
 
 //
 // Settings Menu
@@ -147,6 +173,33 @@ static const char *settings[] =
   "Wi-Fi",
   "About",
 };
+
+static bool settingsAvailable(int idx)
+{
+  switch(idx)
+  {
+    case MENU_CALIBRATION: return(isSSB());
+    case MENU_FM_REGION:   return(currentMode == FM);
+    default:               return(true);
+  }
+}
+
+static bool bandAvailable(int idx)
+{
+  // FT8/FT4 stay on the amateur bands that have FT8/FT4 frequencies
+  return(!isDigitalMode() || (idx >= FT8_FIRST_BAND && idx <= FT8_LAST_BAND));
+}
+
+// Index of the |enc|-th available item from idx in direction of enc, wrapping around;
+// enc = 0 moves to the nearest available item if idx itself is unavailable
+static int stepAvailable(int idx, int enc, int count, bool (*available)(int))
+{
+  while(!available(idx)) idx = (idx + 1) % count;
+  int dir = enc < 0 ? -1 : 1;
+  for(int n = abs(enc); n > 0; n--)
+    do idx = (idx + dir + count) % count; while(!available(idx));
+  return(idx);
+}
 
 //
 // FM Region Menu
@@ -497,12 +550,17 @@ void doSelectDigit(int16_t enc)
 void doVolume(int16_t enc)
 {
   volume = clamp_range(volume, enc, 0, 63);
+  // The speaker is off by default in FT8/FT4: turning the volume up switches it on, down to 0 off
+  if(isDigitalMode() && (enc > 0 || !volume)) ft8SetSpeakerMuted(!volume);
   ft8ApplyAudio();
 }
 
 static void clickVolume(bool shortPress)
 {
-  if(shortPress) muteOn(MUTE_MAIN, !muteOn(MUTE_MAIN)); else currentCmd = CMD_NONE;
+  if(!shortPress) currentCmd = CMD_NONE;
+  // In FT8/FT4 only the speaker is switched, the decoder keeps its audio
+  else if(isDigitalMode()) ft8ToggleSpeakerMute();
+  else muteOn(MUTE_MAIN, !muteOn(MUTE_MAIN));
 }
 
 static void clickSquelch(bool shortPress)
@@ -770,17 +828,12 @@ void doMode(int16_t enc)
   int mIdx = wrap_range(getHfModeMenuIdx(), enc, 0, 4);
   if (mIdx == 3 || mIdx == 4) {
     uint8_t dig = (mIdx == 4) ? FT8_DIG_FT4 : FT8_DIG_FT8;
-    if (bandIdx >= 18 && bandIdx <= 26) {
+    // Off the amateur bands there is no FT8/FT4 traffic: go to the nearest amateur band's FT8/FT4 frequency
+    bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
+    if (bandIdx < FT8_FIRST_BAND || bandIdx > FT8_LAST_BAND)
+      ft8TuneBandDigitalFreq(ft8NearestBand(currentFrequency + currentBFO / 1000), dig);
+    else
       ft8TuneBandDigitalFreq(bandIdx, dig);
-    } else {
-      currentMode = USB;
-      bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
-      bands[bandIdx].currentStepIdx = defaultStepIdx[USB];
-      bands[bandIdx].bandwidthIdx = defaultBwIdx[USB];
-      bands[bandIdx].bandMode = USB;
-      ft8SetDigitalMode(dig);
-      selectBand(bandIdx);
-    }
     return;
   }
 
@@ -824,14 +877,14 @@ void doBand(int16_t enc)
   bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
   bands[bandIdx].bandMode = currentMode;
 
-  // Change band
-  bandIdx = wrap_range(bandIdx, enc, 0, LAST_ITEM(bands));
-
-  // If currently in FT8/FT4 digital mode and switching among Ham bands (18..26), keep FT8/FT4 mode synced
-  if (ft8GetDigitalMode() != FT8_DIG_OFF && bandIdx >= 18 && bandIdx <= 26) {
-    ft8TuneBandDigitalFreq(bandIdx, ft8GetDigitalMode());
+  // FT8/FT4 cycle through the amateur bands and keep the digital mode
+  if (isDigitalMode()) {
+    ft8TuneBandDigitalFreq(stepAvailable(bandIdx, enc, getTotalBands(), bandAvailable), ft8GetDigitalMode());
     return;
   }
+
+  // Change band
+  bandIdx = wrap_range(bandIdx, enc, 0, LAST_ITEM(bands));
 
   // Enable the new band
   selectBand(bandIdx);
@@ -853,7 +906,12 @@ void doBandwidth(int16_t enc)
 
 static void doMenu(int16_t enc)
 {
-  menuIdx = wrap_range(menuIdx, enc, 0, LAST_ITEM(menu));
+  menuIdx = stepAvailable(menuIdx, enc, ITEM_COUNT(menu), menuAvailable);
+}
+
+static void doFt8View(int16_t enc)
+{
+  ft8SetViewMode(wrap_range(ft8GetViewMode(), enc, FT8_VIEW_SPLIT, FT8_VIEW_LOG));
 }
 
 static void clickMenu(int cmd, bool shortPress)
@@ -861,8 +919,10 @@ static void clickMenu(int cmd, bool shortPress)
   // No command yet
   currentCmd = CMD_NONE;
 
-  switch(cmd)
+  switch(stepAvailable(cmd, 0, ITEM_COUNT(menu), menuAvailable))
   {
+    case MENU_FT8VIEW:  currentCmd = CMD_FT8VIEW;   break;
+    case MENU_FT8CLEAR: ft8ClearTraffic();          break;
     case MENU_STEP:     currentCmd = CMD_STEP;      break;
     case MENU_SEEK:     currentCmd = CMD_SEEK;      break;
     case MENU_MODE:     currentCmd = CMD_MODE;      break;
@@ -902,7 +962,7 @@ static void clickMenu(int cmd, bool shortPress)
 
 static void doSettings(int16_t enc)
 {
-  settingsIdx = wrap_range(settingsIdx, enc, 0, LAST_ITEM(settings));
+  settingsIdx = stepAvailable(settingsIdx, enc, ITEM_COUNT(settings), settingsAvailable);
 }
 
 static void clickSettings(int cmd, bool shortPress)
@@ -910,7 +970,7 @@ static void clickSettings(int cmd, bool shortPress)
   // No command yet
   currentCmd = CMD_NONE;
 
-  switch(cmd)
+  switch(stepAvailable(cmd, 0, ITEM_COUNT(settings), settingsAvailable))
   {
     case MENU_BRIGHTNESS: currentCmd = CMD_BRT; break;
     case MENU_CALIBRATION:
@@ -972,6 +1032,7 @@ bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca)
     case CMD_UTCOFFSET: doUTCOffset(scrollDirection * enc);break;
     case CMD_SQUELCH:   doSquelch(enca);break;
     case CMD_ABOUT:     doAbout(enc);break;
+    case CMD_FT8VIEW:   doFt8View(scrollDirection * enc);break;
     default:            return(false);
   }
 
@@ -1061,61 +1122,58 @@ static void drawCommon(const char *title, int x, int y, int sx, bool cursor = fa
     spr.fillRoundRect(6+x, 24+y+(2*16), 66+sx, 16, 2, TH.menu_hl_bg);
 }
 
-static void drawMenu(int x, int y, int sx)
+// Scrolling list of the available items around the selected one
+static void drawList(const char *title, const char *(*name)(int), int idx, int count, bool (*available)(int), int x, int y, int sx)
 {
-  spr.setTextDatum(MC_DATUM);
+  drawCommon(title, x, y, sx, true);
+  idx = stepAvailable(idx, 0, count, available);
 
-  spr.fillSmoothRoundRect(1+x, 1+y, 76+sx, 110, 4, TH.menu_border);
-  spr.fillSmoothRoundRect(2+x, 2+y, 74+sx, 108, 4, TH.menu_bg);
-  spr.setTextColor(TH.menu_hdr);
-
-  spr.drawString("Menu", 40+x+(sx/2), 12+y, 2);
-  spr.drawLine(1+x, 23+y, 76+sx, 23+y, TH.menu_border);
-
-  spr.setTextFont(0);
-  spr.setTextColor(TH.menu_item);
-  spr.fillRoundRect(6+x, 24+y+(2*16), 66+sx, 16, 2, TH.menu_hl_bg);
-
-  int count = ITEM_COUNT(menu);
   for(int i=-2 ; i<3 ; i++)
   {
+    const char *label = name(i ? stepAvailable(idx, i, count, available) : idx);
     if(i==0) {
-      drawZoomedMenu(menu[abs((menuIdx+count+i)%count)]);
+      drawZoomedMenu(label);
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
       spr.setTextColor(TH.menu_item);
     }
     spr.setTextDatum(MC_DATUM);
-    spr.drawString(menu[abs((menuIdx+count+i)%count)], 40+x+(sx/2), 64+y+(i*16), 2);
+    spr.drawString(label, 40+x+(sx/2), 64+y+(i*16), 2);
   }
+}
+
+static const char *menuName(int i) { return(menu[i]); }
+static const char *settingsName(int i) { return(settings[i]); }
+static const char *bandName(int i) { return(bands[i].bandName); }
+
+static void drawMenu(int x, int y, int sx)
+{
+  drawList("Menu", menuName, menuIdx, ITEM_COUNT(menu), menuAvailable, x, y, sx);
 }
 
 static void drawSettings(int x, int y, int sx)
 {
-  spr.setTextDatum(MC_DATUM);
+  drawList("Settings", settingsName, settingsIdx, ITEM_COUNT(settings), settingsAvailable, x, y, sx);
+}
 
-  spr.fillSmoothRoundRect(1+x, 1+y, 76+sx, 110, 4, TH.menu_border);
-  spr.fillSmoothRoundRect(2+x, 2+y, 74+sx, 108, 4, TH.menu_bg);
-  spr.setTextColor(TH.menu_hdr);
-  spr.drawString("Settings", 40+x+(sx/2), 12+y, 2);
-  spr.drawLine(1+x, 23+y, 76+sx, 23+y, TH.menu_border);
+static void drawFt8View(int x, int y, int sx)
+{
+  static const char *viewDesc[] = { "Split", "Waterfall", "Log" };
+  int idx = ft8GetViewMode();
 
-  spr.setTextFont(0);
-  spr.setTextColor(TH.menu_item);
-  spr.fillRoundRect(6+x, 24+y+(2*16), 66+sx, 16, 2, TH.menu_hl_bg);
-
-  int count = ITEM_COUNT(settings);
-  for(int i=-2 ; i<3 ; i++)
+  drawCommon(menu[MENU_FT8VIEW], x, y, sx, true);
+  for(int i=-1 ; i<2 ; i++)
   {
+    int v = idx + i;
+    if(v < 0 || v > LAST_ITEM(viewDesc)) continue;
     if(i==0) {
-      drawZoomedMenu(settings[abs((settingsIdx+count+i)%count)]);
+      drawZoomedMenu(viewDesc[v]);
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
     } else {
       spr.setTextColor(TH.menu_item);
     }
-
     spr.setTextDatum(MC_DATUM);
-    spr.drawString(settings[abs((settingsIdx+count+i)%count)], 40+x+(sx/2), 64+y+(i*16), 2);
+    spr.drawString(viewDesc[v], 40+x+(sx/2), 64+y+(i*16), 2);
   }
 }
 
@@ -1207,21 +1265,7 @@ static void drawScan(int x, int y, int sx)
 
 static void drawBand(int x, int y, int sx)
 {
-  drawCommon(menu[MENU_BAND], x, y, sx, true);
-
-  int count = ITEM_COUNT(bands);
-  for(int i=-2 ; i<3 ; i++)
-  {
-    if(i==0) {
-      drawZoomedMenu(bands[abs((bandIdx+count+i)%count)].bandName);
-      spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
-    } else {
-      spr.setTextColor(TH.menu_item);
-    }
-
-    spr.setTextDatum(MC_DATUM);
-    spr.drawString(bands[abs((bandIdx+count+i)%count)].bandName, 40+x+(sx/2), 64+y+(i*16), 2);
-  }
+  drawList(menu[MENU_BAND], bandName, bandIdx, getTotalBands(), bandAvailable, x, y, sx);
 }
 
 static void drawBandwidth(int x, int y, int sx)
@@ -1434,7 +1478,7 @@ static void drawVolume(int x, int y, int sx)
   spr.setTextColor(TH.menu_param);
   spr.drawNumber(volume, 40+x+(sx/2), 66+y, 7);
 
-  if(muteOn(MUTE_MAIN))
+  if(muteOn(MUTE_MAIN) || (isDigitalMode() && ft8IsSpeakerMuted()))
   {
     for(int i=-3; i<4; i++)
     {
@@ -1711,6 +1755,7 @@ void drawSideBar(uint16_t cmd, int x, int y, int sx)
     case CMD_SCROLL:    drawScrollDir(x, y, sx); break;
     case CMD_UTCOFFSET: drawUTCOffset(x, y, sx); break;
     case CMD_SQUELCH:   drawSquelch(x, y, sx);   break;
+    case CMD_FT8VIEW:   drawFt8View(x, y, sx);   break;
     default:            drawInfo(x, y, sx);      break;
   }
 }

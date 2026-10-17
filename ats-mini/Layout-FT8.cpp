@@ -105,7 +105,7 @@ static bool slotDecoded = false;
 static bool ft8IsDecoding = false;
 static uint32_t ft8LastDurationMs = 0;
 static int ft8LastDecodeCount = 0;
-static uint8_t ft8ViewMode = FT8_VIEW_SPLIT;
+static uint8_t ft8ViewMode = FT8_VIEW_LOG;   // FT8/FT4 open on the decoded message list
 static uint8_t ft8DigitalMode = FT8_DIG_OFF;
 static bool ft8SpeakerMuted = false;  // Speaker amplifier off (SI4732 keeps feeding GPIO34); set automatically in FT8/FT4
 static uint8_t ft8AdcVolume = FT8_ADC_VOLUME;   // Speaker off by default in FT8/FT4 (the SI4732 runs loud for the ADC)
@@ -962,6 +962,7 @@ void ft8SetDigitalMode(uint8_t digMode) {
   if (digMode > 2) digMode = FT8_DIG_OFF;
   // FT8/FT4 run the SI4732 loud for the ADC, so silence the speaker when entering them and restore it when leaving
   if (digMode != ft8DigitalMode) ft8SpeakerMuted = (digMode != FT8_DIG_OFF);
+  if (ft8DigitalMode == FT8_DIG_OFF && digMode != FT8_DIG_OFF) ft8ViewMode = FT8_VIEW_LOG;
   ft8DigitalMode = digMode;
   if (monInitialized) monitor_reset(&liveMon);
   slotDecoded = false;
@@ -1042,6 +1043,22 @@ void ft8TuneBandDigitalFreq(int bId, uint8_t digMode) {
 void ft8ToggleSpeakerMute() {
   ft8SpeakerMuted = !ft8SpeakerMuted;
   ft8ApplyAudio();
+}
+
+void ft8SetSpeakerMuted(bool muted) {
+  ft8SpeakerMuted = muted;
+  ft8ApplyAudio();
+}
+
+int ft8NearestBand(uint32_t khz) {
+  int best = FT8_FIRST_BAND;
+  uint32_t bestD = 0xFFFFFFFF;
+  for (int b = FT8_FIRST_BAND; b <= FT8_LAST_BAND; b++) {
+    uint32_t c = (bands[b].minimumFreq + bands[b].maximumFreq) / 2;
+    uint32_t d = c > khz ? c - khz : khz - c;
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
 }
 
 // Single place that decides SI4732 volume and speaker amplifier state.
