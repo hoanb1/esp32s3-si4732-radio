@@ -775,9 +775,8 @@ async function fetchStatus() {
 
   V('volSlider', d.volume);
   if ($('volSlider') !== document.activeElement) T('volText', d.volume);
-  const dig = d.dig_mode !== undefined && d.dig_mode !== 2;
   S('volHint', 'display', dig ? '' : 'none');
-  if (dig) T('volHint', d.mute ? 'FT8/FT4: speaker off, decoder level fixed at 48' : 'FT8/FT4: volume also feeds the decoder, keep it near 48');
+  if (dig) T('volHint', d.web_audio ? 'FT8/FT4 decoding and waterfall paused while web audio is on' : d.mute ? 'FT8/FT4: speaker off, decoder level fixed at 48' : 'FT8/FT4: volume also feeds the decoder, keep it near 48');
   T('muteBtn', d.mute ? '🔇 Speaker muted' : '🔊 Speaker on');
   C('muteBtn', d.mute ? 'danger flex1' : 'flex1');
 
@@ -967,7 +966,18 @@ async function syncBrowserTime() {
   kick(100);
 }
 
-// Live web audio: 160 ms WAV snapshots from GPIO34
+// Live web audio: /api/audio returns the samples after the last ones we got (6 kHz mu-law),
+// and each chunk is scheduled right after the previous one behind a ~500 ms jitter buffer.
+// While anyone listens the radio pauses FT8 decoding and the waterfall to free RAM and CPU.
+const AUD_RATE = 6000;
+const ULAW = new Float32Array(256);
+for (let i = 0; i < 256; i++) {
+  const u = ~i & 0xff, e = (u >> 4) & 7;
+  const m = (((u & 0x0f) << 3) + 0x84 << e) - 0x84;
+  ULAW[i] = (u & 0x80 ? -m : m) / 32768;
+}
+let audSeq = 0, audNext = 0, audGen = 0;
+
 function toggleWebAudio() {
   webAudioOn = !webAudioOn;
   T('webAudioBtn', webAudioOn ? '🎧 Web audio: ON' : '🎧 Web audio: OFF');
@@ -975,20 +985,37 @@ function toggleWebAudio() {
   if (webAudioOn) {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     audioCtx.resume();
-    playAudioLoop();
+    audSeq = 0;
+    audNext = 0;
+    audioLoop(++audGen);
   }
 }
 
-async function playAudioLoop() {
-  if (!webAudioOn) return;
-  try {
-    const ab = await req('/api/audio.wav', {}, 'buf', 2000);
-    const src = audioCtx.createBufferSource();
-    src.buffer = await audioCtx.decodeAudioData(ab);
-    src.connect(audioCtx.destination);
-    src.start();
-  } catch (e) {}
-  if (webAudioOn) setTimeout(playAudioLoop, 180);
+async function audioLoop(gen) {
+  while (webAudioOn && gen === audGen) {
+    const t0 = performance.now();
+    try { playAudioChunk(await req('/api/audio?from=' + audSeq, {}, 'buf', 2000)); } catch (e) {}
+    await new Promise(r => setTimeout(r, Math.max(40, 200 - (performance.now() - t0))));
+  }
+}
+
+function playAudioChunk(ab) {
+  if (!webAudioOn || ab.byteLength < 4) return;
+  const start = new DataView(ab).getUint32(0, true), n = ab.byteLength - 4;
+  let fade = start !== audSeq;   // first chunk, or the radio skipped samples we were too slow to fetch
+  audSeq = start + n;
+  if (!n) return;
+  const now = audioCtx.currentTime;
+  if (fade || audNext < now + 0.02) { audNext = now + 0.5; fade = true; }   // (re)fill the jitter buffer
+  else if (audNext - now > 2.0) return;   // clocks drifted, too much queued: drop this chunk
+  const buf = audioCtx.createBuffer(1, n, AUD_RATE), ch = buf.getChannelData(0), u8 = new Uint8Array(ab, 4);
+  for (let i = 0; i < n; i++) ch[i] = ULAW[u8[i]];
+  if (fade) for (let i = 0; i < Math.min(120, n); i++) ch[i] *= i / 120;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  src.start(audNext);
+  audNext += n / AUD_RATE;
 }
 
 // Wi-Fi & logs (fetched only when the section is open)

@@ -906,8 +906,8 @@ class FlashResponse : public AsyncWebServerResponse
           src = _head.c_str() + _headSent;
           left = _head.length() - _headSent;
         } else {
-          src = (const char *)_data + _sentLength;
           left = _contentLength - _sentLength;
+          src = _content(_sentLength, left);
         }
         if (!left) {
           if (_state == RESPONSE_HEADERS) { _head = String(); _state = RESPONSE_CONTENT; }
@@ -931,10 +931,42 @@ class FlashResponse : public AsyncWebServerResponse
       return queued;
     }
 
+  protected:
+    // Bytes to send from offset `off`; may shorten `left`. client->add() copies them.
+    virtual const char *_content(size_t off, size_t &left) { (void)left; return (const char *)_data + off; }
+
   private:
     const uint8_t *_data;
     String _head;
     size_t _headSent = 0;
+};
+
+//
+// /api/audio body: uint32 LE start sample number, then mu-law samples read from the live ring
+//
+class AudioResponse : public FlashResponse
+{
+  public:
+    AudioResponse(uint32_t start, uint32_t count) :
+      FlashResponse(200, "application/octet-stream", NULL, 4 + count), _start(start)
+    {
+      addHeader("Cache-Control", "no-store");
+    }
+
+  protected:
+    const char *_content(size_t off, size_t &left) override
+    {
+      size_t n = 0;
+      for (; off < 4 && n < left && n < sizeof(_tmp); off++) _tmp[n++] = (uint8_t)(_start >> (8 * off));
+      size_t m = min(left - n, sizeof(_tmp) - n);
+      if (m) ft8WebAudioCopy(_tmp + n, _start + (off - 4), m);
+      left = n + m;
+      return (const char *)_tmp;
+    }
+
+  private:
+    uint32_t _start;
+    uint8_t _tmp[1436];
 };
 
 //
@@ -1031,7 +1063,7 @@ static void webInit()
       "\"brt\":%u,\"theme\":%u,\"theme_name\":\"%s\",\"cmd\":%u,"
       "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
       "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
-      "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,"
+      "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
       "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu}",
       freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
       (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
@@ -1046,6 +1078,7 @@ static void webInit()
       ft8GetCurrentSlotSecond(), ft8IsDecodingNow() ? "true" : "false",
       (unsigned long)ft8GetLastDurationMs(), volume,
       ft8IsSpeakerMuted() ? "true" : "false",
+      ft8WebAudioActive() ? "true" : "false",
       ft8GetAudioLevel(), (unsigned int)ESP.getFreeHeap(),
       (unsigned long)ft8GetTotalDecoded()
     );
@@ -1207,6 +1240,15 @@ static void webInit()
     );
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
+  });
+
+  // /api/audio?from=N - Continuous web audio: uint32 LE start sample number, then 6 kHz mu-law samples.
+  // Pass the previous start + length as `from`; a different start in the reply means samples were skipped.
+  server.on("/api/audio", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    uint32_t from = request->hasParam("from") ? (uint32_t)strtoul(request->getParam("from")->value().c_str(), NULL, 10) : 0;
+    uint32_t count = 0;
+    uint32_t start = ft8WebAudioBegin(from, &count);
+    request->send(new AudioResponse(start, count));
   });
 
   // /api/wifi/list - Return all 8 saved WiFi slots + connected SSID

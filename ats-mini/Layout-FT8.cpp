@@ -50,6 +50,19 @@ static volatile uint32_t adcRawHead = 0;                   // total raw samples 
 static uint32_t monSlotId = 0xFFFFFFFF;                     // slot currently being collected into liveMon
 static bool monSlotUsable = false;                           // false if the slot start was missed
 
+// Web audio: continuous 6 kHz mu-law ring read by absolute sample number, so consecutive
+// /api/audio requests join without gaps or repeats. This board has no spare heap for it (WiFi
+// stalls below ~40 KB free), so while someone listens FT8 decoding and the waterfall pause and
+// the ring borrows the FT8 waterfall magnitude buffer; they resume WEB_AUD_IDLE_MS after the last request.
+#define WEB_AUD_RING_MAX    16384 // 2.7 s
+#define WEB_AUD_IDLE_MS     3000
+static uint8_t *volatile webAudRing = NULL;
+static volatile uint32_t webAudMask = 0;
+static volatile uint32_t webAudHead = 0;                    // total samples written
+static volatile uint32_t webAudLastReq = 0;                 // millis() of the last /api/audio request
+static volatile bool webAudWanted = false;
+static float webAudDc = 950.0f;
+
 // Live ADC signal statistics
 static float lastAdcMean = 950.0f;
 static int16_t lastAdcMin = 950;
@@ -276,6 +289,17 @@ static void IRAM_ATTR adcTimerIsr() {
   adcRawHead = h + 1;
 }
 
+// G.711 mu-law: 8 bits per sample with ~13-bit dynamic range
+static uint8_t linearToUlaw(int32_t x) {
+  uint8_t sign = 0;
+  if (x < 0) { x = -x; sign = 0x80; }
+  if (x > 32635) x = 32635;
+  x += 0x84;
+  int exp = 7;
+  for (int mask = 0x4000; (x & mask) == 0 && exp > 0; mask >>= 1) exp--;
+  return ~(sign | (exp << 4) | ((x >> (exp + 3)) & 0x0F));
+}
+
 static void adcTask(void *arg) {
   uint32_t tail = adcRawHead;           // next raw sample to consume (absolute index)
   uint32_t histCount = 0;
@@ -335,6 +359,12 @@ static void adcTask(void *arg) {
 
         uint8_t wBuf = adcWriteBlock;
         adcBuf[wBuf][sampleIdx] = (int16_t)lroundf(acc);
+        uint8_t *ring = webAudRing;
+        if (ring) {
+          webAudDc += (acc - webAudDc) * (1.0f / 2048.0f);
+          ring[webAudHead & webAudMask] = linearToUlaw(lroundf((acc - webAudDc) * 32.0f));
+          webAudHead = webAudHead + 1;
+        }
         if (++sampleIdx >= FT8_BLOCK_SAMPLES) {
           sampleIdx = 0;
           adcBlockCounter[wBuf] = adcTotalBlocks++;
@@ -722,8 +752,33 @@ void ft8RequestRedraw() {
   g_webRedrawPending = true;
 }
 
+// Hand the FT8 waterfall buffer to web audio while someone listens, and take it back when they stop
+static void webAudioService() {
+  bool listening = webAudWanted && millis() - webAudLastReq < WEB_AUD_IDLE_MS;
+  if (listening && !webAudRing) {
+    uint8_t *mag = (uint8_t *)liveMon.wf.mag;
+    size_t size = (size_t)liveMon.wf.max_blocks * liveMon.wf.num_bins * sizeof(liveMon.wf.mag[0]);
+    size_t ring = WEB_AUD_RING_MAX;
+    while (ring > size) ring >>= 1;
+    // Needs byte-addressable DRAM (not 32-bit-only IRAM)
+    if (!mag || ring < 4096 || (uint32_t)mag < 0x3FF80000UL || (uint32_t)mag >= 0x40000000UL) return;
+    monitor_reset(&liveMon);
+    memset(mag, 0xFF, ring);              // mu-law silence
+    webAudMask = ring - 1;
+    webAudRing = mag;
+    Serial.printf("[AUD] Web audio on (%u-sample ring): FT8 decoding and waterfall paused\r\n", (unsigned)ring);
+  } else if (!listening && webAudRing) {
+    webAudRing = NULL;
+    webAudWanted = false;
+    monitor_reset(&liveMon);
+    monSlotId = 0xFFFFFFFF;               // restart FT8 collection at the next slot start
+    Serial.println("[AUD] Web audio off: FT8 decoding and waterfall resumed");
+  }
+}
+
 bool ft8TickWaterfall() {
   if (!monInitialized) ft8Init();
+  webAudioService();
 
   bool needRedraw = false;
   if (g_webRedrawPending) {
@@ -816,6 +871,8 @@ bool ft8TickWaterfall() {
     if (vu > 100) vu = 100;
     ft8AudioLevel = (uint8_t)vu;
 
+    if (webAudRing) continue;   // web audio owns the waterfall buffer
+
     // In non-digital mode (FM / AM / SSB Voice), wrap monitor blocks continuously so waterfall never pauses
     if (!digActive && liveMon.wf.num_blocks >= liveMon.wf.max_blocks) {
       monitor_reset(&liveMon);
@@ -834,7 +891,7 @@ bool ft8TickWaterfall() {
   }
 
   // Trigger live FT8 LDPC decoding at 84 blocks (13.44s) so the ~1.07s decode finishes at ~14.51s (before :00.0s of next slot)
-  if (digActive && !slotDecoded) {
+  if (digActive && !slotDecoded && !webAudRing) {
     if (liveMon.wf.num_blocks >= 84 || ((slotSec == 13 && subMs >= 440 || slotSec >= 14) && liveMon.wf.num_blocks >= 55)) {
       slotDecoded = true;
       int cnt = ft8DecodeFromMonitor(&liveMon, false);
@@ -1046,6 +1103,33 @@ const FT8MessageEntry* ft8GetTrafficEntry(int idx) {
 const uint8_t* ft8GetWebWaterfallBuffer() { return webWf; }
 
 // Stream WAV audio (960 samples @ 6000 Hz, 16-bit PCM mono = 1964 bytes total) in chunks of any size
+uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count) {
+  webAudLastReq = millis();
+  webAudWanted = true;
+  uint32_t head = webAudHead;
+  *count = 0;
+  if (!webAudRing) return head;   // the loop switches web audio on within a few ms
+  const uint32_t maxBack = webAudMask + 1 - 1200;   // keep 200 ms clear of the writer
+  uint32_t start = from;
+  // First request, or the client fell too far behind: restart 300 ms before now
+  if (from == 0 || (int32_t)(head - from) < 0 || head - from > maxBack)
+    start = head > 1800 ? head - 1800 : 0;
+  *count = head - start;
+  return start;
+}
+
+size_t ft8WebAudioCopy(uint8_t *dst, uint32_t seq, size_t n) {
+  const uint8_t *ring = webAudRing;
+  uint32_t mask = webAudMask;
+  if (!ring) { memset(dst, 0xFF, n); return n; }
+  for (size_t i = 0; i < n; i++) dst[i] = ring[(seq + i) & mask];
+  return n;
+}
+
+bool ft8WebAudioActive() {
+  return webAudRing != NULL;
+}
+
 size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index) {
   const uint32_t numSamples = FT8_BLOCK_SAMPLES;
   const uint32_t dataBytes = numSamples * 2;
