@@ -97,6 +97,31 @@ extern "C" {
 #define WEB_WF_ROWS 36
 static uint8_t webWf[WEB_WF_ROWS * 120];
 static uint32_t webWfRowCount = 0;   // rows ever added, so /ws can send only the new ones
+
+// Full-resolution web waterfall rows: every FFT bin (6.25 Hz, 200..2900 Hz), 4 bits per bin
+// = level above the row median in 1.5 dB steps (-3 .. +19.5 dB). Row n of webWfRowCount lives at n % HR_ROWS.
+#define HR_ROWS     8
+#define HR_MAX_BINS 440
+static uint8_t hrRows[HR_ROWS][HR_MAX_BINS / 2];
+static uint16_t hrBins = 0;
+
+static void storeHiResRow(const uint8_t *mag, int numBins, uint32_t rowNo) {
+  if (numBins > HR_MAX_BINS) numBins = HR_MAX_BINS;
+  // Row median (0.5 dB units) from a histogram
+  uint16_t hist[256] = {0};
+  for (int b = 0; b < numBins; b++) hist[wf_read_u8(&mag[b])]++;
+  int half = numBins / 2, acc = 0, med = 0;
+  for (; med < 255; med++) { acc += hist[med]; if (acc > half) break; }
+  uint8_t *dst = hrRows[rowNo % HR_ROWS];
+  memset(dst, 0, HR_MAX_BINS / 2);
+  for (int b = 0; b < numBins; b++) {
+    int q = ((int)wf_read_u8(&mag[b]) - med + 6) / 3;
+    if (q < 0) q = 0;
+    if (q > 15) q = 15;
+    dst[b >> 1] |= (b & 1) ? (q << 4) : q;
+  }
+  hrBins = numBins;
+}
 #define LCD_WF_ROWS 36
 #define LCD_WF_COLS 120
 
@@ -558,6 +583,7 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
 
   // Scroll waterfall (WEB_WF_ROWS x 120 cols) down by 1 row
   memmove(&webWf[120], &webWf[0], (WEB_WF_ROWS - 1) * 120);
+  storeHiResRow(rowMag0, numBins, webWfRowCount);
   webWfRowCount++;
   bool ssbMode = isSSB();
   for (int c = 0; c < 120; c++) {
@@ -1100,9 +1126,11 @@ void ft8ApplyAudio() {
   bool digital = ft8GetDigitalMode() != FT8_DIG_OFF;
   bool speaker = !sleepOn() && !muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH) && !ft8SpeakerMuted;
 
-  // The SI4732 keeps producing audio for the ADC whatever the speaker does; MUTE_MAIN/SQUELCH are handled by muteOn()
+  // The SI4732 keeps producing audio for the ADC whatever the speaker does; MUTE_MAIN/SQUELCH are handled by muteOn().
+  // In FT8/FT4 the SI4732 level is fixed for the ADC (at volume <= 36 the audio is below the ADC noise and nothing
+  // decodes); the amplifier has no gain control, so with the speaker on it plays at that level.
   if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
-    rx.setVolume(digital && !speaker ? ft8AdcVolume : volume);
+    rx.setVolume(digital ? ft8AdcVolume : volume);
     rx.setAudioMute(false);
   }
 #if PIN_AMP_EN >= 0
@@ -1150,6 +1178,8 @@ const FT8MessageEntry* ft8GetTrafficEntry(int idx) {
 }
 const uint8_t* ft8GetWebWaterfallBuffer() { return webWf; }
 uint32_t ft8GetWebWaterfallRowCount() { return webWfRowCount; }
+uint16_t ft8GetHiResBins() { return hrBins; }
+const uint8_t *ft8GetHiResRow(uint32_t rowNo) { return hrRows[rowNo % HR_ROWS]; }
 
 // Stream WAV audio (960 samples @ 6000 Hz, 16-bit PCM mono = 1964 bytes total) in chunks of any size
 uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count) {

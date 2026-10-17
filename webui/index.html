@@ -163,7 +163,7 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 /* Waterfall */
 .wf{background:#040811;border:1px solid #253b61;border-radius:8px;overflow:hidden}
 .wf.off canvas{opacity:.25}
-#wfCanvas{width:100%;height:210px;display:block;image-rendering:pixelated;image-rendering:crisp-edges;cursor:crosshair}
+#wfCanvas{width:100%;height:420px;display:block;image-rendering:pixelated;image-rendering:crisp-edges;cursor:crosshair}
 .wf-axis{display:flex;justify-content:space-between;padding:3px 8px;background:#0a1322;font-size:.72rem;color:var(--muted);border-top:1px solid #1c2e4a}
 
 /* FT8 / FT4 */
@@ -408,7 +408,7 @@ details.card summary::-webkit-details-marker{display:none}
       </div>
     </div>
     <div class="wf">
-      <canvas id="wfCanvas" width="120" height="36"></canvas>
+      <canvas id="wfCanvas" width="120" height="200"></canvas>
       <div class="wf-axis mono"><span>200</span><span>740</span><span>1280</span><span>1820</span><span>2360</span><span>2900 Hz</span></div>
     </div>
   </div>
@@ -906,10 +906,12 @@ async function deleteBookmark(slot) {
   setTimeout(loadBookmarks, 200);
 }
 
-// Waterfall: draw the 120x36 buffer 1:1 and let CSS scale it (pixelated)
+// Waterfall: the radio sends new 120-px rows (one per 160 ms block); the page keeps WF_ROWS of history
+// (~32 s) and draws the buffer 1:1, letting CSS scale it (pixelated)
+const WF_ROWS = 200, WF_RADIO_ROWS = 36;
 const wfCanvas = $('wfCanvas');
 const wfCtx = wfCanvas.getContext('2d');
-const wfImg = wfCtx.createImageData(120, 36);
+const wfImg = wfCtx.createImageData(120, WF_ROWS);
 let wfLast = null;
 
 function colorMap(v, pal) {
@@ -950,8 +952,9 @@ $('wfPalette').addEventListener('change', e => {
 });
 
 function drawWaterfall(buf) {
+  if (hrW && buf === hrBuf) return drawHiRes();
   const lut = LUT[wfPal] || LUT[0], px = wfImg.data;
-  for (let i = 0, j = 0; i < 4320; i++, j += 4) {
+  for (let i = 0, j = 0; i < WF_ROWS * 120; i++, j += 4) {
     const k = buf[i] * 3;
     px[j] = lut[k]; px[j + 1] = lut[k + 1]; px[j + 2] = lut[k + 2]; px[j + 3] = 255;
   }
@@ -961,9 +964,10 @@ function drawWaterfall(buf) {
 async function fetchWaterfall() {
   try {
     const buf = new Uint8Array(await req('/api/waterfall', {}, 'buf', 3000));
-    if (buf.length < 4320) return;
-    wfLast = buf;
-    drawWaterfall(buf);
+    if (buf.length < WF_RADIO_ROWS * 120) return;
+    wfBuf.set(buf.subarray(0, WF_RADIO_ROWS * 120), 0);   // polling fallback: radio keeps the newest 36 rows
+    wfLast = wfBuf;
+    drawWaterfall(wfBuf);
   } catch (e) {}
 }
 
@@ -1044,7 +1048,7 @@ for (let i = 0; i < 256; i++) {
 }
 let audSeq = 0, audNext = 0, ws = null, wsLastStatus = 0;
 const wsLive = () => ws && ws.readyState === 1 && Date.now() - wsLastStatus < 2500;
-const wfBuf = new Uint8Array(4320);
+const wfBuf = new Uint8Array(WF_ROWS * 120);
 const logLines = [];
 let logPaused = false;
 
@@ -1063,17 +1067,51 @@ function wsConnect() {
     const kind = new Uint8Array(ev.data, 0, 1)[0];
     if (kind === 0x41) playAudioChunk(ev.data);   // 'A'
     else if (kind === 0x57) addWaterfallRows(new Uint8Array(ev.data, 1));   // 'W'
+    else if (kind === 0x48) addHiResRows(new Uint8Array(ev.data));          // 'H'
   };
 }
 
 // 'W' frame: row count, then that many 120-byte rows, newest first (row 0 is the top of the canvas)
 function addWaterfallRows(b) {
-  const n = Math.min(b[0], 36);
+  if (hrW) return;   // full-resolution rows ('H') replace the 120-column ones
+  const n = Math.min(b[0], WF_RADIO_ROWS);
   if (!n || b.length < 1 + n * 120) return;
-  wfBuf.copyWithin(n * 120, 0, (36 - n) * 120);
+  wfBuf.copyWithin(n * 120, 0, (WF_ROWS - n) * 120);
   wfBuf.set(b.subarray(1, 1 + n * 120), 0);
   wfLast = wfBuf;
   if (wfOn && wfVisible) drawWaterfall(wfBuf);
+}
+
+// 'H' frame: bins (u16 LE), row count, then rows of bins/2 bytes, oldest first; 4 bits per 6.25 Hz bin
+// = level above the row median in 1.5 dB steps. The canvas switches to one pixel per bin.
+let hrW = 0, hrBuf = null, hrImg = null;
+function addHiResRows(b) {
+  const bins = b[1] | (b[2] << 8), n = b[3], rb = (bins + 1) >> 1;
+  if (!bins || !n || b.length < 4 + n * rb) return;
+  if (bins !== hrW) {
+    hrW = bins;
+    hrBuf = new Uint8Array(WF_ROWS * bins);
+    wfCanvas.width = bins;
+    hrImg = wfCtx.createImageData(bins, WF_ROWS);
+  }
+  for (let r = 0; r < n; r++) {
+    hrBuf.copyWithin(bins, 0, (WF_ROWS - 1) * bins);   // newest row on top
+    const o = 4 + r * rb;
+    for (let k = 0; k < bins; k++) {
+      const v = b[o + (k >> 1)];
+      hrBuf[k] = ((k & 1) ? v >> 4 : v & 15) * 17;
+    }
+  }
+  wfLast = hrBuf;
+  if (wfOn && wfVisible) drawHiRes();
+}
+function drawHiRes() {
+  const lut = LUT[wfPal] || LUT[0], px = hrImg.data, n = hrW * WF_ROWS;
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const k = hrBuf[i] * 3;
+    px[j] = lut[k]; px[j + 1] = lut[k + 1]; px[j + 2] = lut[k + 2]; px[j + 3] = 255;
+  }
+  wfCtx.putImageData(hrImg, 0, 0);
 }
 
 function addLogLine(line) {

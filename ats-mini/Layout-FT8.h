@@ -97,6 +97,10 @@ int ft8GetTrafficCount();
 const FT8MessageEntry* ft8GetTrafficEntry(int idx);
 const uint8_t* ft8GetWebWaterfallBuffer(); // 93 * 120 bytes
 uint32_t ft8GetWebWaterfallRowCount(); // rows added to the web waterfall since boot (row 0 is the newest)
+// Full-resolution waterfall rows (4-bit packed, ft8GetHiResBins() bins); only the last 8 rows are kept
+#define FT8_HIRES_ROWS 8
+uint16_t ft8GetHiResBins();
+const uint8_t *ft8GetHiResRow(uint32_t rowNo);
 void ft8AddLog(const char *fmt, ...);
 String ft8GetLogsJson();
 size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index); // WAV audio stream from live ADC ring buffer
