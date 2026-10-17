@@ -32,12 +32,19 @@
 #define BLE_OFFSET_X   104    // BLE x offset
 #define BLE_OFFSET_Y     0    // BLE y offset
 
+// Colors on the sprite's 8-bit RGB332 grid (r,g: 0..7, b: 0..3), so they render without dithering loss
+#define C332(r, g, b) ((uint16_t)(((r) << 13) | ((g) << 8) | ((b) << 3)))
+
+uint16_t shadeColor(uint16_t color, int8_t steps);
+uint16_t panelColor();
+int drawChip(const char *text, int x, int y, uint16_t fg, uint16_t bg, bool filled);
+
 void drawMessage(const char *msg);
 void drawZoomedMenu(const char *text, bool force = false);
 void drawScanGraphs(uint32_t freq);
 void drawScreen(const char *statusLine1 = 0, const char *statusLine2 = 0);
 
-void drawWiFiIndicator(int x, int y);
+void drawWiFiIndicator(int x, int y, int32_t bg = -1);
 void drawSaveIndicator(int x, int y);
 void drawBleIndicator(int x, int y);
 void drawBandAndMode(const char *band, const char *mode, int x, int y);

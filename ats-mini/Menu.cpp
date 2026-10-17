@@ -253,7 +253,7 @@ int getTotalUTCOffsets() { return(ITEM_COUNT(utcOffsets)); }
 //
 uint8_t uiLayoutIdx = UI_DEFAULT;
 static const char *uiLayoutDesc[] =
-{ "Default", "S-Meter", "FT8" };
+{ "Default", "S-Meter" };
 
 //
 // Bluetooth Mode Menu
@@ -779,16 +779,12 @@ void doMode(int16_t enc)
       bands[bandIdx].bandwidthIdx = defaultBwIdx[USB];
       bands[bandIdx].bandMode = USB;
       ft8SetDigitalMode(dig);
-      uiLayoutIdx = UI_FT8;
       selectBand(bandIdx);
     }
     return;
   }
 
   ft8SetDigitalMode(FT8_DIG_OFF);
-  if (uiLayoutIdx == UI_FT8) {
-    uiLayoutIdx = UI_DEFAULT;
-  }
 
   if (mIdx == 0) currentMode = LSB;
   else if (mIdx == 1) currentMode = USB;

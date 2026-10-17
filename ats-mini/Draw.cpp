@@ -7,6 +7,46 @@
 #include "Layout-FT8.h"
 
 //
+// Move a color up (steps > 0) or down the RGB332 grid by whole levels
+//
+uint16_t shadeColor(uint16_t color, int8_t steps)
+{
+  int r = (color >> 13) + steps;
+  int g = ((color >> 8) & 7) + steps;
+  int b = ((color >> 3) & 3) + (steps > 0 ? (steps + 1) / 2 : -((1 - steps) / 2));
+  r = r < 0 ? 0 : r > 7 ? 7 : r;
+  g = g < 0 ? 0 : g > 7 ? 7 : g;
+  b = b < 0 ? 0 : b > 3 ? 3 : b;
+  return C332(r, g, b);
+}
+
+//
+// Background of status bars: one step lighter than a dark theme, darker than a light one
+//
+uint16_t panelColor()
+{
+  uint16_t bg = TH.bg;
+  int lum = (bg >> 11) * 2 + ((bg >> 5) & 0x3F) + (bg & 0x1F) * 2;
+  return lum > 128 ? shadeColor(bg, -1) : shadeColor(bg, 1);
+}
+
+//
+// Draw a small rounded label, return its width
+//
+int drawChip(const char *text, int x, int y, uint16_t fg, uint16_t bg, bool filled)
+{
+  int w = spr.textWidth(text, 2) + 8;
+  if(filled)
+    spr.fillRoundRect(x, y, w, 15, 3, bg);
+  else
+    spr.drawRoundRect(x, y, w, 15, 3, fg);
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(fg);
+  spr.drawString(text, x + w / 2, y + 8, 2);
+  return w;
+}
+
+//
 // Draw preferences write indicator
 //
 void drawSaveIndicator(int x, int y)
@@ -49,8 +89,10 @@ void drawBleIndicator(int x, int y)
 //
 // Draw WiFi indicator
 //
-void drawWiFiIndicator(int x, int y)
+void drawWiFiIndicator(int x, int y, int32_t bg)
 {
+  if(bg < 0) bg = TH.bg;
+
   int8_t status = getWiFiStatus();
 
   // If need to draw WiFi icon...
@@ -62,9 +104,9 @@ void drawWiFiIndicator(int x, int y)
     if(switchThemeEditor())
       color = millis()&0x2000? TH.rf_icon_conn : TH.rf_icon;
 
-    spr.drawSmoothArc(x, 15+y, 14, 13, 150, 210, color, TH.bg);
-    spr.drawSmoothArc(x, 15+y, 9, 8, 150, 210, color, TH.bg);
-    spr.drawSmoothArc(x, 15+y, 4, 3, 150, 210, color, TH.bg);
+    spr.drawSmoothArc(x, 15+y, 14, 13, 150, 210, color, bg);
+    spr.drawSmoothArc(x, 15+y, 9, 8, 150, 210, color, bg);
+    spr.drawSmoothArc(x, 15+y, 4, 3, 150, 210, color, bg);
   }
 }
 
@@ -441,18 +483,13 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
     return;
   }
 
-  switch(uiLayoutIdx)
-  {
-    case UI_SMETER:
-      drawLayoutSmeter(statusLine1, statusLine2);
-      break;
-    case UI_FT8:
-      drawLayoutFT8(statusLine1, statusLine2);
-      break;
-    default:
-      drawLayoutDefault(statusLine1, statusLine2);
-      break;
-  }
+  // FT8/FT4 always get the decoder screen; listening modes use the chosen radio layout
+  if(ft8GetDigitalMode() != FT8_DIG_OFF)
+    drawLayoutFT8(statusLine1, statusLine2);
+  else if(uiLayoutIdx == UI_SMETER)
+    drawLayoutSmeter(statusLine1, statusLine2);
+  else
+    drawLayoutDefault(statusLine1, statusLine2);
 
   spr.pushSprite(0, 0);
 }
