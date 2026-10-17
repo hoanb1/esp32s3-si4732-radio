@@ -48,7 +48,7 @@ void ft8ForceLiveDecode();
 void ft8SyncSlotManual();
 
 // Set UTC clock from Unix epoch (used by Web UI /api/timesync)
-void ft8SetEpochTime(uint32_t epoch);
+void ft8SetEpochTime(uint32_t epoch, uint16_t ms = 0);
 
 // Toggle or set LCD view mode (0=SPLIT, 1=WATERFALL, 2=LOG)
 void ft8ToggleViewMode();
@@ -66,8 +66,16 @@ void ft8TuneBandDigitalFreq(int bId, uint8_t digMode);
 void ft8ToggleSpeakerMute();
 bool ft8IsSpeakerMuted();
 
+// Apply SI4732 volume + speaker amplifier state for the current mode/mute/sleep state
+void ft8ApplyAudio();
+void ft8SetAdcVolume(uint8_t v);
+
 // Clear decoded traffic list
 void ft8ClearTraffic();
+
+// Toggle raw ADC audio streaming over Serial (switches baud to 921600 while active)
+void ft8ToggleAudioStream();
+bool ft8ToggleAdcTimer();
 
 // Print hardware/DSP diagnostic summary to Serial ('d' command)
 void ft8PrintDiag();

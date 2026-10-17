@@ -13,6 +13,8 @@
 #include <ESPAsyncWebServer.h>
 #include <NTPClient.h>
 #include <ESPmDNS.h>
+#include <esp_sntp.h>
+#include <sys/time.h>
 
 #define CONNECT_TIME    1500  // Delay before connecting WiFi after request
 #define MAX_WIFI_SLOTS  8     // Support saving and scanning up to 8 WiFi networks
@@ -62,6 +64,7 @@ NTPClient ntpClient(ntpUDP, "pool.ntp.org");
 static bool wifiInitAP();
 static bool wifiConnect();
 static void webInit();
+static void processControlQueue();
 static void ensureDefaultWifiPrefs();
 static void performWifiScan();
 
@@ -163,6 +166,8 @@ void netRequestConnect()
 
 void netTickTime()
 {
+  processControlQueue();
+
   if (doScanRequested) {
     doScanRequested = false;
     performWifiScan();
@@ -298,16 +303,36 @@ void netInit(uint8_t netMode, bool showStatus)
   }
 }
 
+static volatile bool sntpSynced = false;
+
+static void sntpSyncCallback(struct timeval *tv)
+{
+  sntpSynced = true;
+}
+
+// Start background SNTP (lwIP task, non-blocking); keeps the system clock UTC-accurate to ~10 ms
+static void sntpStart()
+{
+  static bool started = false;
+  if(started) return;
+  started = true;
+  sntp_set_time_sync_notification_cb(sntpSyncCallback);
+  configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+}
+
 bool ntpIsAvailable()
 {
-  return(ntpClient.isTimeSet());
+  return(sntpSynced);
 }
 
 bool ntpSyncTime()
 {
-  // Never block loop() with DNS/UDP timeouts once UTC clock is already set
-  if(clockAvailable()) return(false);
-  return(false);
+  // Mirror the SNTP system clock into the display clock (HH:MM); FT8 timing reads the system clock directly
+  if(!sntpSynced) return(false);
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  time_t t = tv.tv_sec;
+  return(clockSet((t % 86400) / 3600, (t % 3600) / 60, t % 60));
 }
 
 static bool wifiInitAP()
@@ -418,6 +443,7 @@ static bool wifiConnect()
     WiFi.setSleep(false);
     WiFi.setAutoReconnect(true);
     WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    sntpStart();
     Serial.printf("[WiFi] CONNECTED to '%s' | IP: %s | RSSI: %d dBm\r\n",
                   WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
     ft8AddLog("[INFO] Đã kết nối Wi-Fi '%s' - IP: %s (%d dBm)",
@@ -432,12 +458,419 @@ static bool wifiConnect()
 }
 
 //
+// Web control actions are queued by the AsyncTCP task and executed from loop(),
+// so that only one task ever talks to the SI4732 over I2C
+//
+struct ControlRequest {
+  uint8_t count;
+  String keys[6];
+  String values[6];
+};
+
+#define CONTROL_QUEUE_SIZE 6
+static ControlRequest controlQueue[CONTROL_QUEUE_SIZE];
+static uint8_t controlHead = 0;
+static uint8_t controlTail = 0;
+static SemaphoreHandle_t controlMutex = NULL;
+
+static bool queueControlRequest(AsyncWebServerRequest *request)
+{
+  if (!controlMutex) return false;
+  xSemaphoreTake(controlMutex, portMAX_DELAY);
+  uint8_t next = (controlHead + 1) % CONTROL_QUEUE_SIZE;
+  bool ok = next != controlTail;
+  if (ok) {
+    ControlRequest &cr = controlQueue[controlHead];
+    cr.count = 0;
+    for (size_t i = 0; i < request->params() && cr.count < 6; i++) {
+      const AsyncWebParameter *p = request->getParam(i);
+      cr.keys[cr.count] = p->name();
+      cr.values[cr.count] = p->value();
+      cr.count++;
+    }
+    controlHead = next;
+  }
+  xSemaphoreGive(controlMutex);
+  return ok;
+}
+
+static void runControlAction(const ControlRequest &cr)
+{
+  auto getParamStr = [&](const char *name) -> String {
+    for (uint8_t i = 0; i < cr.count; i++)
+      if (cr.keys[i] == name) return cr.values[i];
+    return "";
+  };
+  String action = getParamStr("action");
+
+    if (action == "volume") {
+      int v = getParamStr("val").toInt();
+      if (v < 0) v = 0;
+      if (v > 63) v = 63;
+      volume = (uint8_t)v;
+      ft8ApplyAudio();
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "mode") {
+      int m = getParamStr("mode").toInt();
+      if (m >= 0 && m <= 4) {
+        ft8SetDigitalMode(FT8_DIG_OFF);
+        if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
+        if (m == 4) {
+          // CW mode = USB + 0.5kHz narrow filter (ssbBandwidths[0] = "0.5k")
+          if (bandIdx == 0) bandIdx = 20; // Default 40M
+          bands[bandIdx].bandMode = USB;
+          bands[bandIdx].bandwidthIdx = 0;
+          currentMode = USB;
+          selectBand(bandIdx, false);
+        } else {
+          if (m == FM && bandIdx != 0) {
+            bandIdx = 0;
+          } else if (m != FM && bandIdx == 0) {
+            bandIdx = (m == AM) ? 16 : 22; // Default MW2 for AM or 20M for USB/LSB
+          }
+          if ((m == USB || m == LSB) && bands[bandIdx].bandwidthIdx == 0) {
+            bands[bandIdx].bandwidthIdx = 4; // Restore 3.0kHz SSB filter when leaving CW
+          }
+          bands[bandIdx].bandMode = (uint8_t)m;
+          currentMode = (uint8_t)m;
+          selectBand(bandIdx, false);
+        }
+        prefsRequestSave(SAVE_ALL);
+      }
+    } else if (action == "dig_mode") {
+      int dm = getParamStr("val").toInt();
+      if (dm >= 0 && dm <= 2) {
+        if (dm == FT8_DIG_FT8 || dm == FT8_DIG_FT4) {
+          if (bandIdx < 18 || bandIdx > 26) {
+            bandIdx = 22; // Default 20M amateur band
+          }
+          ft8TuneBandDigitalFreq(bandIdx, (uint8_t)dm);
+          prefsRequestSave(SAVE_ALL);
+        } else {
+          ft8SetDigitalMode(FT8_DIG_OFF);
+          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
+          prefsRequestSave(SAVE_SETTINGS);
+        }
+      }
+    } else if (action == "freq") {
+      double f = getParamStr("freq").toDouble();
+      String u = getParamStr("unit");
+      u.toLowerCase();
+      if (f > 0) {
+        // Normalize frequency according to unit or smart range detection
+        double khzVal = 0.0;
+        if (u == "mhz") {
+          khzVal = f * 1000.0;
+        } else if (u == "khz") {
+          khzVal = f;
+        } else if (u == "hz") {
+          khzVal = f / 1000.0;
+        } else {
+          // Auto-detect MHz vs kHz vs 0.01kHz dial digits (e.g. 2155000 -> 21550.00 kHz)
+          if (f >= 64.0 && f <= 108.0) {
+            khzVal = f * 1000.0; // FM MHz (64..108 MHz)
+          } else if (f >= 0.15 && f <= 30.0) {
+            khzVal = f * 1000.0; // HF/MW MHz (0.15..30.0 MHz)
+          } else if (f >= 150.0 && f <= 30000.0) {
+            khzVal = f;          // HF/MW kHz (150..30000 kHz)
+          } else if (f >= 64000.0 && f <= 108000.0) {
+            khzVal = f;          // FM kHz (64000..108000 kHz)
+          } else if (f > 30000.0 && f <= 300000.0) {
+            khzVal = f / 10.0;
+          } else if (f > 300000.0 && f <= 3000000.0) {
+            khzVal = f / 100.0;  // e.g. 2155000 -> 21550.00 kHz
+          } else if (f > 3000000.0 && f <= 30000000.0) {
+            khzVal = f / 1000.0; // Hz -> kHz
+          }
+        }
+
+        if (khzVal >= 64000.0 && khzVal <= 108000.0) {
+          uint16_t fmFreq = (uint16_t)round(khzVal / 10.0);
+          ft8SetDigitalMode(FT8_DIG_OFF);
+          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
+          if (bandIdx != 0 || currentMode != FM) {
+            bandIdx = 0;
+            bands[0].bandMode = FM;
+            bands[0].currentFreq = fmFreq;
+            selectBand(0, false);
+          }
+          updateFrequency(fmFreq, false);
+          clearStationInfo();
+          prefsRequestSave(SAVE_ALL);
+        } else if (khzVal >= 150.0 && khzVal <= 30000.0) {
+          uint32_t hz = (uint32_t)round(khzVal * 1000.0);
+          uint16_t khz = (uint16_t)(hz / 1000UL);
+          int16_t remBfo = (int16_t)(hz % 1000UL);
+          uint8_t keepMode = (currentMode == FM) ? AM : currentMode;
+          static const uint16_t digKhz[17] = {
+            1840, 3573, 7074, 10136, 14074, 18100, 21074, 24915, 28074,
+            3575, 7047, 10140, 14080, 18104, 21140, 24919, 28180
+          };
+          bool isDigFreq = false;
+          for (int i = 0; i < 17; i++) {
+            if (khz == digKhz[i]) {
+              keepMode = USB;
+              isDigFreq = true;
+              break;
+            }
+          }
+
+          if (bandIdx == 0 || !isFreqInBand(getCurrentBand(), khz) || (isDigFreq && currentMode != USB)) {
+            int matchedBand = 1; // Fallback to ALL band (150..30000 kHz)
+            for (int i = getTotalBands() - 1; i >= 2; i--) {
+              if (bands[i].bandMode != FM && isFreqInBand(&bands[i], khz)) {
+                matchedBand = i;
+                break;
+              }
+            }
+            bandIdx = matchedBand;
+            bands[bandIdx].currentFreq = khz;
+            if (currentMode != FM || isDigFreq) {
+              bands[bandIdx].bandMode = keepMode;
+            }
+            selectBand(bandIdx, false);
+          }
+          updateFrequency(khz, false);
+          if (isSSB()) updateBFO(remBfo, false);
+          clearStationInfo();
+          identifyFrequency(currentFrequency + currentBFO / 1000);
+          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
+          prefsRequestSave(SAVE_ALL);
+        }
+      }
+    } else if (action == "tune") {
+      int delta = getParamStr("delta").toInt();
+      if (currentMode == FM) {
+        updateFrequency(currentFrequency + delta * 10, true);
+        clearStationInfo();
+      } else {
+        int32_t newKhz = (int32_t)currentFrequency + delta;
+        if (newKhz < 150) newKhz = 150;
+        if (newKhz > 30000) newKhz = 30000;
+        int16_t savedBfo = currentBFO;
+        uint8_t keepMode = currentMode;
+        if (!isFreqInBand(getCurrentBand(), (uint16_t)newKhz)) {
+          int matchedBand = 1; // ALL band (150..30000 kHz)
+          for (int i = getTotalBands() - 1; i >= 2; i--) {
+            if (bands[i].bandMode != FM && isFreqInBand(&bands[i], (uint16_t)newKhz)) {
+              matchedBand = i;
+              break;
+            }
+          }
+          bandIdx = matchedBand;
+          bands[bandIdx].currentFreq = (uint16_t)newKhz;
+          bands[bandIdx].bandMode = keepMode;
+          selectBand(bandIdx, false);
+        }
+        updateFrequency((uint16_t)newKhz, false);
+        if (isSSB() && savedBfo != 0) updateBFO(savedBfo, false);
+        clearStationInfo();
+        identifyFrequency(currentFrequency + currentBFO / 1000);
+      }
+      prefsRequestSave(SAVE_CUR_BAND);
+    } else if (action == "bfo_step") {
+      int delta = getParamStr("delta").toInt();
+      if (isSSB()) {
+        updateBFO(currentBFO + delta, true);
+        prefsRequestSave(SAVE_CUR_BAND);
+      }
+    } else if (action == "bfo_reset") {
+      if (isSSB()) {
+        updateBFO(0, true);
+        prefsRequestSave(SAVE_CUR_BAND);
+      }
+    } else if (action == "save_cal") {
+      int16_t newCal = 0;
+      if (currentMode == USB) {
+        bands[bandIdx].usbCal += currentBFO;
+        newCal = bands[bandIdx].usbCal;
+      } else if (currentMode == LSB) {
+        bands[bandIdx].lsbCal += currentBFO;
+        newCal = bands[bandIdx].lsbCal;
+      }
+      currentBFO = 0;
+      updateBFO(0, true);
+      prefsRequestSave(SAVE_BANDS, true);
+      Serial.printf("[Web] Saved band calibration: %d Hz\r\n", (int)newCal);
+      return;
+    } else if (action == "bw") {
+      int d = getParamStr("val").toInt();
+      doBandwidth(d ? d : 1);
+      prefsRequestSave(SAVE_CUR_BAND);
+    } else if (action == "bw_set") {
+      int idx = getParamStr("idx").toInt();
+      if (idx >= 0 && idx <= 6) {
+        bands[bandIdx].bandwidthIdx = (int8_t)idx;
+        doBandwidth(0);
+        prefsRequestSave(SAVE_CUR_BAND);
+      }
+    } else if (action == "step") {
+      int d = getParamStr("val").toInt();
+      doStep(d ? d : 1);
+      prefsRequestSave(SAVE_CUR_BAND);
+    } else if (action == "agc") {
+      int d = getParamStr("val").toInt();
+      doAgc(d ? d : 1);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "agc_set") {
+      int v = getParamStr("val").toInt();
+      if (v < 0) v = 0;
+      if (currentMode == FM) FmAgcIdx = (v > 27) ? 27 : v;
+      else if (isSSB()) SsbAgcIdx = (v > 1) ? 1 : v;
+      else AmAgcIdx = (v > 37) ? 37 : v;
+      doAgc(0);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "avc") {
+      int d = getParamStr("val").toInt();
+      doAvc(d ? d : 1);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "avc_set") {
+      int v = (getParamStr("val").toInt() / 2) * 2;
+      if (v < 12) v = 12;
+      if (v > 90) v = 90;
+      if (isSSB()) SsbAvcIdx = v;
+      else AmAvcIdx = v;
+      doAvc(0);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "softmute") {
+      int v = getParamStr("val").toInt();
+      if (v < 0) v = 0;
+      if (v > 32) v = 32;
+      if (isSSB()) SsbSoftMuteIdx = v;
+      else AmSoftMuteIdx = v;
+      doSoftMute(0);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "squelch") {
+      int v = getParamStr("val").toInt();
+      if (v < 0) v = 0;
+      if (v > 127) v = 127;
+      currentSquelch = (uint8_t)v;
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "brt") {
+      int v = getParamStr("val").toInt();
+      if (v < 10) v = 10;
+      if (v > 255) v = 255;
+      currentBrt = (uint16_t)v;
+      ledcWrite(PIN_LCD_BL, currentBrt);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "theme") {
+      int v = getParamStr("val").toInt();
+      if (v >= 0 && v < getTotalThemes()) {
+        themeIdx = (uint8_t)v;
+        prefsRequestSave(SAVE_SETTINGS);
+      } else {
+        themeIdx = (themeIdx + 1) % getTotalThemes();
+        prefsRequestSave(SAVE_SETTINGS);
+      }
+    } else if (action == "seek") {
+      int dir = getParamStr("dir").toInt();
+      webBtnEvent = (dir < 0) ? 5 : 4;
+    } else if (action == "enc") {
+      String type = getParamStr("type");
+      if (type == "rot") {
+        int d = getParamStr("dir").toInt();
+        webEncDelta = (int16_t)(d ? d : 1);
+      } else if (type == "click") {
+        webBtnEvent = 1;
+      } else if (type == "short") {
+        webBtnEvent = 2;
+      } else if (type == "long") {
+        webBtnEvent = 3;
+      }
+    } else if (action == "bookmark_tune") {
+      int slot = getParamStr("slot").toInt();
+      if (slot >= 0 && slot < getTotalMemories() && memories[slot].freq) {
+        tuneToMemory(&memories[slot]);
+        prefsRequestSave(SAVE_ALL);
+      }
+    } else if (action == "bookmark_save") {
+      String name = getParamStr("name");
+      name.trim();
+      int slot = getParamStr("slot").toInt();
+      if (slot < 0 || slot >= 24) {
+        slot = -1;
+        for (int i = 0; i < 24; i++) {
+          if (!memories[i].freq) { slot = i; break; }
+        }
+        if (slot < 0) slot = 23;
+      }
+      memories[slot].freq = freqToHz(currentFrequency, currentMode) + currentBFO;
+      memories[slot].band = bandIdx;
+      memories[slot].mode = currentMode;
+      if (name.length() == 0) {
+        name = String(getCurrentBand()->bandName) + " " + String(currentFrequency);
+      }
+      strncpy(memories[slot].name, name.c_str(), 9);
+      memories[slot].name[9] = '\0';
+      prefsRequestSave(SAVE_MEMORIES, true);
+    } else if (action == "bookmark_del") {
+      int slot = getParamStr("slot").toInt();
+      if (slot >= 0 && slot < getTotalMemories()) {
+        memories[slot].freq = 0;
+        memories[slot].name[0] = '\0';
+        prefsRequestSave(SAVE_MEMORIES, true);
+      }
+    } else if (action == "lcd_layout") {
+      int lay = getParamStr("val").toInt();
+      if (lay >= 0 && lay <= UI_FT8) {
+        uiLayoutIdx = (uint8_t)lay;
+        prefsRequestSave(SAVE_SETTINGS);
+      }
+    } else if (action == "view") {
+      uiLayoutIdx = UI_FT8;
+      ft8SetViewMode((uint8_t)getParamStr("mode").toInt());
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "view_toggle") {
+      uiLayoutIdx = (uiLayoutIdx + 1) % (UI_FT8 + 1);
+      prefsRequestSave(SAVE_SETTINGS);
+    } else if (action == "clear_traffic") {
+      ft8ClearTraffic();
+    } else if (action == "mute") {
+      ft8ToggleSpeakerMute();
+    } else if (action == "decode") {
+      ft8RequestTestDecode();
+    } else if (action == "sync") {
+      ft8SyncSlotManual();
+    } else if (action == "band") {
+      int bId = getParamStr("id").toInt();
+      if (bId >= 0 && bId < getTotalBands()) {
+        if (bId >= 18 && bId <= 26 && ft8GetDigitalMode() != FT8_DIG_OFF) {
+          ft8TuneBandDigitalFreq(bId, ft8GetDigitalMode());
+        } else {
+          selectBand((uint8_t)bId, false);
+          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
+        }
+        prefsRequestSave(SAVE_ALL);
+      }
+    }
+}
+
+// Execute queued web control actions (called from loop())
+static void processControlQueue()
+{
+  while (controlMutex) {
+    ControlRequest cr;
+    xSemaphoreTake(controlMutex, portMAX_DELAY);
+    bool have = controlTail != controlHead;
+    if (have) {
+      cr = controlQueue[controlTail];
+      controlTail = (controlTail + 1) % CONTROL_QUEUE_SIZE;
+    }
+    xSemaphoreGive(controlMutex);
+    if (!have) break;
+    runControlAction(cr);
+    ft8RequestRedraw();
+  }
+}
+
+//
 // Initialize internal web server with full FT8 + Multi-WiFi APIs
 //
 static void webInit()
 {
   if (webServerStarted) return;
   webServerStarted = true;
+  if (!controlMutex) controlMutex = xSemaphoreCreateMutex();
 
   // Main FT8 Web UI page - stream directly from Flash/PROGMEM (zero heap copy)
   server.on("/", HTTP_GET, [] (AsyncWebServerRequest *request) {
@@ -612,364 +1045,24 @@ static void webInit()
   server.on("/api/timesync", HTTP_GET, [] (AsyncWebServerRequest *request) {
     if (request->hasParam("epoch")) {
       uint32_t ep = strtoul(request->getParam("epoch")->value().c_str(), NULL, 10);
-      ft8SetEpochTime(ep);
+      uint16_t ms = request->hasParam("ms") ? (uint16_t)strtoul(request->getParam("ms")->value().c_str(), NULL, 10) : 0;
+      // Browser time is only a fallback; SNTP is more accurate when available
+      if (!ntpIsAvailable()) ft8SetEpochTime(ep, ms);
     }
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
   // /api/control - Radio & FT8 control actions
-  server.on("/api/control", HTTP_POST, [] (AsyncWebServerRequest *request) {
-    String action = "";
-    if (request->hasParam("action", true)) action = request->getParam("action", true)->value();
-    else if (request->hasParam("action")) action = request->getParam("action")->value();
-
-    auto getParamStr = [&](const char *name) -> String {
-      if (request->hasParam(name, true)) return request->getParam(name, true)->value();
-      if (request->hasParam(name)) return request->getParam(name)->value();
-      return "";
-    };
-
-    g_si4732Busy = true;
-    delay(15);
-
-    if (action == "volume") {
-      int v = getParamStr("val").toInt();
-      if (v < 0) v = 0;
-      if (v > 63) v = 63;
-      volume = (uint8_t)v;
-      rx.setVolume(volume);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "mode") {
-      int m = getParamStr("mode").toInt();
-      if (m >= 0 && m <= 4) {
-        ft8SetDigitalMode(FT8_DIG_OFF);
-        if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
-        if (m == 4) {
-          // CW mode = USB + 0.5kHz narrow filter (ssbBandwidths[0] = "0.5k")
-          if (bandIdx == 0) bandIdx = 20; // Default 40M
-          bands[bandIdx].bandMode = USB;
-          bands[bandIdx].bandwidthIdx = 0;
-          currentMode = USB;
-          selectBand(bandIdx, false);
-        } else {
-          if (m == FM && bandIdx != 0) {
-            bandIdx = 0;
-          } else if (m != FM && bandIdx == 0) {
-            bandIdx = (m == AM) ? 16 : 22; // Default MW2 for AM or 20M for USB/LSB
-          }
-          if ((m == USB || m == LSB) && bands[bandIdx].bandwidthIdx == 0) {
-            bands[bandIdx].bandwidthIdx = 4; // Restore 3.0kHz SSB filter when leaving CW
-          }
-          bands[bandIdx].bandMode = (uint8_t)m;
-          currentMode = (uint8_t)m;
-          selectBand(bandIdx, false);
-        }
-        prefsRequestSave(SAVE_ALL);
-      }
-    } else if (action == "dig_mode") {
-      int dm = getParamStr("val").toInt();
-      if (dm >= 0 && dm <= 2) {
-        if (dm == FT8_DIG_FT8 || dm == FT8_DIG_FT4) {
-          if (bandIdx < 18 || bandIdx > 26) {
-            bandIdx = 22; // Default 20M amateur band
-          }
-          ft8TuneBandDigitalFreq(bandIdx, (uint8_t)dm);
-          prefsRequestSave(SAVE_ALL);
-        } else {
-          ft8SetDigitalMode(FT8_DIG_OFF);
-          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
-          prefsRequestSave(SAVE_SETTINGS);
-        }
-      }
-    } else if (action == "freq") {
-      double f = getParamStr("freq").toDouble();
-      String u = getParamStr("unit");
-      u.toLowerCase();
-      if (f > 0) {
-        // Normalize frequency according to unit or smart range detection
-        double khzVal = 0.0;
-        if (u == "mhz") {
-          khzVal = f * 1000.0;
-        } else if (u == "khz") {
-          khzVal = f;
-        } else if (u == "hz") {
-          khzVal = f / 1000.0;
-        } else {
-          // Auto-detect MHz vs kHz vs 0.01kHz dial digits (e.g. 2155000 -> 21550.00 kHz)
-          if (f >= 64.0 && f <= 108.0) {
-            khzVal = f * 1000.0; // FM MHz (64..108 MHz)
-          } else if (f >= 0.15 && f <= 30.0) {
-            khzVal = f * 1000.0; // HF/MW MHz (0.15..30.0 MHz)
-          } else if (f >= 150.0 && f <= 30000.0) {
-            khzVal = f;          // HF/MW kHz (150..30000 kHz)
-          } else if (f >= 64000.0 && f <= 108000.0) {
-            khzVal = f;          // FM kHz (64000..108000 kHz)
-          } else if (f > 30000.0 && f <= 300000.0) {
-            khzVal = f / 10.0;
-          } else if (f > 300000.0 && f <= 3000000.0) {
-            khzVal = f / 100.0;  // e.g. 2155000 -> 21550.00 kHz
-          } else if (f > 3000000.0 && f <= 30000000.0) {
-            khzVal = f / 1000.0; // Hz -> kHz
-          }
-        }
-
-        if (khzVal >= 64000.0 && khzVal <= 108000.0) {
-          uint16_t fmFreq = (uint16_t)round(khzVal / 10.0);
-          ft8SetDigitalMode(FT8_DIG_OFF);
-          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
-          if (bandIdx != 0 || currentMode != FM) {
-            bandIdx = 0;
-            bands[0].bandMode = FM;
-            bands[0].currentFreq = fmFreq;
-            selectBand(0, false);
-          }
-          updateFrequency(fmFreq, false);
-          clearStationInfo();
-          prefsRequestSave(SAVE_ALL);
-        } else if (khzVal >= 150.0 && khzVal <= 30000.0) {
-          uint32_t hz = (uint32_t)round(khzVal * 1000.0);
-          uint16_t khz = (uint16_t)(hz / 1000UL);
-          int16_t remBfo = (int16_t)(hz % 1000UL);
-          uint8_t keepMode = (currentMode == FM) ? AM : currentMode;
-
-          if (bandIdx == 0 || !isFreqInBand(getCurrentBand(), khz)) {
-            int matchedBand = 1; // Fallback to ALL band (150..30000 kHz)
-            for (int i = getTotalBands() - 1; i >= 2; i--) {
-              if (bands[i].bandMode != FM && isFreqInBand(&bands[i], khz)) {
-                matchedBand = i;
-                break;
-              }
-            }
-            bandIdx = matchedBand;
-            bands[bandIdx].currentFreq = khz;
-            if (currentMode != FM) {
-              bands[bandIdx].bandMode = keepMode;
-            }
-            selectBand(bandIdx, false);
-          }
-          updateFrequency(khz, false);
-          if (isSSB()) updateBFO(remBfo, false);
-          clearStationInfo();
-          identifyFrequency(currentFrequency + currentBFO / 1000);
-          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
-          prefsRequestSave(SAVE_ALL);
-        }
-      }
-    } else if (action == "tune") {
-      int delta = getParamStr("delta").toInt();
-      if (currentMode == FM) {
-        updateFrequency(currentFrequency + delta * 10, true);
-        clearStationInfo();
-      } else {
-        int32_t newKhz = (int32_t)currentFrequency + delta;
-        if (newKhz < 150) newKhz = 150;
-        if (newKhz > 30000) newKhz = 30000;
-        int16_t savedBfo = currentBFO;
-        uint8_t keepMode = currentMode;
-        if (!isFreqInBand(getCurrentBand(), (uint16_t)newKhz)) {
-          int matchedBand = 1; // ALL band (150..30000 kHz)
-          for (int i = getTotalBands() - 1; i >= 2; i--) {
-            if (bands[i].bandMode != FM && isFreqInBand(&bands[i], (uint16_t)newKhz)) {
-              matchedBand = i;
-              break;
-            }
-          }
-          bandIdx = matchedBand;
-          bands[bandIdx].currentFreq = (uint16_t)newKhz;
-          bands[bandIdx].bandMode = keepMode;
-          selectBand(bandIdx, false);
-        }
-        updateFrequency((uint16_t)newKhz, false);
-        if (isSSB() && savedBfo != 0) updateBFO(savedBfo, false);
-        clearStationInfo();
-        identifyFrequency(currentFrequency + currentBFO / 1000);
-      }
-      prefsRequestSave(SAVE_CUR_BAND);
-    } else if (action == "bfo_step") {
-      int delta = getParamStr("delta").toInt();
-      if (isSSB()) {
-        updateBFO(currentBFO + delta, true);
-        prefsRequestSave(SAVE_CUR_BAND);
-      }
-    } else if (action == "bfo_reset") {
-      if (isSSB()) {
-        updateBFO(0, true);
-        prefsRequestSave(SAVE_CUR_BAND);
-      }
-    } else if (action == "save_cal") {
-      int16_t newCal = 0;
-      if (currentMode == USB) {
-        bands[bandIdx].usbCal += currentBFO;
-        newCal = bands[bandIdx].usbCal;
-      } else if (currentMode == LSB) {
-        bands[bandIdx].lsbCal += currentBFO;
-        newCal = bands[bandIdx].lsbCal;
-      }
-      currentBFO = 0;
-      updateBFO(0, true);
-      prefsRequestSave(SAVE_BANDS, true);
-      g_si4732Busy = false;
-      char buf[64];
-      snprintf(buf, sizeof(buf), "{\"ok\":true,\"cal\":%d}", (int)newCal);
-      request->send(200, "application/json", buf);
+  server.on("/api/control", HTTP_ANY, [] (AsyncWebServerRequest *request) {
+    // Runs in the AsyncTCP task: only copy the parameters, the radio is driven from loop()
+    if (!queueControlRequest(request)) {
+      request->send(503, "application/json", "{\"ok\":false,\"error\":\"control queue full\"}");
       return;
-    } else if (action == "bw") {
-      int d = getParamStr("val").toInt();
-      doBandwidth(d ? d : 1);
-      prefsRequestSave(SAVE_CUR_BAND);
-    } else if (action == "bw_set") {
-      int idx = getParamStr("idx").toInt();
-      if (idx >= 0 && idx <= 6) {
-        bands[bandIdx].bandwidthIdx = (int8_t)idx;
-        doBandwidth(0);
-        prefsRequestSave(SAVE_CUR_BAND);
-      }
-    } else if (action == "step") {
-      int d = getParamStr("val").toInt();
-      doStep(d ? d : 1);
-      prefsRequestSave(SAVE_CUR_BAND);
-    } else if (action == "agc") {
-      int d = getParamStr("val").toInt();
-      doAgc(d ? d : 1);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "agc_set") {
-      int v = getParamStr("val").toInt();
-      if (v < 0) v = 0;
-      if (currentMode == FM) FmAgcIdx = (v > 27) ? 27 : v;
-      else if (isSSB()) SsbAgcIdx = (v > 1) ? 1 : v;
-      else AmAgcIdx = (v > 37) ? 37 : v;
-      doAgc(0);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "avc") {
-      int d = getParamStr("val").toInt();
-      doAvc(d ? d : 1);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "avc_set") {
-      int v = (getParamStr("val").toInt() / 2) * 2;
-      if (v < 12) v = 12;
-      if (v > 90) v = 90;
-      if (isSSB()) SsbAvcIdx = v;
-      else AmAvcIdx = v;
-      doAvc(0);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "softmute") {
-      int v = getParamStr("val").toInt();
-      if (v < 0) v = 0;
-      if (v > 32) v = 32;
-      if (isSSB()) SsbSoftMuteIdx = v;
-      else AmSoftMuteIdx = v;
-      doSoftMute(0);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "squelch") {
-      int v = getParamStr("val").toInt();
-      if (v < 0) v = 0;
-      if (v > 127) v = 127;
-      currentSquelch = (uint8_t)v;
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "brt") {
-      int v = getParamStr("val").toInt();
-      if (v < 10) v = 10;
-      if (v > 255) v = 255;
-      currentBrt = (uint16_t)v;
-      ledcWrite(PIN_LCD_BL, currentBrt);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "theme") {
-      int v = getParamStr("val").toInt();
-      if (v >= 0 && v < getTotalThemes()) {
-        themeIdx = (uint8_t)v;
-        prefsRequestSave(SAVE_SETTINGS);
-      } else {
-        themeIdx = (themeIdx + 1) % getTotalThemes();
-        prefsRequestSave(SAVE_SETTINGS);
-      }
-    } else if (action == "seek") {
-      int dir = getParamStr("dir").toInt();
-      webBtnEvent = (dir < 0) ? 5 : 4;
-    } else if (action == "enc") {
-      String type = getParamStr("type");
-      if (type == "rot") {
-        int d = getParamStr("dir").toInt();
-        webEncDelta = (int16_t)(d ? d : 1);
-      } else if (type == "click") {
-        webBtnEvent = 1;
-      } else if (type == "short") {
-        webBtnEvent = 2;
-      } else if (type == "long") {
-        webBtnEvent = 3;
-      }
-    } else if (action == "bookmark_tune") {
-      int slot = getParamStr("slot").toInt();
-      if (slot >= 0 && slot < getTotalMemories() && memories[slot].freq) {
-        tuneToMemory(&memories[slot]);
-        prefsRequestSave(SAVE_ALL);
-      }
-    } else if (action == "bookmark_save") {
-      String name = getParamStr("name");
-      name.trim();
-      int slot = getParamStr("slot").toInt();
-      if (slot < 0 || slot >= 24) {
-        slot = -1;
-        for (int i = 0; i < 24; i++) {
-          if (!memories[i].freq) { slot = i; break; }
-        }
-        if (slot < 0) slot = 23;
-      }
-      memories[slot].freq = freqToHz(currentFrequency, currentMode) + currentBFO;
-      memories[slot].band = bandIdx;
-      memories[slot].mode = currentMode;
-      if (name.length() == 0) {
-        name = String(getCurrentBand()->bandName) + " " + String(currentFrequency);
-      }
-      strncpy(memories[slot].name, name.c_str(), 9);
-      memories[slot].name[9] = '\0';
-      prefsRequestSave(SAVE_MEMORIES, true);
-    } else if (action == "bookmark_del") {
-      int slot = getParamStr("slot").toInt();
-      if (slot >= 0 && slot < getTotalMemories()) {
-        memories[slot].freq = 0;
-        memories[slot].name[0] = '\0';
-        prefsRequestSave(SAVE_MEMORIES, true);
-      }
-    } else if (action == "lcd_layout") {
-      int lay = getParamStr("val").toInt();
-      if (lay >= 0 && lay <= UI_FT8) {
-        uiLayoutIdx = (uint8_t)lay;
-        prefsRequestSave(SAVE_SETTINGS);
-      }
-    } else if (action == "view") {
-      uiLayoutIdx = UI_FT8;
-      ft8SetViewMode((uint8_t)getParamStr("mode").toInt());
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "view_toggle") {
-      uiLayoutIdx = (uiLayoutIdx + 1) % (UI_FT8 + 1);
-      prefsRequestSave(SAVE_SETTINGS);
-    } else if (action == "clear_traffic") {
-      ft8ClearTraffic();
-    } else if (action == "mute") {
-      ft8ToggleSpeakerMute();
-    } else if (action == "decode") {
-      ft8RequestTestDecode();
-    } else if (action == "sync") {
-      ft8SyncSlotManual();
-    } else if (action == "band") {
-      int bId = getParamStr("id").toInt();
-      if (bId >= 0 && bId < getTotalBands()) {
-        if (bId >= 18 && bId <= 26 && ft8GetDigitalMode() != FT8_DIG_OFF) {
-          ft8TuneBandDigitalFreq(bId, ft8GetDigitalMode());
-        } else {
-          selectBand((uint8_t)bId, false);
-          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
-        }
-        prefsRequestSave(SAVE_ALL);
-      }
     }
-
-    g_si4732Busy = false;
-    ft8RequestRedraw();
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
-  // /api/screenshot.bmp - Stream 320x170 16-bit RGB565 BMP directly from sprite
+  // /api/screenshot.bmp - Stream 320x170 16-bit RGB565 BMP from the (8-bit) sprite
   server.on("/api/screenshot.bmp", HTTP_GET, [] (AsyncWebServerRequest *request) {
     const uint32_t width = 320;
     const uint32_t height = 170;
@@ -1007,23 +1100,14 @@ static void webInit()
           index += hdrSize;
         }
 
-        const uint16_t *sprPtr = (const uint16_t *)spr.getPointer();
         while (written + width * 2 <= maxLen && index < fileSize) {
           uint32_t pixOffset = (index - hdrSize) / 2;
           int rowFromBottom = pixOffset / width;
           int y = (height - 1) - rowFromBottom;
           if (y < 0) break;
           uint16_t *dst = (uint16_t *)(buffer + written);
-          if (sprPtr) {
-            const uint16_t *srcRow = sprPtr + (y * width);
-            for (uint32_t x = 0; x < width; x++) {
-              uint16_t v = srcRow[x];
-              dst[x] = (v >> 8) | (v << 8);
-            }
-          } else {
-            for (uint32_t x = 0; x < width; x++) {
-              dst[x] = spr.readPixel(x, y);
-            }
+          for (uint32_t x = 0; x < width; x++) {
+            dst[x] = spr.readPixel(x, y);
           }
           written += width * 2;
           index += width * 2;

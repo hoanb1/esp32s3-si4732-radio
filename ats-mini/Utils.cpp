@@ -5,9 +5,11 @@
 #include "Utils.h"
 #include "Menu.h"
 #include "Draw.h"
+#include "Layout-FT8.h"
 
-// SSB patch for whole SSBRX initialization string
-#include "patch_init.h"
+// Full SSB patch for whole SSBRX full download (0x9D29, 15848 bytes)
+#include "patch_full.h"
+#include <sys/time.h>
 
 extern ButtonTracker pb1;
 
@@ -176,7 +178,7 @@ bool muteOn(uint8_t mode, int x)
 #if AUDIO_MUTE >= 0
     digitalWrite(AUDIO_MUTE, HIGH);
 #endif
-    if(!isSSB()) {
+    if(!isSSB() || mode != MUTE_TEMP) {
       delay(50);
       rx.setAudioMute(true);
     }
@@ -189,10 +191,6 @@ bool muteOn(uint8_t mode, int x)
 #endif
     delay(20);
     rx.setAudioMute(false);
-    // Enable audio amplifier to restore speaker output
-#if PIN_AMP_EN >= 0
-    digitalWrite(PIN_AMP_EN, HIGH);
-#endif
   }
 
   switch(mode) {
@@ -215,6 +213,8 @@ bool sleepOn(int x)
   if((x==1) && !sleep_on)
   {
     sleep_on = true;
+    // Silence speaker when display is turned off via long-press sleep
+    ft8ApplyAudio();
     ledcWrite(PIN_LCD_BL, 0);
     spr.fillSprite(TFT_BLACK);
     spr.pushSprite(0, 0);
@@ -276,6 +276,8 @@ bool sleepOn(int x)
     tft.writecommand(ST7789_DISPON);
     drawScreen();
     ledcWrite(PIN_LCD_BL, currentBrt);
+    // Restore speaker audio on wake unless explicitly muted
+    ft8ApplyAudio();
     // Wait till the button is released to prevent the main loop clicks
     pb1.reset(); // Reset the button state (its timers could be stale due to CPU sleep)
     while(pb1.update(digitalRead(ENCODER_PUSH_BUTTON) == LOW, 0).isPressed)
@@ -315,6 +317,19 @@ bool clockGetHM(uint8_t *hours, uint8_t *minutes)
 
 bool clockGetHMS(uint8_t *hours, uint8_t *minutes, uint8_t *seconds, uint16_t *millis_rem)
 {
+  // Prefer the system clock once it holds real UTC (set by SNTP or by settimeofday from the Web UI)
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  if(tv.tv_sec > 1700000000L)
+  {
+    time_t t = tv.tv_sec;
+    *hours   = (t % 86400) / 3600;
+    *minutes = (t % 3600) / 60;
+    *seconds = t % 60;
+    if(millis_rem) *millis_rem = (uint16_t)(tv.tv_usec / 1000);
+    return(true);
+  }
+
   if(!clockHasBeenSet) return(false);
   uint32_t elapsedUs = micros() - clockTimer;
   uint32_t addSec = elapsedUs / 1000000UL;

@@ -39,12 +39,12 @@
 #define SLEEP_LIGHT    2 // ESP32 light sleep
 
 // SI4732/5 PINs
-#define PIN_POWER_ON  15            // GPIO15   External LDO regulator enable (1 = Enable)
+#define PIN_POWER_ON  -1            // No switchable SI4732 supply on this board
 #define RESET_PIN     27            // GPIO27   SI4732/5 Reset
 #define ESP32_I2C_SCL 14            // GPIO14   SI4732/5 Clock
 #define ESP32_I2C_SDA 13            // GPIO13   SI4732/5 Data
 #define AUDIO_MUTE    -1            // Hardware L/R mute disabled
-#define PIN_AMP_EN    -1            // Hardware Audio Amplifier enable
+#define PIN_AMP_EN    15            // GPIO15   Speaker amplifier enable (1 = Enable); SI4732 line out to GPIO34 is unaffected
 
 // Display PINs
 #define PIN_LCD_BL    16            // GPIO16   LCD backlight (PWM brightness control)
@@ -204,6 +204,10 @@ char *getWiFiIPAddress();
 void netInit(uint8_t netMode, bool showStatus = true);
 void netStop();
 bool ntpIsAvailable();
+extern int16_t ssbPpmCal10;
+void applySSBBfo();
+void ssbPpmLoad();
+void ssbPpmSave();
 bool ntpSyncTime();
 
 void netRequestConnect();

@@ -1,3 +1,4 @@
+#include <WiFi.h>
 #include "Common.h"
 #include "Themes.h"
 #include "Utils.h"
@@ -447,6 +448,86 @@ int remoteDoCommand(char key)
       break;
     case 'F': // Force immediate decode on live waterfall
       ft8ForceLiveDecode();
+      break;
+    case 'Q': // Test carrier on the LCD backlight pin (its wiring radiates): Q<kHz> starts, Q0 restores the backlight
+    {
+      delay(15);
+      uint32_t khz = 0;
+      while (Serial.available() > 0 && isDigit(Serial.peek())) {
+        khz = khz * 10 + (uint32_t)(Serial.read() - '0');
+      }
+      ledcDetach(PIN_LCD_BL);
+      if (khz > 0) {
+        bool ok = ledcAttach(PIN_LCD_BL, khz * 1000UL, 2);
+        if (ok) ledcWrite(PIN_LCD_BL, 2);
+        Serial.printf("[TEST] Carrier GPIO%d %lu kHz: %s (actual %lu Hz)\r\n", PIN_LCD_BL, (unsigned long)khz,
+                      ok ? "ON" : "FAIL", ok ? (unsigned long)ledcReadFreq(PIN_LCD_BL) : 0UL);
+      } else {
+        ledcAttach(PIN_LCD_BL, 16000, 8);
+        ledcWrite(PIN_LCD_BL, sleepOn() ? 0 : currentBrt);
+        Serial.println("[TEST] Carrier OFF, backlight restored");
+      }
+      break;
+    }
+    case 'P': // Debug: P<Hz> sets SI4732 REFCLK_FREQ and re-tunes (no argument: re-tune only)
+    {
+      delay(15);
+      uint32_t hz = 0;
+      while (Serial.available() > 0 && isDigit(Serial.peek())) {
+        hz = hz * 10 + (uint32_t)(Serial.read() - '0');
+      }
+      if (hz >= 31130 && hz <= 34406) rx.setRefClock(hz);
+      rx.setFrequency(currentFrequency);
+      Serial.printf("[TEST] REFCLK=%lu, re-tuned %u kHz\r\n", (unsigned long)hz, currentFrequency);
+      break;
+    }
+    case 'J': // J<0.1ppm> or J-<0.1ppm>: set SSB crystal ppm correction, saved to NVS; J alone prints it
+    {
+      delay(15);
+      bool neg = Serial.peek() == '-';
+      if (neg) Serial.read();
+      bool have = false;
+      int32_t v = 0;
+      while (Serial.available() > 0 && isDigit(Serial.peek())) {
+        v = v * 10 + (Serial.read() - '0');
+        have = true;
+      }
+      if (have) {
+        ssbPpmCal10 = (int16_t)(neg ? -v : v);
+        ssbPpmSave();
+        if (isSSB()) applySSBBfo();
+      }
+      Serial.printf("[CAL] SSB crystal correction %+.1f ppm\r\n", ssbPpmCal10 / 10.0f);
+      break;
+    }
+    case 'U': // U<vol>: SI4732 volume used for GPIO34 capture in FT8/FT4 modes (not saved)
+    {
+      delay(15);
+      int v = 0;
+      while (Serial.available() > 0 && isDigit(Serial.peek())) v = v * 10 + (Serial.read() - '0');
+      ft8SetAdcVolume((uint8_t)v);
+      Serial.printf("[TEST] FT8 ADC volume = %d\r\n", v);
+      break;
+    }
+    case 'G': // Debug: print SI4732 GET_REV firmware information
+    {
+      rx.getFirmware();
+      Serial.printf("[TEST] SI47%02u FW %c.%c PATCH 0x%02X%02X CMP %c.%c CHIPREV %c\r\n",
+                    rx.getFirmwarePN(), rx.getFirmwareFWMAJOR(), rx.getFirmwareFWMINOR(),
+                    rx.getFirmwarePATCHH(), rx.getFirmwarePATCHL(),
+                    rx.getFirmwareCMPMAJOR(), rx.getFirmwareCMPMINOR(), rx.getFirmwareCHIPREV());
+      break;
+    }
+    case 'N': // Debug: turn WiFi radio off (reboot to restore) to check its RF noise contribution
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      Serial.println("[TEST] WiFi OFF");
+      break;
+    case 'Y': // Debug: pause/resume the 8 kHz ADC sampling timer
+      Serial.printf("[TEST] ADC timer %s\r\n", ft8ToggleAdcTimer() ? "RUNNING" : "STOPPED");
+      break;
+    case 'x': // Toggle raw ADC audio streaming over Serial at 921600 baud
+      ft8ToggleAudioStream();
       break;
     case 'd': // Print hardware & FT8 signal diagnostics
       ft8PrintDiag();

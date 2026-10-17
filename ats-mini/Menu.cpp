@@ -497,7 +497,7 @@ void doSelectDigit(int16_t enc)
 void doVolume(int16_t enc)
 {
   volume = clamp_range(volume, enc, 0, 63);
-  if(!muteOn(MUTE_MAIN)) rx.setVolume(volume);
+  ft8ApplyAudio();
 }
 
 static void clickVolume(bool shortPress)

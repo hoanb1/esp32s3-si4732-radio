@@ -149,8 +149,11 @@ void setup()
   tft.setRotation(3);
 
   tft.fillScreen(TH.bg);
+  // 8-bit sprite (54 KB): this board has no PSRAM, and a 16-bit sprite (109 KB) leaves too little
+  // DRAM for the 200..2900 Hz FT8 waterfall plus WiFi
+  spr.setColorDepth(8);
   void *sprPtr = spr.createSprite(320, 170);
-  Serial.printf("[BOOT] TFT Sprite 16-bit (320x170): %p, free_heap=%u (8bit=%u, max_alloc=%u)\r\n",
+  Serial.printf("[BOOT] TFT Sprite 8-bit (320x170): %p, free_heap=%u (8bit=%u, max_alloc=%u)\r\n",
                 sprPtr, (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                 (unsigned int)ESP.getMaxAllocHeap());
@@ -230,11 +233,11 @@ void setup()
 #endif
 
   // SI4732 STARTUP!
+  ssbPpmLoad();
   selectBand(bandIdx, false);
   ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
   delay(50);
-  rx.setVolume(volume);
-  rx.setAudioMute(false);
+  ft8ApplyAudio();
   rx.setMaxSeekTime(SEEK_TIMEOUT);
 
   // Draw display for the first time
@@ -334,6 +337,46 @@ uint32_t consumeEncoderCounts()
 //
 // Switch radio to given band
 //
+// SI4732 reference crystal error in 0.1 ppm (+ = receiver tunes high), corrected through the SSB BFO.
+// Measured 2026-10-17 with a 10.000 MHz carrier: dial 9998 kHz USB gave a 1025.5 Hz tone -> +97.5 ppm
+int16_t ssbPpmCal10 = 975;
+
+void ssbPpmLoad()
+{
+  Preferences p;
+  if(p.begin("radiocal", true))
+  {
+    ssbPpmCal10 = p.getShort("ssbppm10", ssbPpmCal10);
+    p.end();
+  }
+}
+
+void ssbPpmSave()
+{
+  Preferences p;
+  if(p.begin("radiocal", false))
+  {
+    p.putShort("ssbppm10", ssbPpmCal10);
+    p.end();
+  }
+}
+
+//
+// Program the SSB BFO: user BFO + per-band calibration + crystal ppm correction
+//
+void applySSBBfo()
+{
+  const Band *band = getCurrentBand();
+  int cal = 0;
+  if(currentMode == USB || currentMode == LSB)
+  {
+    cal = (currentMode == USB) ? band->usbCal : band->lsbCal;
+    cal -= (int)lroundf((float)currentFrequency * (float)ssbPpmCal10 / 10000.0f);
+  }
+  // To move frequency forward, need to move the BFO backwards
+  rx.setSSBBfo(-(currentBFO + cal));
+}
+
 void useBand(const Band *band)
 {
   // Set current frequency and mode, reset BFO
@@ -390,13 +433,7 @@ void useBand(const Band *band)
       rx.setSsbSoftMuteMaxAttenuation(0);
       rx.setAmSoftMuteMaxAttenuation(0);
       rx.setAvcAmMaxGain(SsbAvcIdx);
-      // To move frequency forward, need to move the BFO backwards
-      if (currentMode == USB)
-        rx.setSSBBfo(-(currentBFO + band->usbCal));
-      else if (currentMode == LSB)
-        rx.setSSBBfo(-(currentBFO + band->lsbCal));
-      else
-        rx.setSSBBfo(-currentBFO);  // No calibration if not USB/LSB
+      applySSBBfo();
     }
 
     // Set the tuning capacitor for SW or MW/LW
@@ -422,8 +459,7 @@ void useBand(const Band *band)
     rx.setSsbSoftMuteMaxAttenuation(0);
     rx.setAmSoftMuteMaxAttenuation(0);
   }
-  rx.setVolume(volume);
-  rx.setAudioMute(false);
+  ft8ApplyAudio();
   // Wait a bit for things to calm down
   delay(100);
   // Clear signal strength readings
@@ -482,13 +518,7 @@ bool updateBFO(int newBFO, bool wrap)
   // Update current BFO
   currentBFO = newBFO;
 
-  // To move frequency forward, need to move the BFO backwards
-  if (currentMode == USB)
-    rx.setSSBBfo(-(currentBFO + band->usbCal));
-  else if (currentMode == LSB)
-    rx.setSSBBfo(-(currentBFO + band->lsbCal));
-  else
-    rx.setSSBBfo(-currentBFO);  // No calibration if not USB/LSB
+  applySSBBfo();
 
   // Save current band frequency, w.r.t. new BFO value
   band->currentFreq = currentFrequency + currentBFO / 1000;
@@ -515,11 +545,12 @@ bool updateFrequency(int newFreq, bool wrap)
   // Set new frequency
   rx.setFrequency(newFreq);
 
-  // Clear BFO, if present
-  if(currentBFO) updateBFO(0, true);
-
   // Update current frequency
   currentFrequency = rx.getFrequency();
+
+  // Clear BFO, if present; the ppm correction depends on frequency so re-apply it either way
+  if(currentBFO) updateBFO(0, true);
+  else if(isSSB()) applySSBBfo();
 
   // Save current band frequency
   band->currentFreq = currentFrequency + currentBFO / 1000;

@@ -73,6 +73,7 @@ class SI4735_fixed: public SI4735
     // Reliable SI4732 SSB patch download waiting for CTS after every 8-byte frame
     bool downloadPatch(const uint8_t *ssb_patch_content, const uint16_t ssb_patch_content_size)
     {
+      Wire.setClock(400000UL);
       for(uint16_t offset=0 ; offset<ssb_patch_content_size ; offset+=8)
       {
         Wire.beginTransmission(deviceAddress);
@@ -103,11 +104,41 @@ class SI4735_fixed: public SI4735
       this->currentFrequencyParams.arg.DUMMY1 = 0;
       this->currentFrequencyParams.arg.ANTCAPH = 0;
       this->currentFrequencyParams.arg.ANTCAPL = 1;
+      this->lastMode = SSB_CURRENT_MODE;
       setSSBConfig(ssb_audiobw, 1, 0, 1, 0, 1);
       delay(25);
     }
 
-    // Query SI4732 GET_REV hardware register to verify SSB patch ID (0xA902 when loaded, 0x0000 if unpatched)
+    // Override SI4735::setSSB so it does NOT call radioPowerUp() with PATCH=0 after patchPowerUp()!
+    void setSSB(uint8_t usblsb)
+    {
+      this->currentTune = AM_TUNE_FREQ;
+      this->currentFrequencyParams.arg.FREEZE = 0;
+      this->currentFrequencyParams.arg.FAST = 1;
+      this->currentFrequencyParams.arg.DUMMY1 = 0;
+      this->currentFrequencyParams.arg.ANTCAPH = 0;
+      this->currentFrequencyParams.arg.ANTCAPL = 1;
+      setVolume(this->volume);
+      this->currentSsbStatus = usblsb;
+      this->lastMode = SSB_CURRENT_MODE;
+    }
+
+    void setSSB(uint16_t fromFreq, uint16_t toFreq, uint16_t initialFreq, uint16_t step, uint8_t usblsb)
+    {
+      this->currentMinimumFrequency = fromFreq;
+      this->currentMaximumFrequency = toFreq;
+      this->currentStep = step;
+
+      if (initialFreq < fromFreq || initialFreq > toFreq)
+        initialFreq = fromFreq;
+
+      setSSB(usblsb);
+
+      this->currentWorkFrequency = initialFreq;
+      setFrequency(this->currentWorkFrequency);
+    }
+
+    // Query SI4732 GET_REV hardware register to verify SSB patch ID (0x9D29 for full patch, 0xA902 for init patch, 0x0000 if unpatched)
     uint16_t getPatchId()
     {
       getFirmware();

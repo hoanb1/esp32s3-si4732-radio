@@ -8,6 +8,7 @@
 
 #include <WiFi.h>
 #include <esp_timer.h>
+#include <sys/time.h>
 #include <stdarg.h>
 #include <math.h>
 #include <ft8_lib.h>
@@ -16,21 +17,24 @@
 #define FT8_ADC_PIN         34
 #define FT8_SAMPLE_RATE     6000
 #define FT8_BLOCK_SAMPLES   960   // 160 ms per FT8 symbol @ 6000 Hz
-#define FT8_RING_BLOCKS     2     // 2 x 160 ms = 320 ms ring buffer (saves DRAM for 16-bit LCD sprite)
+#define FT8_RING_BLOCKS     4     // 4 x 160 ms = 640 ms ring buffer (absorbs WiFi/I2C jitter without dropping blocks)
 #define FT8_MAX_CANDIDATES  100
 #define FT8_LDPC_ITERATIONS 35
 #define FT8_MIN_SYNC_SCORE  4     // Catch all weak & moderate off-air FT8 signals
+#define FT8_ADC_VOLUME      48    // SI4732 volume for GPIO34 capture; the line out sits only ~0.1 V above the ADC floor, so louder clips
 
 // Global latest battery ADC reading updated safely by the ADC timer task
 volatile uint16_t g_latestVbatRaw = 2400;
 
-// Lock-free 2-block ADC capture ring buffer (2 * 960 * 2 bytes = 3,840 bytes)
+// Lock-free 4-block ADC capture ring buffer (4 * 960 * 2 bytes = 7,680 bytes)
 static int16_t adcBuf[FT8_RING_BLOCKS][FT8_BLOCK_SAMPLES];
 static volatile uint8_t adcWriteBlock = 0;
 static volatile uint8_t adcReadBlock = 0;
 static volatile uint16_t adcSampleIdx = 0;
 static volatile uint8_t readyBufIdx = 0;
 static volatile uint32_t adcDroppedBlocks = 0;
+static volatile uint32_t adcBlockCounter[FT8_RING_BLOCKS];
+static volatile uint32_t adcTotalBlocks = 0;
 static esp_timer_handle_t ft8AdcTimer = NULL;
 
 // Live ADC signal statistics
@@ -76,7 +80,10 @@ static bool ft8IsDecoding = false;
 static uint32_t ft8LastDurationMs = 0;
 static uint8_t ft8ViewMode = FT8_VIEW_SPLIT;
 static uint8_t ft8DigitalMode = FT8_DIG_OFF;
-static bool ft8SpeakerMuted = false;
+static bool ft8SpeakerMuted = true;
+static uint8_t ft8AdcVolume = FT8_ADC_VOLUME;   // Speaker off by default in FT8/FT4 (the SI4732 runs loud for the ADC)
+static bool ft8AudioStreamOn = false;
+static uint32_t ft8AudioStreamSeq = 0;
 
 // Hash table for FT8 nonstandard callsigns
 static ftx_callsign_hash_interface_t callHashIf;
@@ -199,8 +206,10 @@ void ft8SyncSlotManual() {
   ft8AddLog("[INFO] Đã đồng bộ nhịp FT8 về mốc :00s");
 }
 
-void ft8SetEpochTime(uint32_t epoch) {
+void ft8SetEpochTime(uint32_t epoch, uint16_t ms) {
   if (epoch < 1700000000UL) return;
+  struct timeval tv = { (time_t)epoch, (suseconds_t)(ms % 1000) * 1000 };
+  settimeofday(&tv, NULL);
   epochBaseSec = epoch;
   epochBaseMs = millis();
   hasManualEpoch = true;
@@ -247,8 +256,8 @@ static void adcTimerCallback(void *arg) {
   adcAccumCount = 0;
 
   uint64_t gap = targetSamples - adcEmittedSamples;
-  if (gap > 30) {
-    // Resync epoch if paused for >5 ms
+  if (gap > 3000) {
+    // Resync epoch only if paused for >500 ms
     adcEpochUs = nowUs;
     adcEmittedSamples = 0;
     targetSamples = 0;
@@ -264,12 +273,13 @@ static void adcTimerCallback(void *arg) {
     idx++;
 
     if (idx >= FT8_BLOCK_SAMPLES) {
+      adcBlockCounter[wBuf] = adcTotalBlocks++;
       readyBufIdx = wBuf;
       adcSampleIdx = 0;
       uint8_t nextW = (wBuf + 1) % FT8_RING_BLOCKS;
       if (nextW != adcReadBlock) {
         adcWriteBlock = nextW;
-      } else {
+      } else if (!slotDecoded && !ft8IsDecoding) {
         adcDroppedBlocks++;
       }
     } else {
@@ -295,10 +305,15 @@ void ft8Init() {
   analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
   lastValidAdc = (int16_t)analogRead(FT8_ADC_PIN);
 
-  // Initialize FT8 DSP monitor: 200..2200 Hz @ 6000 Hz, time_osr=1 (allocated in 32-bit IRAM), freq_osr=1
+  // Initialize FT8 DSP monitor: 200..2900 Hz @ 6000 Hz, time_osr=1 (allocated in 32-bit IRAM), freq_osr=1
+  Serial.printf("[FT8] Before monitor: IRAM-only free=%u, largest 32bit=%u\r\n",
+                (unsigned int)(heap_caps_get_free_size(MALLOC_CAP_32BIT) - heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+                (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_32BIT));
+
+  // FT8 stations use 200..3000 Hz audio; 2900 Hz keeps clear of the 3 kHz Nyquist edge
   monitor_config_t cfg;
   cfg.f_min = 200.0f;
-  cfg.f_max = 2200.0f;
+  cfg.f_max = 2900.0f;
   cfg.sample_rate = FT8_SAMPLE_RATE;
   cfg.time_osr = 1;
   cfg.freq_osr = 1;
@@ -323,7 +338,7 @@ void ft8Init() {
     esp_timer_start_periodic(ft8AdcTimer, 125);
   }
 
-  ft8AddLog("[INFO] Khởi tạo bộ thu DSP FT8 trực tiếp trên GPIO34 (6000 Hz, BW 200..2250 Hz)");
+  ft8AddLog("[INFO] Khởi tạo bộ thu DSP FT8 trực tiếp trên GPIO34 (6000 Hz, BW 200..2900 Hz)");
 }
 
 static int g_lastRowAvgMag = 0;
@@ -361,7 +376,7 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
     g_absNoiseFloor = 0.85f * g_absNoiseFloor + 0.15f * (float)avgMag;
   }
 
-  // Step 1: Compute per-column average and peak across the 120 columns (200..2250 Hz)
+  // Step 1: Compute per-column average and peak across the 120 columns (200..2900 Hz)
   uint8_t colAvg[120];
   uint8_t colPeak[120];
   for (int c = 0; c < 120; c++) {
@@ -650,25 +665,25 @@ bool ft8TickWaterfall() {
     return true;
   }
 
-  uint8_t slotSec = ft8GetCurrentSlotSecond();
+  uint8_t h = 0, m = 0, s = 0;
+  uint16_t subMs = 0;
+  ft8GetCurrentUTC(&h, &m, &s, &subMs);
+  uint8_t slotSec = s % 15;
   bool digActive = (ft8DigitalMode != FT8_DIG_OFF) && (currentMode == USB || currentMode == LSB);
 
   // Check if a new 15s FT8 slot has started (:00, :15, :30, :45 UTC) FIRST
   // so we reset the monitor and align block 0 to :00.0s before draining new blocks
   if (lastSlotSec != 255 && slotSec < lastSlotSec) {
-    if (digActive && !slotDecoded && liveMon.wf.num_blocks >= 55) {
-      ft8DecodeFromMonitor(&liveMon, false);
-    }
-    if (isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0)) {
+    if (!sleepOn() && isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0)) {
       Serial.printf("[FT8] Recovering SI4732 SSB patch / GPIO34 bias (mean=%.0f, patch=0x%04X)...\r\n",
                     lastAdcMean, rx.getPatchId());
       unloadSSB();
       selectBand(bandIdx, false);
-      rx.setVolume(volume);
     }
     adcReadBlock = adcWriteBlock;
     adcSampleIdx = 0;
     adcEpochUs = 0;
+    adcDroppedBlocks = 0;
     monitor_reset(&liveMon);
     slotDecoded = false;
     if (uiLayoutIdx == UI_FT8) needRedraw = true;
@@ -686,6 +701,14 @@ bool ft8TickWaterfall() {
       if (abs(cur - prev) > 300 && abs(cur - next) > 300) {
         raw[i] = (prev + next) >> 1;
       }
+    }
+
+    // Debug: stream raw 6000 Hz ADC blocks over Serial (921600 baud) as "AUD0" + seq + 960 x int16
+    if (ft8AudioStreamOn) {
+      Serial.write((const uint8_t *)"AUD0", 4);
+      ft8AudioStreamSeq = adcBlockCounter[rBuf];
+      Serial.write((const uint8_t *)&ft8AudioStreamSeq, 4);
+      Serial.write((const uint8_t *)raw, FT8_BLOCK_SAMPLES * 2);
     }
 
     int32_t sum = 0;
@@ -739,12 +762,16 @@ bool ft8TickWaterfall() {
     }
   }
 
-  // Trigger live FT8 LDPC decoding at ~13.6s (85 blocks) into the 15s slot when in FT8/FT4 digital mode
-  if (digActive && !slotDecoded && (liveMon.wf.num_blocks >= 85 || (slotSec == 14 && liveMon.wf.num_blocks >= 75))) {
-    slotDecoded = true;
-    int cnt = ft8DecodeFromMonitor(&liveMon, false);
-    if (cnt > 0 && uiLayoutIdx == UI_FT8) {
-      needRedraw = true;
+  // Trigger live FT8 LDPC decoding at 84 blocks (13.44s) so the ~1.07s decode finishes at ~14.51s (before :00.0s of next slot)
+  if (digActive && !slotDecoded) {
+    if (liveMon.wf.num_blocks >= 84 || ((slotSec == 13 && subMs >= 440 || slotSec >= 14) && liveMon.wf.num_blocks >= 55)) {
+      slotDecoded = true;
+      int cnt = ft8DecodeFromMonitor(&liveMon, false);
+      if (cnt > 0 && uiLayoutIdx == UI_FT8) {
+        needRedraw = true;
+      }
+    } else if (slotSec >= 14) {
+      slotDecoded = true;
     }
   }
 
@@ -808,6 +835,7 @@ void ft8SetDigitalMode(uint8_t digMode) {
   ft8DigitalMode = digMode;
   if (monInitialized) monitor_reset(&liveMon);
   slotDecoded = false;
+  ft8ApplyAudio();
 }
 
 uint8_t ft8GetDigitalMode() {
@@ -889,23 +917,53 @@ void ft8TuneBandDigitalFreq(int bId, uint8_t digMode) {
 
 void ft8ToggleSpeakerMute() {
   ft8SpeakerMuted = !ft8SpeakerMuted;
-  if (ft8SpeakerMuted) {
-    // Shut down external speaker amplifier (GPIO15 = LOW) and set SI4732 output to linear sweet spot 36/63 for GPIO34 ADC!
-    digitalWrite(PIN_POWER_ON, LOW);
-    rx.setVolume(36);
-  } else {
-    // Restore comfortable quiet speaker volume (20/63) BEFORE re-enabling speaker amplifier (GPIO15 = HIGH)
-    if (volume == 0 || volume > 26) volume = 20;
+  ft8ApplyAudio();
+}
+
+// Single place that decides SI4732 volume and speaker amplifier state.
+// FT8/FT4 need a fixed, high SI4732 line level on GPIO34 (volume <= 36 is below the ADC noise floor),
+// so in digital modes the speaker is silenced with the amplifier instead of the SI4732 volume.
+void ft8ApplyAudio() {
+  bool digital = ft8GetDigitalMode() != FT8_DIG_OFF;
+  bool speaker = !sleepOn() && !muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH) && !(digital && ft8SpeakerMuted);
+
+  if (digital) {
+    rx.setVolume(ft8AdcVolume);
+    rx.setAudioMute(false);
+  } else if (speaker) {
     rx.setVolume(volume);
-    delay(20);
-    digitalWrite(PIN_POWER_ON, HIGH);
+    rx.setAudioMute(false);
+  } else if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
+    rx.setVolume(0);
   }
-  rx.setAvcAmMaxGain(90);
-  rx.setAudioMute(false);
+#if PIN_AMP_EN >= 0
+  digitalWrite(PIN_AMP_EN, speaker ? HIGH : LOW);
+#endif
+}
+
+void ft8SetAdcVolume(uint8_t v) {
+  ft8AdcVolume = v > 63 ? 63 : v;
+  ft8ApplyAudio();
 }
 
 bool ft8IsSpeakerMuted() {
   return ft8SpeakerMuted;
+}
+
+bool ft8ToggleAdcTimer() {
+  static bool running = true;
+  if (!ft8AdcTimer) return false;
+  if (running) esp_timer_stop(ft8AdcTimer);
+  else esp_timer_start_periodic(ft8AdcTimer, 125);
+  running = !running;
+  return running;
+}
+
+void ft8ToggleAudioStream() {
+  ft8AudioStreamOn = !ft8AudioStreamOn;
+  Serial.flush();
+  Serial.updateBaudRate(ft8AudioStreamOn ? 921600 : 115200);
+  ft8AudioStreamSeq = 0;
 }
 
 void ft8ClearTraffic() {
@@ -1049,7 +1107,7 @@ void ft8PrintDiag() {
   Serial.printf("Speaker Audio: %s | GPIO34 ADC Atten: 0dB (0..0.95V Max Hardware Sensitivity)\r\n", ft8SpeakerMuted ? "WHISPER(10/63)" : "QUIET(20/63)");
   Serial.printf("ADC_GPIO34(raw): Avg=%.0f (Bias: %.2fV) | Min=%d Max=%d | Vpp=%d (AC_Vpp: %.3fV, RMS=%.1f, Drop=%lu)\r\n",
                 lastAdcMean, biasV, lastAdcMin, lastAdcMax, lastAdcVpp, acVpp, lastBlockRms, (unsigned long)adcDroppedBlocks);
-  Serial.printf("Waterfall FFT: BW=200..2200Hz (%d bins) | avgMag=%d (absFloor=%.1f, min=%d, max=%d) | WF(20rows): >20=%d%%, >100=%d%%, max=%d\r\n",
+  Serial.printf("Waterfall FFT: BW=200..2900Hz (%d bins) | avgMag=%d (absFloor=%.1f, min=%d, max=%d) | WF(20rows): >20=%d%%, >100=%d%%, max=%d\r\n",
                 liveMon.wf.num_bins, g_lastRowAvgMag, g_absNoiseFloor, g_lastRowMinMag, g_lastRowMaxMag,
                 (wfAct20 * 100) / 2400, (wfAct100 * 100) / 2400, wfMax);
   if (liveMon.wf.mag && liveMon.wf.num_blocks > 0 && liveMon.wf.num_bins > 0) {
@@ -1224,7 +1282,7 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
       spr.drawString(ipStr.c_str(), 154, 114, 2);
 
       spr.setTextColor(0xAD55, TFT_BLACK);
-      spr.drawString("Pho am thanh 200..2600Hz", 154, 136, 1);
+      spr.drawString("Pho am thanh 200..2900Hz", 154, 136, 1);
     } else if (ft8TrafficCount == 0) {
       spr.setTextColor(0xAD55, TFT_BLACK);
       spr.drawString(ft8GetDigitalMode() == FT8_DIG_FT4 ? "Dang thu FT4 (GPIO34)" : "Dang thu FT8 (GPIO34)", 154, 34, 2);
@@ -1245,7 +1303,7 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
       snprintf(sigBuf, sizeof(sigBuf), "RSSI:%udBuV SNR:%udB", rssi, snr);
       spr.drawString(sigBuf, 154, 94, 2);
       spr.setTextColor(0xFFE0, TFT_BLACK);
-      spr.drawString("BW: 200..2600Hz (SSB)", 154, 118, 1);
+      spr.drawString("BW: 200..2900Hz (SSB)", 154, 118, 1);
     } else {
       int maxRows = ft8TrafficCount < 7 ? ft8TrafficCount : 7;
       for (int i = 0; i < maxRows; i++) {
@@ -1271,13 +1329,13 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
         spr.fillRect(x, 58 - barH, w > 0 ? w : 1, 1, 0xFFE0);
       }
     }
-    // Frequency scale ticks on spectrum divider (150Hz, 950Hz, 1750Hz, 2550Hz)
+    // Frequency scale ticks on spectrum divider (waterfall spans 200..2900 Hz)
     spr.setTextDatum(TL_DATUM);
     spr.setTextColor(0x7BEF, TFT_BLACK);
-    spr.drawString("150Hz", 2, 26, 1);
-    spr.drawString("950Hz", 98, 26, 1);
-    spr.drawString("1.75k", 200, 26, 1);
-    spr.drawString("2.55kHz", 274, 26, 1);
+    spr.drawString("200Hz", 2, 26, 1);
+    spr.drawString("1.1k", 104, 26, 1);
+    spr.drawString("2.0k", 210, 26, 1);
+    spr.drawString("2.9kHz", 280, 26, 1);
 
     // Bottom area (y = 60..152): Scrolling 2D Waterfall (31 rows x 3px)
     for (int r = 0; r < 31 && r < LCD_WF_ROWS; r++) {

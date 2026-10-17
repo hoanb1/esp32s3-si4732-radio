@@ -532,7 +532,7 @@ details.card summary::-webkit-details-marker{display:none}
     <div class="wf-wrap">
       <canvas id="wfCanvas" width="720" height="200"></canvas>
       <div class="wf-axis">
-        <span>200 Hz</span><span>700 Hz</span><span>1200 Hz</span><span>1700 Hz</span><span>2200 Hz</span><span>2600 Hz</span>
+        <span>200 Hz</span><span>740 Hz</span><span>1280 Hz</span><span>1820 Hz</span><span>2360 Hz</span><span>2900 Hz</span>
       </div>
     </div>
   </div>
@@ -1221,8 +1221,8 @@ function copyTrafficLog() {
 }
 
 async function syncBrowserTime() {
-  const ep = Math.floor(Date.now() / 1000);
-  try { await fetch('/api/timesync?epoch=' + ep); } catch (e) {}
+  const now = Date.now();
+  try { await fetch('/api/timesync?epoch=' + Math.floor(now / 1000) + '&ms=' + (now % 1000)); } catch (e) {}
 }
 
 // Live WebSDR Audio Player
