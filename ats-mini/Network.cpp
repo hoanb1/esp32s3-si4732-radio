@@ -381,8 +381,8 @@ static bool wifiConnect()
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   if (savedSsid[0] != "") {
     Serial.printf("[WiFi] Fast-connecting to primary Slot #1: '%s'...\r\n", savedSsid[0].c_str());
-    ft8AddLog("[INFO] Đang kết nối Wi-Fi ưu tiên '%s'...", savedSsid[0].c_str());
-    drawScreen(("Đang kết nối: " + savedSsid[0]).c_str(), "Nhấn nút Encoder để bỏ qua");
+    ft8AddLog("[INFO] Connecting to primary Wi-Fi '%s'...", savedSsid[0].c_str());
+    drawScreen(("Connecting: " + savedSsid[0]).c_str(), "Press encoder to skip");
     WiFi.begin(savedSsid[0].c_str(), savedPass[0].c_str());
     for (int t = 0; t < 16 && WiFi.status() != WL_CONNECTED; t++) {
       delay(500);
@@ -395,7 +395,7 @@ static bool wifiConnect()
 
   // If primary Slot #1 did not connect, scan 2.4GHz and try remaining visible saved networks
   if (WiFi.status() != WL_CONNECTED) {
-    drawScreen("Đang quét mạng Wi-Fi 2.4GHz...", "Tìm mạng Wi-Fi đã lưu...");
+    drawScreen("Scanning 2.4GHz Wi-Fi...", "Looking for saved networks...");
     performWifiScan();
 
     for (int s = 0; s < lastScannedCount && WiFi.status() != WL_CONNECTED; s++) {
@@ -403,8 +403,8 @@ static bool wifiConnect()
         if (savedSsid[i] != "" && savedSsid[i] == lastScannedAPs[s].ssid) {
           Serial.printf("[WiFi] Trying slot #%d: SSID='%s' (%d dBm)...\r\n",
                         i + 1, savedSsid[i].c_str(), (int)lastScannedAPs[s].rssi);
-          ft8AddLog("[INFO] Đang kết nối Wi-Fi '%s'...", savedSsid[i].c_str());
-          drawScreen(("Đang kết nối: " + savedSsid[i]).c_str(), "Nhấn nút Encoder để bỏ qua");
+          ft8AddLog("[INFO] Connecting to Wi-Fi '%s'...", savedSsid[i].c_str());
+          drawScreen(("Connecting: " + savedSsid[i]).c_str(), "Press encoder to skip");
 
           WiFi.disconnect(false);
           delay(50);
@@ -433,7 +433,7 @@ static bool wifiConnect()
     }
     Serial.printf("[WiFi] Could not connect to STA yet. Running AP+STA '%s' at %s\r\n",
                   apSSID, WiFi.softAPIP().toString().c_str());
-    ft8AddLog("[WARN] Chưa kết nối được Wi-Fi, phát AP+STA: %s (%s)",
+    ft8AddLog("[WARN] Wi-Fi not connected, running AP+STA: %s (%s)",
               apSSID, WiFi.softAPIP().toString().c_str());
     drawScreen(("AP: " + String(apSSID)).c_str(), ("Web UI: " + WiFi.softAPIP().toString()).c_str());
     return(false);
@@ -446,7 +446,7 @@ static bool wifiConnect()
     sntpStart();
     Serial.printf("[WiFi] CONNECTED to '%s' | IP: %s | RSSI: %d dBm\r\n",
                   WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
-    ft8AddLog("[INFO] Đã kết nối Wi-Fi '%s' - IP: %s (%d dBm)",
+    ft8AddLog("[INFO] Connected to Wi-Fi '%s' - IP: %s (%d dBm)",
               WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
     drawScreen(
       ("WiFi: " + WiFi.SSID()).c_str(),
@@ -864,6 +864,80 @@ static void processControlQueue()
 }
 
 //
+// Response for a fixed in-memory buffer that only advances by the bytes the
+// TCP stack accepted. ESPAsyncWebServer's own byte-buffer response ignores a
+// failed tcp_write (ERR_MEM under low heap) and silently drops a whole 2920
+// byte chunk, which corrupts the gzipped page and larger API payloads.
+// A stalled send is retried from the next ACK or the ~500 ms client poll.
+//
+#define FLASH_RESP_MAX_IN_FLIGHT 2920
+
+class FlashResponse : public AsyncWebServerResponse
+{
+  public:
+    FlashResponse(int code, const char *type, const uint8_t *data, size_t len) : _data(data)
+    {
+      _code = code;
+      _contentType = type;
+      _contentLength = len;
+      addHeader("Connection", "close", false);
+    }
+
+    bool _sourceValid() const override { return true; }
+
+    void _respond(AsyncWebServerRequest *request) override
+    {
+      _assembleHead(_head, request->version());
+      _state = RESPONSE_HEADERS;
+      _ack(request, 0, 0);
+    }
+
+    size_t _ack(AsyncWebServerRequest *request, size_t len, uint32_t time) override
+    {
+      (void)time;
+      _ackedLength += len;
+      AsyncClient *client = request->client();
+      size_t queued = 0;
+
+      while (_state == RESPONSE_HEADERS || _state == RESPONSE_CONTENT) {
+        const char *src;
+        size_t left;
+        if (_state == RESPONSE_HEADERS) {
+          src = _head.c_str() + _headSent;
+          left = _head.length() - _headSent;
+        } else {
+          src = (const char *)_data + _sentLength;
+          left = _contentLength - _sentLength;
+        }
+        if (!left) {
+          if (_state == RESPONSE_HEADERS) { _head = String(); _state = RESPONSE_CONTENT; }
+          else _state = RESPONSE_WAIT_ACK;
+          continue;
+        }
+        // Keep at most 2 segments in flight: lwIP copies queued data into heap
+        // pbufs and this board has no PSRAM, so a full send window starves Wi-Fi
+        size_t inFlight = _writtenLength - _ackedLength;
+        if (inFlight >= FLASH_RESP_MAX_IN_FLIGHT) break;
+        if (left > FLASH_RESP_MAX_IN_FLIGHT - inFlight) left = FLASH_RESP_MAX_IN_FLIGHT - inFlight;
+        size_t n = client->add(src, left);
+        if (!n) break;
+        if (_state == RESPONSE_HEADERS) _headSent += n; else _sentLength += n;
+        _writtenLength += n;
+        queued += n;
+      }
+      if (queued) client->send();
+
+      if (_state == RESPONSE_WAIT_ACK && _ackedLength >= _writtenLength) _state = RESPONSE_END;
+      return queued;
+    }
+
+  private:
+    const uint8_t *_data;
+    String _head;
+    size_t _headSent = 0;
+};
+
+//
 // Initialize internal web server with full FT8 + Multi-WiFi APIs
 //
 static void webInit()
@@ -872,12 +946,18 @@ static void webInit()
   webServerStarted = true;
   if (!controlMutex) controlMutex = xSemaphoreCreateMutex();
 
-  // Main FT8 Web UI page - stream directly from Flash/PROGMEM (zero heap copy)
+  // Main Web UI page - pre-gzipped in flash (zero heap copy), revalidated by ETag
   server.on("/", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse(
-      200, "text/html; charset=utf-8",
-      (const uint8_t *)FT8_WEBUI_HTML, sizeof(FT8_WEBUI_HTML) - 1
-    );
+    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == WEBUI_ETAG) {
+      AsyncWebServerResponse *response = request->beginResponse(304);
+      response->addHeader("ETag", WEBUI_ETAG);
+      response->addHeader("Cache-Control", "no-cache");
+      request->send(response);
+      return;
+    }
+    AsyncWebServerResponse *response = new FlashResponse(200, "text/html; charset=utf-8", WEBUI_HTML_GZ, WEBUI_HTML_GZ_LEN);
+    response->addHeader("Content-Encoding", "gzip");
+    response->addHeader("ETag", WEBUI_ETAG);
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
   });
@@ -971,7 +1051,7 @@ static void webInit()
     );
     if (len < 0) len = 0;
     if (len >= (int)sizeof(json)) len = sizeof(json) - 1;
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
+    AsyncWebServerResponse *response = new FlashResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
   });
@@ -1010,9 +1090,7 @@ static void webInit()
 
   // /api/waterfall - 36 x 120 binary waterfall data (4,320 bytes)
   server.on("/api/waterfall", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse(
-      200, "application/octet-stream", ft8GetWebWaterfallBuffer(), 36 * 120
-    );
+    AsyncWebServerResponse *response = new FlashResponse(200, "application/octet-stream", ft8GetWebWaterfallBuffer(), 36 * 120);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
   });

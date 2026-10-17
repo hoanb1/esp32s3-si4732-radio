@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="theme-color" content="#060c17">
+<title>ATS-Mini SI4732 Receiver</title>
+<style>
+:root{
+  --bg:#060c17;--card:#111d32;--inset:#0c1628;--border:#223656;--line:#1e3150;
+  --cyan:#00e5ff;--green:#00e676;--amber:#ffab00;--red:#ff5252;
+  --text:#e6f1ff;--muted:#88a0bf;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);padding:10px;line-height:1.4;min-height:100vh}
+.wrap{max-width:1380px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
+.mono{font-family:ui-monospace,'Cascadia Mono',Consolas,'Courier New',monospace}
+.muted{color:var(--muted)}
+
+/* Header */
+header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 14px;gap:8px}
+h1{font-size:1.1rem;color:var(--cyan);font-weight:700}
+h1 small{font-size:.75rem;color:var(--muted);font-weight:500;margin-left:6px}
+.badges{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.badge{padding:3px 9px;border-radius:999px;font-size:.74rem;font-weight:600;background:#1a2b47;border:1px solid var(--border);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.badge.ok{background:rgba(0,230,118,.12);color:var(--green);border-color:rgba(0,230,118,.4)}
+.badge.warn{background:rgba(255,171,0,.14);color:var(--amber);border-color:rgba(255,171,0,.4)}
+.badge.info{background:rgba(0,229,255,.12);color:var(--cyan);border-color:rgba(0,229,255,.35)}
+.badge.err{background:rgba(255,82,82,.14);color:var(--red);border-color:rgba(255,82,82,.45)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+
+/* Cockpit (mirrors the 320x170 LCD layout) */
+.cockpit{display:grid;grid-template-columns:130px 1fr 320px;gap:10px;background:#070e1b;border:1px solid #2b4770;border-radius:12px;padding:10px}
+@media(max-width:1060px){.cockpit{grid-template-columns:125px 1fr}.side-r{grid-column:1 / -1}}
+@media(max-width:680px){.cockpit{grid-template-columns:1fr}}
+.side-l{display:flex;flex-direction:column;gap:4px;background:#0a1426;border:1px solid #2b456b;border-radius:8px;padding:6px;justify-content:space-between}
+@media(max-width:680px){.side-l{display:grid;grid-template-columns:repeat(3,1fr)}}
+.pcell{background:#101f38;border:1px solid #213759;border-radius:6px;padding:4px 7px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-size:.76rem}
+.pcell:hover{border-color:var(--cyan)}
+.pcell .k{color:var(--muted);font-weight:600}
+.pcell .v{color:#fff;font-weight:800;font-size:.82rem}
+.clock{text-align:center;font-weight:800;font-size:.95rem;color:var(--cyan);padding:3px 0;letter-spacing:1px}
+
+.dial{display:flex;flex-direction:column;justify-content:space-between;gap:7px;padding:4px 8px;background:#060c18;border:1px solid #1d3254;border-radius:8px;min-width:0}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid #162742;padding-bottom:6px;font-size:.76rem;font-weight:700}
+.smeter{display:flex;align-items:center;gap:6px}
+.sbars{display:flex;align-items:flex-end;gap:2px;height:18px;padding:2px 4px;background:#03070e;border:1px solid #1f3456;border-radius:4px}
+.sb{width:6px;background:#1a2942;border-radius:1px}
+.sb.on{background:var(--green)}
+.sb.plus{background:var(--red)}
+.icons{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{padding:2px 7px;border-radius:4px;background:#1a2942;color:var(--muted);border:1px solid #2b4266;font-size:.7rem}
+.pill.on{background:rgba(255,171,0,.2);color:var(--amber);border-color:var(--amber)}
+.pill.btn{cursor:pointer}
+
+.vfo{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:2px 4px}
+.bandmode{display:flex;flex-direction:column;gap:5px;min-width:88px}
+.band{font-size:1.2rem;font-weight:900;color:var(--amber);line-height:1}
+.modebox{display:inline-block;padding:2px 10px;border:2px solid var(--amber);border-radius:6px;color:var(--amber);font-weight:900;font-size:.95rem;text-align:center;letter-spacing:1px}
+.modebox.dig{border-color:var(--green);color:var(--green);background:rgba(0,230,118,.1)}
+.freq{display:flex;align-items:baseline;gap:8px;margin:0 auto}
+.freq b{font-size:3rem;font-weight:900;color:#fff;letter-spacing:1px;line-height:1}
+.freq span{font-size:1rem;color:var(--cyan);font-weight:800}
+@media(max-width:420px){.freq b{font-size:2.3rem}}
+.vfo-r{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:.73rem;color:var(--muted)}
+.rds{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:20px;padding:0 4px;font-size:.8rem;color:var(--cyan);font-weight:600;flex-wrap:wrap}
+.rds .st{color:var(--green);font-weight:800}
+#scaleCanvas{width:100%;height:38px;display:block;background:#040811;border:1px solid #1d3254;border-radius:6px;cursor:pointer}
+
+.side-r{display:flex;flex-direction:column;justify-content:space-between;gap:7px;background:#081120;border:1px solid #22385c;border-radius:8px;padding:8px}
+.hdr-sm{display:flex;justify-content:space-between;align-items:center;font-size:.76rem;font-weight:700;color:var(--cyan)}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.g5{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+.g3 button,.g5 button{padding:5px 3px;font-size:.73rem}
+
+/* Cards */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid-3{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:10px}
+@media(max-width:1080px){.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:780px){.grid-2,.grid-3{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;min-width:0}
+.card-hdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:7px;gap:8px;flex-wrap:wrap}
+.card-title{font-size:.86rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.4px}
+.lbl{font-size:.75rem;color:var(--muted);font-weight:600}
+.grp{background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
+.grp-hdr{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:.76rem;color:var(--muted);flex-wrap:wrap}
+.grp-hdr b{color:var(--cyan);font-size:.82rem}
+.row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.flex1{flex:1;min-width:0}
+
+/* Buttons & inputs */
+button{background:#1b2c4a;color:var(--text);border:1px solid #2d4670;padding:6px 9px;border-radius:7px;cursor:pointer;font:inherit;font-size:.78rem;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:4px;user-select:none;touch-action:manipulation}
+button:hover{background:#253c63;border-color:var(--cyan)}
+button:active{transform:translateY(1px)}
+button.primary{background:#006978;border-color:var(--cyan);color:#fff}
+button.success{background:#145a32;border-color:var(--green);color:#fff}
+button.warn{background:#6e4700;border-color:var(--amber);color:#fff}
+button.danger{background:#6e1c1c;border-color:var(--red);color:#fff}
+button.active{background:rgba(0,229,255,.22);border-color:var(--cyan);color:var(--cyan)}
+button.active-dig{background:rgba(0,230,118,.22);border-color:var(--green);color:var(--green)}
+button.sm{padding:3px 8px;font-size:.72rem}
+input[type=text],input[type=password],select{background:#091220;border:1px solid #2b446e;color:var(--text);padding:6px 9px;border-radius:7px;font:inherit;font-size:.82rem;outline:none;min-width:0}
+input:focus,select:focus{border-color:var(--cyan)}
+input[type=range]{accent-color:var(--cyan);cursor:pointer;width:100%;min-width:60px}
+.modes{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+@media(max-width:650px){.modes{grid-template-columns:repeat(4,1fr)}}
+.modes button{padding:7px 4px;font-size:.82rem;font-weight:800;flex-direction:column;gap:1px}
+.modes small{font-size:.62rem;font-weight:500;color:var(--muted)}
+.modes .active small,.modes .active-dig small{color:inherit}
+.tune{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+@media(max-width:420px){.tune{grid-template-columns:repeat(4,1fr)}}
+.tune button{font-size:.76rem;padding:6px 3px}
+.tune .n{color:#ff9e80;border-color:#4e2c26}
+.tune .p{color:#80d8ff;border-color:#24455c}
+.g7{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.sl{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.sl div{display:flex;align-items:center;gap:4px}
+.sl .lbl{width:34px}
+
+/* Memories */
+.chips{display:flex;flex-wrap:wrap;gap:5px;max-height:150px;overflow-y:auto}
+.chip{display:inline-flex;align-items:center;background:#152540;border:1px solid #29436b;border-radius:7px;overflow:hidden;font-size:.75rem}
+.chip button{background:transparent;border:none;border-radius:0;padding:4px 8px}
+.chip button:hover{background:rgba(0,229,255,.15);color:var(--cyan)}
+.chip .f{color:var(--green);margin-left:4px;font-size:.72rem}
+.chip .m{color:var(--amber);font-size:.66rem;margin-left:3px}
+.chip .del{background:rgba(255,82,82,.15);border-left:1px solid #29436b;color:var(--red);padding:4px 7px;font-weight:800}
+.chip .del:hover{background:var(--red);color:#fff}
+
+/* Waterfall */
+.wf{background:#040811;border:1px solid #253b61;border-radius:8px;overflow:hidden}
+#wfCanvas{width:100%;height:210px;display:block;image-rendering:pixelated;image-rendering:crisp-edges;cursor:crosshair}
+.wf-axis{display:flex;justify-content:space-between;padding:3px 8px;background:#0a1322;font-size:.72rem;color:var(--muted);border-top:1px solid #1c2e4a}
+
+/* FT8 / FT4 */
+.ft8{border-color:rgba(0,230,118,.45)}
+.hidden{display:none!important}
+.slot{display:flex;align-items:center;gap:10px;background:#091322;padding:7px 12px;border-radius:8px;border:1px solid #1e3456;flex-wrap:wrap}
+.slot-bar{flex:1;min-width:120px;height:12px;background:#050b14;border-radius:6px;overflow:hidden;border:1px solid #253c61}
+.slot-fill{height:100%;width:0;background:var(--cyan);transition:width .3s linear}
+.slot-fill.dec{background:var(--amber)}
+.tbl{max-height:300px;overflow:auto;border:1px solid #1e3252;border-radius:8px;background:#08111f}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th,td{padding:5px 9px;text-align:left;border-bottom:1px solid #162640;white-space:nowrap}
+td:last-child{white-space:normal}
+th{background:#12213a;color:var(--cyan);position:sticky;top:0;font-size:.72rem;text-transform:uppercase}
+tr.cq{background:rgba(0,230,118,.1);color:#9cffc7;font-weight:700}
+.call{color:var(--amber);font-weight:700;cursor:pointer;text-decoration:underline dotted}
+.empty{text-align:center;color:var(--muted);padding:16px!important;white-space:normal}
+.vu{height:8px;background:#060c17;border:1px solid #243a5e;border-radius:5px;overflow:hidden}
+.vu div{height:100%;width:0;background:linear-gradient(90deg,#00e676 0%,#ffab00 75%,#ff5252 100%)}
+
+details.card summary{cursor:pointer;font-weight:700;color:var(--cyan);font-size:.86rem;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px}
+details.card summary::-webkit-details-marker{display:none}
+.logs{background:#060c16;border:1px solid #1d3152;border-radius:8px;padding:8px 10px;height:160px;overflow-y:auto;font-size:.74rem;color:#9ec3e6;white-space:pre-wrap;word-break:break-word}
+.wslots{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+@media(max-width:520px){.wslots{grid-template-columns:1fr}}
+.wslots div{display:flex;gap:4px;align-items:center}
+.wslots input{padding:5px;flex:1}
+.wslots input[type=password]{flex:0 1 110px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>📻 ATS-Mini SI4732<small>FM · AM · LSB · USB · CW · FT8 · FT4 — synced with the LCD</small></h1>
+    <div class="badges">
+      <span id="linkBadge" class="badge info"><span class="dot"></span><span id="wifiText">Connecting…</span></span>
+      <span id="syncBadge" class="badge warn"><span class="dot"></span><span id="syncText">Clock…</span></span>
+      <span class="badge">⚡ <b id="vbatText">--</b></span>
+      <span class="badge">UTC <b id="utcClock" class="mono">--:--:--</b></span>
+      <span class="badge" title="Free heap on the ESP32">RAM <b id="heapText">--</b> KB</span>
+    </div>
+  </header>
+
+  <!-- Cockpit: mirrors the physical LCD -->
+  <section class="cockpit">
+    <div class="side-l">
+      <div class="pcell" onclick="sendCtrl('step',{val:1})" title="Next tuning step"><span class="k">Step</span><span class="v mono" id="boxStep">--</span></div>
+      <div class="pcell" onclick="sendCtrl('bw',{val:1})" title="Next filter bandwidth"><span class="k">BW</span><span class="v mono" id="boxBw">--</span></div>
+      <div class="pcell" onclick="sendCtrl('agc',{val:1})" title="AGC / attenuator"><span class="k" id="boxAgcLbl">AGC</span><span class="v mono" id="boxAgcVal">--</span></div>
+      <div class="pcell" onclick="sendCtrl('mute')" title="Toggle speaker mute"><span class="k">Vol</span><span class="v mono" id="boxVol">--</span></div>
+      <div class="pcell" onclick="sendCtrl('avc',{val:1})" title="Increase AVC"><span class="k">AVC</span><span class="v mono" id="boxAvc">--</span></div>
+      <div class="clock mono" id="boxLocalTime" title="Local time shown on the LCD">--:--</div>
+    </div>
+
+    <div class="dial">
+      <div class="topbar">
+        <div class="smeter">
+          <span class="muted">S</span>
+          <div class="sbars" id="sBars"></div>
+          <span id="sLevelText" class="mono" style="color:var(--green)">S0</span>
+        </div>
+        <div class="icons">
+          <span>RSSI <b id="rssiVal" style="color:var(--cyan)">0</b> dBµV</span>
+          <span>SNR <b id="snrVal" style="color:var(--green)">0</b> dB</span>
+          <span class="pill" id="stereoPill">MONO</span>
+          <span class="pill btn" id="layoutPill" onclick="sendCtrl('view_toggle')" title="Cycle the LCD layout">LCD: --</span>
+        </div>
+      </div>
+
+      <div class="vfo">
+        <div class="bandmode">
+          <span class="band" id="bandPill">--</span>
+          <span class="modebox" id="modePill">--</span>
+        </div>
+        <div class="freq mono"><b id="freqDisplay">---</b><span id="unitDisplay">kHz</span></div>
+        <div class="vfo-r">
+          <div class="row">
+            <button class="warn" onclick="sendCtrl('seek',{dir:-1})" title="Seek down">⏮ Seek</button>
+            <button class="warn" onclick="sendCtrl('seek',{dir:1})" title="Seek up">Seek ⏭</button>
+          </div>
+          <span class="mono">BFO <b id="bfoChip" style="color:var(--cyan)">0 Hz</b> · Cal <b id="calChip" style="color:var(--amber)">0 Hz</b></span>
+        </div>
+      </div>
+
+      <div class="rds">
+        <div>📡 <span class="st" id="stationDisplay">---</span> <span id="rdsTextDisplay" class="muted"></span></div>
+        <div class="muted" style="font-size:.74rem">Decoded: <b id="msgCountTop" style="color:var(--green)">0</b></div>
+      </div>
+
+      <canvas id="scaleCanvas" width="640" height="38" title="Click the scale to jump to that frequency"></canvas>
+    </div>
+
+    <div class="side-r">
+      <div class="hdr-sm"><span>🎛️ Encoder &amp; LCD layout</span><span class="lbl">two-way sync</span></div>
+      <div class="grp" style="padding:7px 9px">
+        <div class="grp-hdr"><span>LCD layout</span></div>
+        <div class="g3">
+          <button id="lcdLay0" onclick="sendCtrl('lcd_layout',{val:0})">📻 Default</button>
+          <button id="lcdLay1" onclick="sendCtrl('lcd_layout',{val:1})">📟 S-Meter</button>
+          <button id="lcdLay2" onclick="sendCtrl('lcd_layout',{val:2})">🌊 FT8</button>
+        </div>
+      </div>
+      <div class="g5">
+        <button onclick="sendCtrl('enc',{type:'rot',dir:-1})" title="Rotate encoder left">⟲ Left</button>
+        <button class="primary" onclick="sendCtrl('enc',{type:'click'})" title="Click encoder (menu / select)">● OK</button>
+        <button onclick="sendCtrl('enc',{type:'short'})" title="Short press (volume / mode shortcut)">◐ Short</button>
+        <button onclick="sendCtrl('enc',{type:'long'})" title="Long press (LCD on/off)">◯ Long</button>
+        <button onclick="sendCtrl('enc',{type:'rot',dir:1})" title="Rotate encoder right">Right ⟳</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid-3">
+    <!-- Mode & tuning -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">🎛️ Mode &amp; Tuning</span>
+        <button class="sm" onclick="sendCtrl('step',{val:1})" title="Next tuning step">Step: <span id="stepBtnTxt">--</span></button>
+      </div>
+      <div class="modes">
+        <button id="mBtnFM" onclick="selectRadioMode('FM')">FM<small>64–108M</small></button>
+        <button id="mBtnAM" onclick="selectRadioMode('AM')">AM<small>MW/SW</small></button>
+        <button id="mBtnLSB" onclick="selectRadioMode('LSB')">LSB<small>Lower SB</small></button>
+        <button id="mBtnUSB" onclick="selectRadioMode('USB')">USB<small>Upper SB</small></button>
+        <button id="mBtnCW" onclick="selectRadioMode('CW')">CW<small>0.5 kHz</small></button>
+        <button id="mBtnFT8" onclick="selectRadioMode('FT8')">FT8<small>15 s</small></button>
+        <button id="mBtnFT4" onclick="selectRadioMode('FT4')">FT4<small>7.5 s</small></button>
+      </div>
+
+      <div class="lbl">Direct frequency (e.g. <code>99.9</code>, <code>7074</code>, <code>14074</code>)</div>
+      <div class="row">
+        <input type="text" id="freqInput" class="flex1 mono" inputmode="decimal" placeholder="kHz or MHz" style="font-weight:700" onkeydown="if(event.key==='Enter')setDirectFreq()">
+        <select id="freqUnitSel" style="width:80px">
+          <option value="auto">Auto</option>
+          <option value="khz">kHz</option>
+          <option value="mhz">MHz</option>
+        </select>
+        <button class="primary" onclick="setDirectFreq()">Tune</button>
+      </div>
+
+      <div class="tune mono">
+        <button class="n" onclick="tuneStep(-1000)">-1M</button>
+        <button class="n" onclick="tuneStep(-100)">-100k</button>
+        <button class="n" onclick="tuneStep(-10)">-10k</button>
+        <button class="n" onclick="tuneStep(-1)">-1k</button>
+        <button class="n" onclick="tuneHz(-100)">-100</button>
+        <button class="n" onclick="tuneHz(-10)">-10</button>
+        <button class="p" onclick="tuneHz(10)">+10</button>
+        <button class="p" onclick="tuneHz(100)">+100</button>
+        <button class="p" onclick="tuneStep(1)">+1k</button>
+        <button class="p" onclick="tuneStep(10)">+10k</button>
+        <button class="p" onclick="tuneStep(100)">+100k</button>
+        <button class="p" onclick="tuneStep(1000)">+1M</button>
+      </div>
+
+      <div class="grp">
+        <div class="grp-hdr">
+          <span>BFO / clarifier (SSB, FT8, FT4)</span>
+          <span>BFO <b id="bfoVal">0 Hz</b> · Cal <b id="calVal">0 Hz</b></span>
+        </div>
+        <div class="g7">
+          <button onclick="sendCtrl('bfo_step',{delta:-100})">-100</button>
+          <button onclick="sendCtrl('bfo_step',{delta:-50})">-50</button>
+          <button onclick="sendCtrl('bfo_step',{delta:-10})">-10</button>
+          <button class="warn" onclick="sendCtrl('bfo_reset')" title="Reset BFO to 0 Hz">0</button>
+          <button onclick="sendCtrl('bfo_step',{delta:10})">+10</button>
+          <button onclick="sendCtrl('bfo_step',{delta:50})">+50</button>
+          <button onclick="sendCtrl('bfo_step',{delta:100})">+100</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter, gain, audio -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">🎚️ Filter, Gain &amp; Audio</span>
+        <span class="lbl" id="bwActiveLabel">BW: --</span>
+      </div>
+      <div class="grp">
+        <div class="grp-hdr"><span>Filter bandwidth</span><button class="sm" onclick="sendCtrl('bw',{val:1})">Next ⟳</button></div>
+        <div class="row" id="bwButtonsRow"></div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-hdr"><span>RF gain (AGC / attenuator)</span><b id="agcStatusTxt">AGC auto</b></div>
+        <div class="row" style="flex-wrap:nowrap">
+          <button id="btnAgcAuto" onclick="sendCtrl('agc_set',{val:0})">Auto</button>
+          <button onclick="sendCtrl('agc',{val:-1})">−</button>
+          <input type="range" id="agcSlider" min="0" max="37" value="0" oninput="T('agcStatusTxt',agcText(+this.value))" onchange="sendCtrl('agc_set',{val:this.value})">
+          <button onclick="sendCtrl('agc',{val:1})">+</button>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-hdr">
+          <span>AVC <b id="avcValTxt">--</b> · SQL <b id="sqlValTxt">--</b> · SM <b id="smValTxt">--</b> · LCD <b id="brtValTxt">--</b></span>
+          <button class="sm" onclick="sendCtrl('theme',{val:-1})" title="Next LCD color theme">🎨 <span id="themeNameTxt">--</span></button>
+        </div>
+        <div class="sl">
+          <div><span class="lbl" title="Automatic volume control">AVC</span><input type="range" id="avcSlider" min="12" max="90" step="2" oninput="T('avcValTxt',this.value)" onchange="sendCtrl('avc_set',{val:this.value})"></div>
+          <div><span class="lbl" title="Squelch">SQL</span><input type="range" id="sqlSlider" min="0" max="60" step="1" oninput="T('sqlValTxt',this.value)" onchange="sendCtrl('squelch',{val:this.value})"></div>
+          <div><span class="lbl" title="Soft mute">SM</span><input type="range" id="smSlider" min="0" max="32" step="1" oninput="T('smValTxt',this.value)" onchange="sendCtrl('softmute',{val:this.value})"></div>
+          <div><span class="lbl" title="LCD brightness">LCD</span><input type="range" id="brtSlider" min="15" max="255" step="5" oninput="T('brtValTxt',this.value)" onchange="sendCtrl('brt',{val:this.value})"></div>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-hdr"><span>Speaker &amp; web audio</span><span>Vol <b id="volText">--</b>/63</span></div>
+        <div class="row" style="flex-wrap:nowrap">
+          <button onclick="changeVol(-5)">−</button>
+          <input type="range" id="volSlider" min="0" max="63" oninput="T('volText',this.value)" onchange="sendCtrl('volume',{val:this.value})">
+          <button onclick="changeVol(5)">+</button>
+        </div>
+        <div class="row">
+          <button id="muteBtn" class="flex1" onclick="sendCtrl('mute')">🔊 Speaker</button>
+          <button id="webAudioBtn" class="primary flex1" onclick="toggleWebAudio()">🎧 Web audio: OFF</button>
+        </div>
+        <div class="row" style="flex-wrap:nowrap">
+          <span class="lbl" style="white-space:nowrap">VU (GPIO34)</span>
+          <div class="vu flex1"><div id="vuFill"></div></div>
+          <span id="vuText" class="mono" style="font-size:.73rem;width:36px;text-align:right">0%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bands & memories -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="card-title">🔖 Bands &amp; Memories</span>
+        <span class="lbl" id="bmCountTxt">Saved: 0</span>
+      </div>
+      <select id="fullBandSelect" onchange="selectBandId(this.value)">
+        <option value="0">VHF FM (64–108 MHz)</option>
+        <option value="1">ALL HF (150–30000 kHz)</option>
+        <option value="2">11M SW (25600–26100 kHz)</option>
+        <option value="3">13M SW (21500–21900 kHz)</option>
+        <option value="4">15M BC (18900–19100 kHz)</option>
+        <option value="5">16M SW (17480–18000 kHz)</option>
+        <option value="6">19M SW (15100–15900 kHz)</option>
+        <option value="7">22M SW (13570–13870 kHz)</option>
+        <option value="8">25M SW (11600–12200 kHz)</option>
+        <option value="9">31M SW (9200–9900 kHz)</option>
+        <option value="10">41M SW (7200–7500 kHz)</option>
+        <option value="11">49M SW (5900–6200 kHz)</option>
+        <option value="12">60M SW (4700–5100 kHz)</option>
+        <option value="13">75M SW (3900–4000 kHz)</option>
+        <option value="14">90M SW (3200–3400 kHz)</option>
+        <option value="15">MW1 LW/MW (150–1800 kHz)</option>
+        <option value="16">MW2 Medium wave (531–1701 kHz)</option>
+        <option value="17">MW3 North America (1700–3500 kHz)</option>
+        <option value="18">160M Ham (1800–2000 kHz)</option>
+        <option value="19">80M Ham (3500–4000 kHz)</option>
+        <option value="20">40M Ham (7000–7300 kHz)</option>
+        <option value="21">30M Ham (10000–10200 kHz)</option>
+        <option value="22">20M Ham (14000–14400 kHz)</option>
+        <option value="23">17M Ham (18000–18200 kHz)</option>
+        <option value="24">15M Ham (21000–21500 kHz)</option>
+        <option value="25">12M Ham (24800–25000 kHz)</option>
+        <option value="26">10M Ham (28000–29700 kHz)</option>
+        <option value="27">CB 27 MHz (25000–30000 kHz)</option>
+      </select>
+      <div class="row" id="bandBtns">
+        <button data-b="0">VHF FM</button>
+        <button data-b="16">MW2</button>
+        <button data-b="18">160M</button>
+        <button data-b="19">80M</button>
+        <button data-b="20">40M</button>
+        <button data-b="21">30M</button>
+        <button data-b="22">20M</button>
+        <button data-b="23">17M</button>
+        <button data-b="24">15M</button>
+        <button data-b="26">10M</button>
+        <button data-b="10">41M SW</button>
+        <button data-b="8">25M SW</button>
+        <button data-b="6">19M SW</button>
+        <button data-b="1">ALL</button>
+      </div>
+
+      <div class="grp">
+        <div class="grp-hdr"><span>Save current frequency (same list as the LCD Memory menu)</span></div>
+        <div class="row">
+          <input type="text" id="bmNameInput" class="flex1" maxlength="9" placeholder="Name (max 9 chars)" onkeydown="if(event.key==='Enter')saveCurrentBookmark()">
+          <button class="success" onclick="saveCurrentBookmark()">+ Save</button>
+        </div>
+      </div>
+      <div class="lbl">Memories &amp; presets (click to tune)</div>
+      <div class="chips" id="bookmarksContainer"></div>
+    </div>
+  </div>
+
+  <!-- Waterfall -->
+  <div class="card" id="wfCard">
+    <div class="card-hdr">
+      <span class="card-title">🌊 Audio Waterfall (200–2900 Hz)</span>
+      <div class="row">
+        <span id="wfHoverFreq" class="mono" style="font-size:.78rem;color:var(--amber);min-width:62px">--- Hz</span>
+        <select id="wfPalette" style="padding:3px 6px;font-size:.74rem">
+          <option value="0">Classic</option>
+          <option value="1">Emerald</option>
+          <option value="2">Amber</option>
+        </select>
+      </div>
+    </div>
+    <div class="wf">
+      <canvas id="wfCanvas" width="120" height="36"></canvas>
+      <div class="wf-axis mono"><span>200</span><span>740</span><span>1280</span><span>1820</span><span>2360</span><span>2900 Hz</span></div>
+    </div>
+  </div>
+
+  <!-- FT8 / FT4 decoder -->
+  <div class="card ft8 hidden" id="ft8DecoderCard">
+    <div class="card-hdr">
+      <div class="row">
+        <span class="card-title" style="color:var(--green)">🛰️ <span id="digTitleMode">FT8</span> Decoder</span>
+        <span class="badge ok" id="decodeStatusBadge">Listening</span>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="sendCtrl('decode')" title="Decode the built-in WebSDR test vector">⚡ Test decode</button>
+        <button onclick="sendCtrl('sync')" title="Align the slot timer to :00">⏱️ Sync slot</button>
+        <button onclick="syncBrowserTime()" title="Set the radio clock from this browser (used only without NTP)">🌐 Set UTC</button>
+        <button onclick="sendCtrl('save_cal')" title="Store the current BFO offset as this band's calibration">💾 Save cal</button>
+      </div>
+    </div>
+
+    <div class="slot">
+      <b id="slotText" class="mono" style="font-size:.86rem;min-width:120px;color:var(--cyan)">Slot 0 / 15 s</b>
+      <div class="slot-bar"><div class="slot-fill" id="slotFill"></div></div>
+      <span id="lastDurText" class="muted" style="font-size:.76rem">Auto decode each slot</span>
+    </div>
+
+    <div class="row" style="justify-content:space-between">
+      <div class="row">
+        <span class="lbl">LCD view:</span>
+        <button class="sm" id="lcdMode0" onclick="sendCtrl('view',{mode:0})">Split</button>
+        <button class="sm" id="lcdMode1" onclick="sendCtrl('view',{mode:1})">Waterfall</button>
+        <button class="sm" id="lcdMode2" onclick="sendCtrl('view',{mode:2})">Messages</button>
+      </div>
+      <div class="row">
+        <input type="text" id="callFilter" placeholder="Filter call / grid / text" style="padding:4px 9px;font-size:.78rem;width:190px" oninput="renderTrafficTable()">
+        <label class="lbl" style="color:var(--green);display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="cqOnlyChk" onchange="renderTrafficTable()"> CQ only</label>
+        <button class="sm" onclick="copyTrafficLog()">📋 Copy</button>
+        <button class="sm danger" onclick="clearTraffic()">🗑️ Clear</button>
+      </div>
+    </div>
+
+    <div class="tbl">
+      <table>
+        <thead><tr><th>UTC</th><th>SNR</th><th>DT</th><th>Audio Hz</th><th>Call</th><th>Message</th></tr></thead>
+        <tbody id="trafficBody"><tr><td colspan="6" class="empty">Waiting for FT8/FT4 messages…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Shown in voice modes instead of the decoder -->
+  <div class="card hidden" id="voiceModeBanner" style="flex-direction:row;justify-content:space-between;align-items:center;flex-wrap:wrap;padding:10px 14px">
+    <span style="font-size:.82rem" class="muted">🎙️ Listening in <b id="voiceModeName" style="color:var(--cyan)">FM</b>. Switch to FT8/FT4 to open the digital decoder on both the LCD and this page.</span>
+    <div class="row">
+      <button class="success" onclick="selectRadioMode('FT8')">🛰️ FT8</button>
+      <button onclick="selectRadioMode('FT4')">⚡ FT4</button>
+      <button onclick="forceShowFt8=!forceShowFt8;updateFt8Visibility()">👁️ Show/hide decoder</button>
+    </div>
+  </div>
+
+  <!-- Wi-Fi & logs (loaded on demand) -->
+  <details class="card" id="sysDetails">
+    <summary><span>📶 Wi-Fi Networks &amp; System Log</span><span class="lbl">click to expand ▾</span></summary>
+    <div class="grid-2" style="margin-top:8px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="row" style="justify-content:space-between">
+          <span class="lbl">8 saved networks, tried in order (2.4 GHz only)</span>
+          <div class="row">
+            <button class="sm" onclick="scanWifi()">🔍 Scan</button>
+            <button class="sm" onclick="loadWifiList()">🔄 Reload</button>
+          </div>
+        </div>
+        <div id="scanResults" class="hidden" style="font-size:.76rem;color:var(--cyan)"></div>
+        <div id="wifiSlots" class="wslots"></div>
+        <div class="row">
+          <button class="primary" onclick="saveWifiConfig(false)">💾 Save</button>
+          <button class="success" onclick="saveWifiConfig(true)">⚡ Save &amp; reconnect</button>
+          <span id="wifiMsg" class="lbl"></span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div class="row" style="justify-content:space-between">
+          <span class="lbl">System log</span>
+          <button class="sm" onclick="fetchLogs()">Refresh</button>
+        </div>
+        <div class="logs mono" id="sysLogBox">Loading…</div>
+      </div>
+    </div>
+  </details>
+
+</div>
+
+<script>
+// Element helpers: cache lookups and only touch the DOM when a value changes
+const E = {};
+const $ = id => E[id] || (E[id] = document.getElementById(id));
+function T(id, v) { const e = $(id); v = String(v); if (e && e.textContent !== v) e.textContent = v; }
+function C(id, c) { const e = $(id); if (e && e.className !== c) e.className = c; }
+function S(id, prop, v) { const e = $(id); if (e && e.style[prop] !== v) e.style[prop] = v; }
+// Leave sliders alone while the user is dragging them
+function V(id, v) { const e = $(id); if (e && document.activeElement !== e && e.value !== String(v)) e.value = v; }
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// FT8_DIG_FT8 = 0, FT8_DIG_FT4 = 1, FT8_DIG_OFF = 2
+let curStatus = { mode: 'FM', mode_id: 0, raw_freq: 9990, band_min: 6400, band_max: 10800 };
+let trafficCache = [];
+let bookmarksCache = [];
+let forceShowFt8 = false;
+let webAudioOn = false, audioCtx = null;
+let lastMsgCount = -1;
+let wfVisible = true, ft8Visible = false;
+let online = true;
+
+const PRESETS = [
+  ['20M FT8', '14074', 'khz', 'FT8'], ['40M FT8', '7074', 'khz', 'FT8'], ['15M FT8', '21074', 'khz', 'FT8'],
+  ['10M FT8', '28074', 'khz', 'FT8'], ['30M FT8', '10136', 'khz', 'FT8'], ['17M FT8', '18100', 'khz', 'FT8'],
+  ['80M FT8', '3573', 'khz', 'FT8'], ['20M FT4', '14080', 'khz', 'FT4'], ['40M FT4', '7047.5', 'khz', 'FT4'],
+  ['VOV1 FM', '100.0', 'mhz', 'FM'], ['VOV3 FM', '102.7', 'mhz', 'FM'], ['VOV GT', '91.0', 'mhz', 'FM'],
+  ['40M LSB', '7100', 'khz', 'LSB'], ['BPM time', '15000', 'khz', 'AM']
+];
+const BW_OPTIONS = {
+  FM:  ['Auto', '110k', '84k', '60k', '40k'],
+  AM:  ['1.0k', '1.8k', '2.0k', '2.5k', '3.0k', '4.0k', '6.0k'],
+  SSB: ['0.5k', '1.0k', '1.2k', '2.2k', '3.0k', '4.0k']
+};
+const MODE_CMD = { FT8: ['dig_mode', 0], FT4: ['dig_mode', 1], FM: ['mode', 0], LSB: ['mode', 1], USB: ['mode', 2], AM: ['mode', 3], CW: ['mode', 4] };
+
+// 17-bar S-meter (S1..S9 green, +10..+80 dB red), like drawSMeter() on the LCD
+$('sBars').innerHTML = Array.from({ length: 17 }, (_, i) =>
+  `<div class="sb" id="sBar${i}" style="height:${Math.min(14, 4 + Math.round(i * 0.65))}px"></div>`).join('');
+
+setInterval(() => T('utcClock', new Date().toISOString().substring(11, 19)), 500);
+
+// All HTTP traffic goes through one queue: the ESP32 serves one request at a time best
+let chain = Promise.resolve();
+function req(url, opts = {}, as = 'json', ms = 3000) {
+  const run = async () => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const r = await fetch(url, { cache: 'no-store', ...opts, signal: ctrl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return as === 'json' ? await r.json() : as === 'buf' ? await r.arrayBuffer() : null;
+    } finally { clearTimeout(t); }
+  };
+  const p = chain.then(run);
+  chain = p.catch(() => {});
+  return p;
+}
+
+async function sendCtrl(action, params = {}) {
+  try {
+    await req('/api/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ action, ...params }).toString()
+    }, 'none');
+  } catch (e) {}
+  kick(120);
+}
+
+async function selectRadioMode(m) {
+  const c = MODE_CMD[m];
+  if (c) await sendCtrl(c[0], c[0] === 'mode' ? { mode: c[1] } : { val: c[1] });
+}
+
+async function setDirectFreq() {
+  const inp = $('freqInput');
+  const val = parseFloat(inp.value.trim().replace(',', '.'));
+  if (isNaN(val) || val <= 0) return;
+  const unit = $('freqUnitSel').value;
+  await sendCtrl('freq', { freq: val, unit: unit === 'auto' ? '' : unit });
+  inp.value = '';
+}
+
+function tuneStep(deltaKhz) { sendCtrl('tune', { delta: deltaKhz }); }
+function tuneHz(deltaHz) {
+  if (curStatus.mode_id === 1 || curStatus.mode_id === 2) sendCtrl('bfo_step', { delta: deltaHz });
+  else sendCtrl('tune', { delta: deltaHz > 0 ? 1 : -1 });
+}
+function changeVol(delta) {
+  const v = Math.max(0, Math.min(63, (parseInt($('volSlider').value, 10) || 0) + delta));
+  $('volSlider').value = v;
+  T('volText', v);
+  sendCtrl('volume', { val: v });
+}
+function selectBandId(b) { sendCtrl('band', { id: b }); }
+$('bandBtns').addEventListener('click', e => { const b = e.target.closest('button'); if (b) selectBandId(b.dataset.b); });
+
+const agcText = agc => agc === 0 ? 'AGC auto' : `ATT ${agc - 1} dB`;
+
+function renderBandwidthButtons(modeId, activeIdx) {
+  const row = $('bwButtonsRow');
+  const key = modeId === 0 ? 'FM' : (modeId === 3 ? 'AM' : 'SSB');
+  const sig = key + '_' + activeIdx;
+  if (row.dataset.sig === sig) return;
+  row.dataset.sig = sig;
+  row.innerHTML = BW_OPTIONS[key].map((lbl, i) =>
+    `<button class="sm${i === activeIdx ? ' active' : ''}" onclick="sendCtrl('bw_set',{idx:${i}})">${lbl}</button>`).join('');
+}
+
+// Tuning scale ruler (like drawScale() in Layout-Default.cpp)
+const scaleCanvas = $('scaleCanvas');
+const scaleCtx = scaleCanvas.getContext('2d');
+let scaleSig = '';
+function drawTuningScale(d) {
+  const sig = `${d.raw_freq}|${d.band_min}|${d.band_max}|${d.mode_id}`;
+  if (sig === scaleSig) return;
+  scaleSig = sig;
+  const w = scaleCanvas.width, h = scaleCanvas.height, ctx = scaleCtx;
+  const isFm = d.mode_id === 0;
+  const fCur = Number(d.raw_freq || 0), fMin = Number(d.band_min || 0), fMax = Number(d.band_max || 0);
+  const cx = Math.floor(w / 2), ppu = isFm ? 2.4 : 2.0; // px per 10 kHz (FM) or per 1 kHz
+  ctx.fillStyle = '#040811';
+  ctx.fillRect(0, 0, w, h);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#335280';
+  ctx.beginPath();
+  ctx.moveTo(0, 6.5); ctx.lineTo(w, 6.5);
+  ctx.moveTo(0, h - 1.5); ctx.lineTo(w, h - 1.5);
+  ctx.stroke();
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  const span = Math.ceil(cx / ppu) + 10;
+  const f0 = Math.max(fMin, Math.floor((fCur - span) / 10) * 10);
+  const f1 = Math.min(fMax, Math.ceil((fCur + span) / 10) * 10);
+  const minor = new Path2D(), major = new Path2D();
+  ctx.fillStyle = '#c9e2ff';
+  for (let f = f0; f <= f1; f += 10) {
+    const x = Math.round(cx + (f - fCur) * ppu) + 0.5;
+    if (x < 0 || x > w) continue;
+    if (f % 50 === 0) {
+      major.moveTo(x, 6); major.lineTo(x, 19);
+      ctx.fillText(isFm ? (f / 100).toFixed(f % 100 === 0 ? 0 : 1) : String(f), x, 32);
+    } else {
+      minor.moveTo(x, 6); minor.lineTo(x, 13);
+    }
+  }
+  ctx.strokeStyle = '#3d5e8c'; ctx.stroke(minor);
+  ctx.strokeStyle = '#88b4e6'; ctx.stroke(major);
+  ctx.strokeStyle = ctx.fillStyle = '#ff5252';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - 6, 0); ctx.lineTo(cx + 6, 0); ctx.lineTo(cx, 8); ctx.closePath(); ctx.fill();
+}
+
+// Click the scale to jump to the clicked frequency
+scaleCanvas.addEventListener('click', e => {
+  const r = scaleCanvas.getBoundingClientRect();
+  const x = ((e.clientX - r.left) / r.width) * scaleCanvas.width;
+  const isFm = curStatus.mode_id === 0;
+  let f = (curStatus.raw_freq || 0) + Math.round((x - scaleCanvas.width / 2) / (isFm ? 2.4 : 2.0));
+  if (curStatus.band_min && f < curStatus.band_min) f = curStatus.band_min;
+  if (curStatus.band_max && f > curStatus.band_max) f = curStatus.band_max;
+  if (isFm) sendCtrl('freq', { freq: (Math.round(f / 10) * 10 / 100).toFixed(2), unit: 'mhz' });
+  else sendCtrl('freq', { freq: f, unit: 'khz' });
+});
+
+function isDigital() { return curStatus.mode === 'FT8' || curStatus.mode === 'FT4'; }
+function updateFt8Visibility() {
+  const dig = isDigital();
+  ft8Visible = dig || forceShowFt8;
+  $('ft8DecoderCard').classList.toggle('hidden', !ft8Visible);
+  $('voiceModeBanner').classList.toggle('hidden', dig);
+}
+
+function setOnline(ok) {
+  if (ok === online) return;
+  online = ok;
+  if (!ok) { C('linkBadge', 'badge err'); T('wifiText', 'Radio offline'); }
+}
+
+async function fetchStatus() {
+  let d;
+  try { d = await req('/api/status', {}, 'json', 2500); } catch (e) { setOnline(false); return; }
+  setOnline(true);
+  curStatus = d;
+  const mode = d.mode || 'FM';
+  const isFt8 = mode === 'FT8', isFt4 = mode === 'FT4', dig = isFt8 || isFt4;
+
+  // Left column (LCD drawLeftSideBar)
+  T('boxStep', d.step || '--');
+  T('boxBw', d.bw || '--');
+  const agcOn = d.agc === 0 && d.att_db === 0;
+  T('boxAgcLbl', agcOn ? 'AGC' : 'ATT');
+  T('boxAgcVal', agcOn ? 'ON' : d.att_db);
+  S('boxAgcVal', 'color', agcOn ? 'var(--green)' : 'var(--amber)');
+  T('boxVol', d.mute ? 'MUTE' : d.volume);
+  S('boxVol', 'color', d.mute ? 'var(--red)' : '#fff');
+  T('boxAvc', d.mode_id === 0 ? 'FM' : d.avc);
+  T('boxLocalTime', d.local_time || '--:--');
+
+  // Frequency, band, mode (LCD ft8GetDisplayModeDesc())
+  T('freqDisplay', d.freq_khz);
+  T('unitDisplay', d.unit || 'kHz');
+  T('bandPill', d.band);
+  T('modePill', mode);
+  C('modePill', dig ? 'modebox dig' : 'modebox');
+  T('voiceModeName', `${d.band} ${mode} (${d.freq_khz} ${d.unit})`);
+  const activeMode = (dig || mode === 'CW') ? mode : ['FM', 'LSB', 'USB', 'AM'][d.mode_id];
+  for (const m in MODE_CMD) C('mBtn' + m, m === activeMode ? (dig ? 'active-dig' : 'active') : '');
+
+  T('stationDisplay', d.station || (isFt8 ? 'FT8 15 s' : isFt4 ? 'FT4 7.5 s' : '---'));
+  T('rdsTextDisplay', d.rds_text ? '— ' + d.rds_text : '');
+  if (d.mode_id === 0) {
+    T('stereoPill', d.stereo ? 'STEREO' : 'MONO');
+    C('stereoPill', d.stereo ? 'pill on' : 'pill');
+  } else {
+    T('stereoPill', 'BW ' + d.bw);
+    C('stereoPill', 'pill');
+  }
+  T('layoutPill', 'LCD: ' + (['Default', 'S-Meter', 'FT8'][d.lcd_layout] || 'Default'));
+
+  // S-meter
+  T('rssiVal', d.rssi);
+  T('snrVal', d.snr);
+  T('msgCountTop', d.msg_count);
+  const sLv = d.s_level || 0;
+  T('sLevelText', sLv <= 9 ? 'S' + sLv : `S9+${(sLv - 9) * 10}`);
+  for (let i = 0; i < 17; i++) C('sBar' + i, i < sLv ? (i < 9 ? 'sb on' : 'sb plus') : 'sb');
+
+  drawTuningScale(d);
+
+  T('bfoChip', d.bfo + ' Hz'); T('bfoVal', d.bfo + ' Hz');
+  T('calChip', d.cal + ' Hz'); T('calVal', d.cal + ' Hz');
+  T('stepBtnTxt', d.step);
+  T('bwActiveLabel', 'BW: ' + d.bw);
+
+  if ($('agcSlider') !== document.activeElement) T('agcStatusTxt', agcText(d.agc));
+  C('btnAgcAuto', d.agc === 0 ? 'active' : '');
+  V('agcSlider', d.agc);
+  T('avcValTxt', d.avc); V('avcSlider', d.avc);
+  T('sqlValTxt', d.squelch); V('sqlSlider', d.squelch);
+  if (d.softmute !== undefined) { T('smValTxt', d.softmute); V('smSlider', d.softmute); }
+  if (d.brt !== undefined) { T('brtValTxt', d.brt); V('brtSlider', d.brt); }
+  if (d.theme_name) T('themeNameTxt', d.theme_name);
+
+  V('volSlider', d.volume);
+  if ($('volSlider') !== document.activeElement) T('volText', d.volume);
+  T('muteBtn', d.mute ? '🔇 Speaker muted' : '🔊 Speaker on');
+  C('muteBtn', d.mute ? 'danger flex1' : 'flex1');
+
+  const vu = Math.min(100, d.audio_level || 0);
+  S('vuFill', 'width', vu + '%');
+  T('vuText', vu + '%');
+
+  C('linkBadge', d.is_ap ? 'badge warn' : 'badge info');
+  T('wifiText', `${d.is_ap ? 'AP ' : ''}${d.ssid} · ${d.ip}`);
+  T('heapText', Math.round((d.heap_free || 0) / 1024));
+  if (d.vbat !== undefined) T('vbatText', d.vbat >= 4.45 ? 'USB' : Number(d.vbat).toFixed(2) + ' V');
+  C('syncBadge', d.synced ? 'badge ok' : 'badge warn');
+  T('syncText', d.synced ? 'Clock: ' + d.sync_src : 'Clock not set');
+
+  for (let i = 0; i < 3; i++) {
+    C('lcdLay' + i, d.lcd_layout === i ? 'active' : '');
+    C('lcdMode' + i, d.lcd_layout === 2 && d.lcd_view === i ? 'sm active' : 'sm');
+  }
+
+  const bandSel = $('fullBandSelect');
+  if (bandSel !== document.activeElement && bandSel.value !== String(d.band_id)) bandSel.value = d.band_id;
+  for (const b of $('bandBtns').children) {
+    const c = b.dataset.b === String(d.band_id) ? 'active' : '';
+    if (b.className !== c) b.className = c;
+  }
+
+  renderBandwidthButtons(d.mode_id, d.bw_idx);
+  updateFt8Visibility();
+
+  if (ft8Visible) {
+    const slotMax = isFt4 ? 8 : 15;
+    const slotCur = d.slot % slotMax;
+    const lbl = isFt4 ? 'FT4' : 'FT8';
+    T('digTitleMode', lbl);
+    T('slotText', `Slot ${slotCur} / ${isFt4 ? '7.5' : '15'} s`);
+    S('slotFill', 'width', Math.min(100, Math.round(slotCur / slotMax * 100)) + '%');
+    C('slotFill', d.decoding ? 'slot-fill dec' : 'slot-fill');
+    T('decodeStatusBadge', d.decoding ? `⚡ Decoding ${lbl}…` : `Listening ${lbl} · ${d.freq_khz} kHz`);
+    if (d.last_duration_ms > 0) T('lastDurText', `Last decode ${d.last_duration_ms} ms`);
+  }
+}
+
+// Memories
+async function loadBookmarks() {
+  try { bookmarksCache = await req('/api/bookmarks'); } catch (e) {}
+  renderBookmarks();
+}
+
+function renderBookmarks() {
+  T('bmCountTxt', `Saved: ${bookmarksCache.length}/24`);
+  let html = bookmarksCache.map(bm => {
+    const f = bm.mode === 'FM' ? (bm.freq_hz / 1e6).toFixed(2) + 'M' : (bm.freq_hz / 1e3).toFixed(1) + 'k';
+    return `<div class="chip" title="Memory slot #${bm.slot + 1}"><button onclick="sendCtrl('bookmark_tune',{slot:${bm.slot}})">⭐ ${esc(bm.name)}<span class="f mono">${f}</span><span class="m">${esc(bm.mode)}</span></button><button class="del" onclick="deleteBookmark(${bm.slot})" title="Delete memory">×</button></div>`;
+  }).join('');
+  html += PRESETS.map((p, i) =>
+    `<div class="chip"><button onclick="tunePreset(${i})">${p[0]}<span class="f mono">${p[1]}${p[2] === 'mhz' ? 'M' : 'k'}</span><span class="m">${p[3]}</span></button></div>`).join('');
+  $('bookmarksContainer').innerHTML = html;
+}
+
+async function tunePreset(i) {
+  const [, freq, unit, mode] = PRESETS[i];
+  await selectRadioMode(mode);
+  await sendCtrl('freq', { freq, unit });
+}
+
+async function saveCurrentBookmark() {
+  const inp = $('bmNameInput');
+  const name = inp.value.trim() || `${curStatus.band} ${curStatus.freq_khz}`;
+  await sendCtrl('bookmark_save', { name: name.substring(0, 9), slot: -1 });
+  inp.value = '';
+  setTimeout(loadBookmarks, 200);
+}
+
+async function deleteBookmark(slot) {
+  await sendCtrl('bookmark_del', { slot });
+  setTimeout(loadBookmarks, 200);
+}
+
+// Waterfall: draw the 120x36 buffer 1:1 and let CSS scale it (pixelated)
+const wfCanvas = $('wfCanvas');
+const wfCtx = wfCanvas.getContext('2d');
+const wfImg = wfCtx.createImageData(120, 36);
+let wfLast = null;
+
+function colorMap(v, pal) {
+  if (pal === 1) return [v * 0.4, v * 1.2, 30 + v];
+  if (pal === 2) return [v * 1.4, (v - 60) * 1.3, (v - 160) * 2];
+  if (v < 45) return [4, 10, 20 + v * 2];
+  if (v < 110) return [0, (v - 45) * 3.5, 120 + (v - 45) * 2];
+  if (v < 185) return [(v - 110) * 3.2, 230, 255 - (v - 110) * 3];
+  return [255, 255 - (v - 185) * 2.2, (v - 185) * 3];
+}
+// Precomputed palette lookup tables (256 levels x RGB)
+const LUT = [0, 1, 2].map(p => {
+  const t = new Uint8ClampedArray(768);
+  for (let v = 0; v < 256; v++) t.set(colorMap(v, p).map(Math.round), v * 3);
+  return t;
+});
+let wfPal = 0;
+try { wfPal = parseInt(localStorage.getItem('wfPal') || '0', 10) || 0; } catch (e) {}
+$('wfPalette').value = wfPal;
+$('wfPalette').addEventListener('change', e => {
+  wfPal = parseInt(e.target.value, 10) || 0;
+  try { localStorage.setItem('wfPal', wfPal); } catch (err) {}
+  if (wfLast) drawWaterfall(wfLast);
+});
+
+function drawWaterfall(buf) {
+  const lut = LUT[wfPal] || LUT[0], px = wfImg.data;
+  for (let i = 0, j = 0; i < 4320; i++, j += 4) {
+    const k = buf[i] * 3;
+    px[j] = lut[k]; px[j + 1] = lut[k + 1]; px[j + 2] = lut[k + 2]; px[j + 3] = 255;
+  }
+  wfCtx.putImageData(wfImg, 0, 0);
+}
+
+async function fetchWaterfall() {
+  try {
+    const buf = new Uint8Array(await req('/api/waterfall', {}, 'buf', 3000));
+    if (buf.length < 4320) return;
+    wfLast = buf;
+    drawWaterfall(buf);
+  } catch (e) {}
+}
+
+wfCanvas.addEventListener('mousemove', e => {
+  const r = wfCanvas.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  T('wfHoverFreq', Math.round(200 + ratio * 2700) + ' Hz');
+});
+
+// Skip work for panels scrolled out of view
+if ('IntersectionObserver' in window) {
+  new IntersectionObserver(es => es.forEach(en => { wfVisible = en.isIntersecting; })).observe($('wfCard'));
+}
+
+// FT8 / FT4 messages
+async function fetchTraffic() {
+  try {
+    trafficCache = await req('/api/ft8/traffic', {}, 'json', 2500);
+    renderTrafficTable();
+  } catch (e) {}
+}
+
+function renderTrafficTable() {
+  const filter = ($('callFilter').value || '').trim().toUpperCase();
+  const cqOnly = $('cqOnlyChk').checked;
+  const rows = trafficCache.filter(m => {
+    const text = `${m.call} ${m.msg}`.toUpperCase();
+    return (!cqOnly || text.includes('CQ ')) && (!filter || text.includes(filter));
+  });
+  if (!rows.length) {
+    $('trafficBody').innerHTML = `<tr><td colspan="6" class="empty">${trafficCache.length ? 'No messages match the filter' : 'Waiting for FT8/FT4 messages…'}</td></tr>`;
+    return;
+  }
+  $('trafficBody').innerHTML = rows.map(m => {
+    const snrColor = m.snr >= 0 ? 'var(--green)' : (m.snr >= -12 ? 'var(--cyan)' : 'var(--muted)');
+    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrColor};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}</td></tr>`;
+  }).join('');
+}
+$('trafficBody').addEventListener('click', e => {
+  const c = e.target.closest('.call');
+  if (c) { $('callFilter').value = c.dataset.call; renderTrafficTable(); }
+});
+
+function copyTrafficLog() {
+  const text = trafficCache.map(m => `${m.time}\t${m.snr}dB\t${m.dt}s\t${m.freq}Hz\t${m.call}\t${m.msg}`).join('\n') || 'No FT8/FT4 messages';
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text); return; }
+  // Plain HTTP pages have no clipboard API: fall back to a hidden textarea
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  ta.remove();
+}
+
+async function clearTraffic() {
+  trafficCache = [];
+  renderTrafficTable();
+  await sendCtrl('clear_traffic');
+  lastMsgCount = -1;
+}
+
+async function syncBrowserTime() {
+  const now = Date.now();
+  try { await req(`/api/timesync?epoch=${Math.floor(now / 1000)}&ms=${now % 1000}`, {}, 'none'); } catch (e) {}
+  kick(100);
+}
+
+// Live web audio: 160 ms WAV snapshots from GPIO34
+function toggleWebAudio() {
+  webAudioOn = !webAudioOn;
+  T('webAudioBtn', webAudioOn ? '🎧 Web audio: ON' : '🎧 Web audio: OFF');
+  C('webAudioBtn', webAudioOn ? 'success flex1' : 'primary flex1');
+  if (webAudioOn) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+    playAudioLoop();
+  }
+}
+
+async function playAudioLoop() {
+  if (!webAudioOn) return;
+  try {
+    const ab = await req('/api/audio.wav', {}, 'buf', 2000);
+    const src = audioCtx.createBufferSource();
+    src.buffer = await audioCtx.decodeAudioData(ab);
+    src.connect(audioCtx.destination);
+    src.start();
+  } catch (e) {}
+  if (webAudioOn) setTimeout(playAudioLoop, 180);
+}
+
+// Wi-Fi & logs (fetched only when the section is open)
+async function loadWifiList() {
+  try {
+    const d = await req('/api/wifi/list');
+    $('wifiSlots').innerHTML = d.networks.map((n, i) => `<div><span class="lbl" style="width:22px">#${i + 1}</span><input type="text" id="wSsid${i}" value="${esc(n.ssid)}" placeholder="SSID ${i + 1}"><input type="password" id="wPass${i}" value="${esc(n.pass)}" placeholder="Password"></div>`).join('');
+  } catch (e) {}
+}
+
+async function scanWifi() {
+  const el = $('scanResults');
+  el.classList.remove('hidden');
+  el.textContent = 'Scanning 2.4 GHz networks…';
+  try {
+    const list = await req('/api/wifi/scan', {}, 'json', 12000);
+    el.innerHTML = list.length
+      ? 'Found (click to fill an empty slot): ' + list.map(a => `<button class="sm" style="margin:2px" data-ssid="${esc(a.ssid)}">${esc(a.ssid)} (${a.rssi} dBm)</button>`).join('')
+      : 'No networks found';
+  } catch (e) { el.textContent = 'Wi-Fi scan failed'; }
+}
+$('scanResults').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  for (let i = 0; i < 8; i++) {
+    const s = $('wSsid' + i);
+    if (s && (!s.value || s.value === b.dataset.ssid)) { s.value = b.dataset.ssid; $('wPass' + i).focus(); break; }
+  }
+});
+
+async function saveWifiConfig(reconnect) {
+  if (!document.getElementById('wSsid0')) return;
+  const p = new URLSearchParams();
+  for (let i = 0; i < 8; i++) {
+    p.append(`ssid${i + 1}`, document.getElementById(`wSsid${i}`).value.trim());
+    p.append(`pass${i + 1}`, document.getElementById(`wPass${i}`).value);
+  }
+  if (reconnect) p.append('reconnect', '1');
+  try {
+    await req('/api/wifi/save', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: p.toString() }, 'none');
+    T('wifiMsg', reconnect ? 'Saved, reconnecting…' : 'Saved');
+  } catch (e) { T('wifiMsg', 'Save failed'); }
+}
+
+async function fetchLogs() {
+  try {
+    const list = await req('/api/logs');
+    const box = $('sysLogBox');
+    box.textContent = list.join('\n') || '(empty)';
+    box.scrollTop = box.scrollHeight;
+  } catch (e) {}
+}
+
+$('sysDetails').addEventListener('toggle', e => {
+  if (!e.target.open) return;
+  if (!document.getElementById('wSsid0')) loadWifiList();
+  fetchLogs();
+});
+
+// Poll loop: one request at a time, paused while the tab is hidden
+const POLL_MS = 800;
+let pollTimer = 0, polling = false, pollAgain = false, tick = 0;
+function kick(ms = 0) {
+  if (polling) { pollAgain = true; return; }
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(poll, ms);
+}
+async function poll() {
+  if (document.hidden) return;
+  polling = true;
+  try {
+    await fetchStatus();
+    if (online) {
+      if (wfVisible && !webAudioOn) await fetchWaterfall();
+      if (ft8Visible && curStatus.msg_count !== lastMsgCount) {
+        lastMsgCount = curStatus.msg_count;
+        await fetchTraffic();
+      }
+      if ($('sysDetails').open && ++tick % 6 === 0) await fetchLogs();
+    }
+  } catch (e) {}
+  polling = false;
+  pollTimer = setTimeout(poll, pollAgain ? 100 : (online ? POLL_MS : 3000));
+  pollAgain = false;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(0); });
+
+renderBookmarks();
+syncBrowserTime();
+loadBookmarks();
+kick(0);
+</script>
+</body>
+</html>

@@ -203,7 +203,7 @@ void ft8SyncSlotManual() {
   }
   if (monInitialized) monitor_reset(&liveMon);
   slotDecoded = false;
-  ft8AddLog("[INFO] Đã đồng bộ nhịp FT8 về mốc :00s");
+  ft8AddLog("[INFO] FT8 slot timer aligned to :00");
 }
 
 void ft8SetEpochTime(uint32_t epoch, uint16_t ms) {
@@ -217,7 +217,7 @@ void ft8SetEpochTime(uint32_t epoch, uint16_t ms) {
   uint8_t m = (epoch % 3600UL) / 60UL;
   uint8_t s = epoch % 60UL;
   clockSet(h, m, s);
-  ft8AddLog("[INFO] Đã đồng bộ giờ UTC: %02u:%02u:%02u", h, m, s);
+  ft8AddLog("[INFO] UTC clock set: %02u:%02u:%02u", h, m, s);
 }
 
 // Hardware-crystal phase-locked 6000.000000 Hz ADC sampler using esp_timer_get_time()
@@ -338,7 +338,7 @@ void ft8Init() {
     esp_timer_start_periodic(ft8AdcTimer, 125);
   }
 
-  ft8AddLog("[INFO] Khởi tạo bộ thu DSP FT8 trực tiếp trên GPIO34 (6000 Hz, BW 200..2900 Hz)");
+  ft8AddLog("[INFO] FT8 DSP receiver started on GPIO34 (6000 Hz, 200..2900 Hz)");
 }
 
 static int g_lastRowAvgMag = 0;
@@ -627,7 +627,7 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
                 decodedNow, (unsigned long)ft8LastDurationMs, numCandidates, topScore, topFreqHz,
                 minLdpcErr, bestErrFreqHz, bestErrDt, bestErrScore, mon->wf.num_blocks, (unsigned long)adcDroppedBlocks, lastAdcVpp, lastBlockRms);
   if (decodedNow > 0 || isTest) {
-    ft8AddLog("[INFO] Giải mã %s hoàn tất: %d gói tin (%lu ms, %d blocks)",
+    ft8AddLog("[INFO] %s decode done: %d messages (%lu ms, %d blocks)",
               isTest ? "TEST" : "LIVE", decodedNow, (unsigned long)ft8LastDurationMs, mon->wf.num_blocks);
   }
 
@@ -783,7 +783,7 @@ void ft8RunTestDecode() {
   if (!monInitialized) ft8Init();
 
   Serial.println("\r\n[FT8] Starting DSP decode (6000Hz, 93 blocks)...");
-  ft8AddLog("[INFO] Bắt đầu giải mã vector kiểm chuẩn WebSDR (15s)...");
+  ft8AddLog("[INFO] Decoding the WebSDR test vector (15s)...");
   ft8IsDecoding = true;
   drawScreen();
 
@@ -968,7 +968,7 @@ void ft8ToggleAudioStream() {
 
 void ft8ClearTraffic() {
   ft8TrafficCount = 0;
-  ft8AddLog("[INFO] Đã xóa danh sách bản tin FT8");
+  ft8AddLog("[INFO] FT8 message list cleared");
 }
 
 uint8_t ft8GetAudioLevel() { return ft8AudioLevel; }
