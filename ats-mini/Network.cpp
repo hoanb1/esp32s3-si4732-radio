@@ -11,6 +11,7 @@
 #include <WiFiUdp.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <ping/ping_sock.h>
 #include <NTPClient.h>
 #include <ESPmDNS.h>
 #include <esp_sntp.h>
@@ -56,6 +57,35 @@ String loginPassword = "";
 
 // AsyncWebServer object on port 80
 AsyncWebServer server(80);
+
+//
+// /ws: one WebSocket per open page carries everything the page watches, so it does not
+// open a new HTTP connection several times a second (that ran this board out of heap):
+//   text  '{...}'   status JSON (same as /api/status), every 500 ms
+//   text  other     a radio log line (WebLog.h)
+//   binary 'W' n    the n newest waterfall rows (120 bytes each, newest first)
+//   binary 'A' seq  web audio: uint32 LE start sample number + 6 kHz mu-law samples,
+//                   only to pages that asked with "audio=1"
+//
+#define WS_MAX_PAGES 3
+static AsyncWebSocket ws("/ws");
+struct WsPage { uint32_t id; bool audio; uint32_t logSeq; uint32_t wfSeq; };
+static WsPage wsPages[WS_MAX_PAGES];
+static portMUX_TYPE wsMux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t wsAudSeq = 0;
+static void wsTick();
+
+// Frames are allocated on the heap; a failed allocation aborts (no exceptions), so only
+// build one when it leaves this much byte-addressable heap for WiFi/lwIP. Skipped frames come later.
+// (ESP.getFreeHeap() also counts ~30 KB of 32-bit-only IRAM that new/malloc cannot use.)
+#define WS_HEAP_RESERVE 9000
+#define WS_AUDIO_MAX    2400   // 400 ms per frame at most; a page further behind skips ahead
+#define WS_WF_ROWS_MAX  12     // waterfall rows per frame (1.4 KB); a new page catches up over a few ticks
+static bool wsHeapOk(size_t bytes)
+{
+  return heap_caps_get_free_size(MALLOC_CAP_8BIT) > WS_HEAP_RESERVE + bytes &&
+         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) > bytes + 1024;
+}
 
 // NTP Client to get UTC time
 WiFiUDP ntpUDP;
@@ -164,8 +194,55 @@ void netRequestConnect()
   itIsTimeToWiFi = true;
 }
 
+//
+// Gateway ping watchdog. With a weak signal the STA sometimes stops receiving while the
+// driver still reports WL_CONNECTED (no ping, no HTTP, RSSI still updates), and nothing
+// recovers it. Ping the gateway every 20 s; after 65 s without a reply, drop the
+// association so the reconnect logic below starts over.
+//
+#define GW_PING_INTERVAL_MS 20000
+#define GW_DEAD_MS          65000
+static esp_ping_handle_t gwPing = NULL;
+static uint32_t gwPingTarget = 0;
+static volatile uint32_t gwLastReplyMs = 0;
+
+static void gwPingOk(esp_ping_handle_t hdl, void *args) { gwLastReplyMs = millis(); }
+
+static void gatewayWatchdog()
+{
+  if (WiFi.status() != WL_CONNECTED || !(WiFi.getMode() & WIFI_STA)) return;
+  uint32_t gw = (uint32_t)WiFi.gatewayIP();
+  if (!gw) return;
+
+  if (!gwPing || gw != gwPingTarget) {
+    if (gwPing) { esp_ping_stop(gwPing); esp_ping_delete_session(gwPing); gwPing = NULL; }
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    cfg.count = ESP_PING_COUNT_INFINITE;
+    cfg.interval_ms = GW_PING_INTERVAL_MS;
+    cfg.timeout_ms = 2000;
+    cfg.data_size = 8;
+    cfg.target_addr.type = IPADDR_TYPE_V4;
+    cfg.target_addr.u_addr.ip4.addr = gw;
+    esp_ping_callbacks_t cbs = {};
+    cbs.on_ping_success = gwPingOk;
+    if (esp_ping_new_session(&cfg, &cbs, &gwPing) != ESP_OK) { gwPing = NULL; return; }
+    gwPingTarget = gw;
+    gwLastReplyMs = millis();   // grace period for the first reply
+    esp_ping_start(gwPing);
+    return;
+  }
+
+  if (millis() - gwLastReplyMs > GW_DEAD_MS) {
+    Serial.printf("[WiFi] Gateway %s silent for %lu s while 'connected': reconnecting\r\n",
+                  WiFi.gatewayIP().toString().c_str(), (unsigned long)((millis() - gwLastReplyMs) / 1000));
+    gwLastReplyMs = millis();
+    WiFi.disconnect(false, false);   // keep the config; the watchdog below reconnects
+  }
+}
+
 void netTickTime()
 {
+  wsTick();
   processControlQueue();
 
   if (doScanRequested) {
@@ -183,10 +260,18 @@ void netTickTime()
   }
 
   // Auto-reconnect watchdog if STA drops connection temporarily (never block or drop into AP)
+  gatewayWatchdog();
   static uint32_t lastWifiCheckMs = 0;
   static uint8_t disconnectTicks = 0;
   if (millis() - lastWifiCheckMs >= 6000) {
     lastWifiCheckMs = millis();
+    static uint8_t netLogTicks = 0;
+    if (++netLogTicks >= 10) {   // once a minute, for the web log card
+      netLogTicks = 0;
+      Serial.printf("[NET] RSSI %d dBm, 8-bit heap %u (min %u, largest %u), web clients %u\r\n", (int)WiFi.RSSI(),
+                    heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)ws.count());
+    }
     if (wifiModeIdx > NET_AP_ONLY) {
       if (WiFi.status() != WL_CONNECTED) {
         disconnectTicks++;
@@ -639,9 +724,16 @@ static void runControlAction(const ControlRequest &cr)
         }
       }
     } else if (action == "tune") {
-      int delta = getParamStr("delta").toInt();
+      int delta = getParamStr("delta").toInt();   // kHz
       if (currentMode == FM) {
-        updateFrequency(currentFrequency + delta * 10, true);
+        // FM is tuned in 10 kHz units; steps below 10 kHz move one unit. Clamp instead of wrapping.
+        int units = delta / 10;
+        if (!units && delta) units = delta > 0 ? 1 : -1;
+        int f = (int)currentFrequency + units;
+        const Band *band = getCurrentBand();
+        if (f < band->minimumFreq) f = band->minimumFreq;
+        if (f > band->maximumFreq) f = band->maximumFreq;
+        updateFrequency(f, false);
         clearStationInfo();
       } else {
         int32_t newKhz = (int32_t)currentFrequency + delta;
@@ -666,6 +758,8 @@ static void runControlAction(const ControlRequest &cr)
         if (isSSB() && savedBfo != 0) updateBFO(savedBfo, false);
         clearStationInfo();
         identifyFrequency(currentFrequency + currentBFO / 1000);
+        // FT8/FT4 only on their dial frequencies: leaving one turns the decoder off, landing on one turns it on
+        if (isSSB()) ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
       }
       prefsRequestSave(SAVE_CUR_BAND);
     } else if (action == "bfo_step") {
@@ -906,8 +1000,8 @@ class FlashResponse : public AsyncWebServerResponse
           src = _head.c_str() + _headSent;
           left = _head.length() - _headSent;
         } else {
+          src = (const char *)_data + _sentLength;
           left = _contentLength - _sentLength;
-          src = _content(_sentLength, left);
         }
         if (!left) {
           if (_state == RESPONSE_HEADERS) { _head = String(); _state = RESPONSE_CONTENT; }
@@ -931,43 +1025,222 @@ class FlashResponse : public AsyncWebServerResponse
       return queued;
     }
 
-  protected:
-    // Bytes to send from offset `off`; may shorten `left`. client->add() copies them.
-    virtual const char *_content(size_t off, size_t &left) { (void)left; return (const char *)_data + off; }
-
   private:
     const uint8_t *_data;
     String _head;
     size_t _headSent = 0;
 };
 
+
 //
-// /api/audio body: uint32 LE start sample number, then mu-law samples read from the live ring
+// Radio status JSON for /api/status and the /ws push (callers own the buffer: two tasks build it)
 //
-class AudioResponse : public FlashResponse
+static int buildStatusJson(char *json, size_t cap)
 {
-  public:
-    AudioResponse(uint32_t start, uint32_t count) :
-      FlashResponse(200, "application/octet-stream", NULL, 4 + count), _start(start)
-    {
-      addHeader("Cache-Control", "no-store");
-    }
+  char freqStr[24];
+  const char *unit = "kHz";
+  if (currentMode == FM) {
+    snprintf(freqStr, sizeof(freqStr), "%.2f", currentFrequency / 100.0f);
+    unit = "MHz";
+  } else {
+    double fKhz = (double)currentFrequency + (double)currentBFO / 1000.0;
+    snprintf(freqStr, sizeof(freqStr), "%.2f", fKhz);
+  }
 
-  protected:
-    const char *_content(size_t off, size_t &left) override
-    {
-      size_t n = 0;
-      for (; off < 4 && n < left && n < sizeof(_tmp); off++) _tmp[n++] = (uint8_t)(_start >> (8 * off));
-      size_t m = min(left - n, sizeof(_tmp) - n);
-      if (m) ft8WebAudioCopy(_tmp + n, _start + (off - 4), m);
-      left = n + m;
-      return (const char *)_tmp;
-    }
+  int16_t cal = (currentMode == USB) ? getCurrentBand()->usbCal :
+                ((currentMode == LSB) ? getCurrentBand()->lsbCal : 0);
+  bool isAp = (WiFi.status() != WL_CONNECTED);
+  String ip = isAp ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+  String ssid = isAp ? String(apSSID) : WiFi.SSID();
+  int8_t curAvc = isSSB() ? SsbAvcIdx : AmAvcIdx;
+  int8_t curSm = isSSB() ? SsbSoftMuteIdx : AmSoftMuteIdx;
+  bool isStereo = (currentMode == FM) && rx.getCurrentPilot();
+  const char *tStr = clockGet();
+  if (!tStr) tStr = "--:--";
 
-  private:
-    uint32_t _start;
-    uint8_t _tmp[1436];
-};
+  auto cleanJsonStr = [](char *dst, const char *src, size_t maxLen) {
+    size_t j = 0;
+    if (src) {
+      for (size_t i = 0; src[i] != '\0' && j + 1 < maxLen; i++) {
+        char c = src[i];
+        if (c >= 32 && c != '"' && c != '\\') dst[j++] = c;
+      }
+    }
+    dst[j] = '\0';
+  };
+
+  char stName[40], rdsTxt[64], cleanSsid[40];
+  cleanJsonStr(stName, getStationName(), sizeof(stName));
+  cleanJsonStr(rdsTxt, getRadioText(), sizeof(rdsTxt));
+  cleanJsonStr(cleanSsid, ssid.c_str(), sizeof(cleanSsid));
+
+  int len = snprintf(json, cap,
+    "{\"freq_khz\":\"%s\",\"raw_freq\":%u,\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
+    "\"band_min\":%u,\"band_max\":%u,"
+    "\"mode\":\"%s\",\"mode_id\":%u,\"dig_mode\":%u,\"bfo\":%d,\"cal\":%d,"
+    "\"bw\":\"%s\",\"bw_idx\":%d,\"step\":\"%s\","
+    "\"agc\":%d,\"att_db\":%d,\"avc\":%d,\"softmute\":%d,\"squelch\":%u,"
+    "\"rssi\":%u,\"snr\":%u,\"s_level\":%d,\"stereo\":%s,"
+    "\"station\":\"%s\",\"rds_text\":\"%s\",\"local_time\":\"%s\",\"vbat\":%.2f,"
+    "\"brt\":%u,\"theme\":%u,\"theme_name\":\"%s\",\"cmd\":%u,"
+    "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
+    "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
+    "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
+    "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu}",
+    freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
+    (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
+    ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
+    getCurrentBandwidth()->desc, (int)bands[bandIdx].bandwidthIdx, getCurrentStep()->desc,
+    (int)agcIdx, (int)agcNdx, (int)curAvc, (int)curSm, (unsigned int)currentSquelch,
+    rssi, snr, getStrength(rssi), isStereo ? "true" : "false",
+    stName, rdsTxt, tStr, batteryMonitor(),
+    (unsigned int)currentBrt, (unsigned int)themeIdx, TH.name, (unsigned int)currentCmd,
+    (unsigned int)uiLayoutIdx, ft8GetViewMode(), isAp ? "true" : "false", ip.c_str(), cleanSsid,
+    clockAvailable() ? "true" : "false", ntpIsAvailable() ? "NTP" : "Manual",
+    ft8GetCurrentSlotSecond(), ft8IsDecodingNow() ? "true" : "false",
+    (unsigned long)ft8GetLastDurationMs(), volume,
+    ft8IsSpeakerMuted() ? "true" : "false",
+    ft8WebAudioActive() ? "true" : "false",
+    ft8GetAudioLevel(), (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    (unsigned long)ft8GetTotalDecoded()
+  );
+  if (len < 0) len = 0;
+  if (len >= (int)cap) len = cap - 1;
+  return len;
+}
+
+//
+// /ws WebSocket: page bookkeeping (AsyncTCP task) and sending (loop task)
+//
+static void wsOnEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
+                      void *arg, uint8_t *data, size_t len)
+{
+  if (type == WS_EVT_CONNECT) {
+    bool added = false;
+    portENTER_CRITICAL(&wsMux);
+    for (int i = 0; i < WS_MAX_PAGES && !added; i++) {
+      if (!wsPages[i].id) {
+        uint32_t head = webLogHead();
+        uint32_t wf = ft8GetWebWaterfallRowCount();
+        // Replay the recent log lines and the whole waterfall
+        wsPages[i] = { client->id(), false, head > WEBLOG_LINES ? head - WEBLOG_LINES : 0, wf > 36 ? wf - 36 : 0 };
+        added = true;
+      }
+    }
+    portEXIT_CRITICAL(&wsMux);
+    if (!added) client->close(1013, "too many pages");
+  } else if (type == WS_EVT_DISCONNECT) {
+    portENTER_CRITICAL(&wsMux);
+    for (int i = 0; i < WS_MAX_PAGES; i++)
+      if (wsPages[i].id == client->id()) wsPages[i].id = 0;
+    portEXIT_CRITICAL(&wsMux);
+  } else if (type == WS_EVT_DATA) {
+    AwsFrameInfo *info = (AwsFrameInfo *)arg;
+    if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT && len >= 7 &&
+        !memcmp(data, "audio=", 6)) {
+      bool on = data[6] == '1';
+      portENTER_CRITICAL(&wsMux);
+      for (int i = 0; i < WS_MAX_PAGES; i++)
+        if (wsPages[i].id == client->id()) wsPages[i].audio = on;
+      portEXIT_CRITICAL(&wsMux);
+    }
+  }
+}
+
+static void wsTick()
+{
+  static uint32_t lastAudioMs = 0, lastLogMs = 0, lastCleanMs = 0, lastStatusMs = 0;
+  uint32_t now = millis();
+  if (!ws.count()) return;
+
+  if (now - lastCleanMs >= 1000) {
+    lastCleanMs = now;
+    ws.cleanupClients(WS_MAX_PAGES);
+  }
+
+  WsPage pages[WS_MAX_PAGES];
+  portENTER_CRITICAL(&wsMux);
+  memcpy(pages, wsPages, sizeof(pages));
+  portEXIT_CRITICAL(&wsMux);
+
+  // Audio: every 200 ms, the samples since the last send to every listening page.
+  // A page whose send queue is backed up skips a chunk (it sees the gap and rebuffers).
+  bool anyAudio = false;
+  for (int i = 0; i < WS_MAX_PAGES; i++) anyAudio |= pages[i].id && pages[i].audio;
+  if (anyAudio && now - lastAudioMs >= 200) {
+    lastAudioMs = now;
+    uint32_t count = 0;
+    uint32_t start = ft8WebAudioBegin(wsAudSeq, &count);   // also keeps web audio switched on
+    if (count > WS_AUDIO_MAX) {
+      start += count - WS_AUDIO_MAX;
+      count = WS_AUDIO_MAX;
+    }
+    if (count && wsHeapOk(5 + count)) {
+      auto buf = std::make_shared<std::vector<uint8_t>>(5 + count);
+      uint8_t *b = buf->data();
+      b[0] = 'A'; b[1] = start; b[2] = start >> 8; b[3] = start >> 16; b[4] = start >> 24;
+      ft8WebAudioCopy(b + 5, start, count);
+      wsAudSeq = start + count;
+      for (int i = 0; i < WS_MAX_PAGES; i++) {
+        if (!pages[i].id || !pages[i].audio) continue;
+        AsyncWebSocketClient *c = ws.client(pages[i].id);
+        if (c && c->canSend() && c->queueLen() < 4) c->binary(buf);
+      }
+    }
+  }
+
+  // Status JSON and new waterfall rows, every 500 ms
+  if (now - lastStatusMs >= 500) {
+    lastStatusMs = now;
+    static char json[960];
+    int len = buildStatusJson(json, sizeof(json));
+    if (!wsHeapOk(len)) return;
+    auto status = std::make_shared<std::vector<uint8_t>>((uint8_t *)json, (uint8_t *)json + len);
+    uint32_t wfHead = ft8GetWebWaterfallRowCount();
+    const uint8_t *wf = ft8GetWebWaterfallBuffer();
+    for (int i = 0; i < WS_MAX_PAGES; i++) {
+      if (!pages[i].id) continue;
+      AsyncWebSocketClient *c = ws.client(pages[i].id);
+      if (!c || !c->canSend() || c->queueLen() >= 4) continue;   // busy page: it gets the next one
+      c->text(status);
+      uint32_t behind = wfHead - pages[i].wfSeq;
+      if (behind > 36) behind = 36;
+      uint32_t rows = behind > WS_WF_ROWS_MAX ? WS_WF_ROWS_MAX : behind;
+      if (rows && !wsHeapOk(2 + rows * 120)) rows = 0;   // the page catches up on a later tick
+      if (rows) {
+        auto buf = std::make_shared<std::vector<uint8_t>>(2 + rows * 120);
+        (*buf)[0] = 'W';
+        (*buf)[1] = (uint8_t)rows;
+        memcpy(buf->data() + 2, wf + (behind - rows) * 120, rows * 120);   // oldest pending rows first
+        c->binary(buf);
+      }
+      if (rows) {
+        portENTER_CRITICAL(&wsMux);
+        if (wsPages[i].id == pages[i].id) wsPages[i].wfSeq = wfHead - (behind - rows);
+        portEXIT_CRITICAL(&wsMux);
+      }
+    }
+  }
+
+  // Logs: a few new lines per page every 100 ms
+  if (now - lastLogMs >= 100) {
+    lastLogMs = now;
+    uint32_t head = webLogHead();
+    char line[WEBLOG_LINE_LEN];
+    for (int i = 0; i < WS_MAX_PAGES; i++) {
+      if (!pages[i].id || pages[i].logSeq == head) continue;
+      AsyncWebSocketClient *c = ws.client(pages[i].id);
+      if (!c) continue;
+      uint32_t seq = pages[i].logSeq;
+      if (head - seq > WEBLOG_LINES) seq = head - WEBLOG_LINES;   // fell behind: skip the lost lines
+      for (int n = 0; n < 4 && seq != head && c->canSend() && c->queueLen() < 6; n++, seq++)
+        if (wsHeapOk(WEBLOG_LINE_LEN) && webLogGet(seq, line, sizeof(line))) c->text(line);
+      portENTER_CRITICAL(&wsMux);
+      if (wsPages[i].id == pages[i].id) wsPages[i].logSeq = seq;
+      portEXIT_CRITICAL(&wsMux);
+    }
+  }
+}
 
 //
 // Initialize internal web server with full FT8 + Multi-WiFi APIs
@@ -1014,76 +1287,8 @@ static void webInit()
 
   // /api/status - Real-time radio, FT8 slot, and WiFi status
   server.on("/api/status", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    char freqStr[24];
-    const char *unit = "kHz";
-    if (currentMode == FM) {
-      snprintf(freqStr, sizeof(freqStr), "%.2f", currentFrequency / 100.0f);
-      unit = "MHz";
-    } else {
-      double fKhz = (double)currentFrequency + (double)currentBFO / 1000.0;
-      snprintf(freqStr, sizeof(freqStr), "%.2f", fKhz);
-    }
-
-    int16_t cal = (currentMode == USB) ? getCurrentBand()->usbCal :
-                  ((currentMode == LSB) ? getCurrentBand()->lsbCal : 0);
-    bool isAp = (WiFi.status() != WL_CONNECTED);
-    String ip = isAp ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
-    String ssid = isAp ? String(apSSID) : WiFi.SSID();
-    int8_t curAvc = isSSB() ? SsbAvcIdx : AmAvcIdx;
-    int8_t curSm = isSSB() ? SsbSoftMuteIdx : AmSoftMuteIdx;
-    bool isStereo = (currentMode == FM) && rx.getCurrentPilot();
-    const char *tStr = clockGet();
-    if (!tStr) tStr = "--:--";
-
-    auto cleanJsonStr = [](char *dst, const char *src, size_t maxLen) {
-      size_t j = 0;
-      if (src) {
-        for (size_t i = 0; src[i] != '\0' && j + 1 < maxLen; i++) {
-          char c = src[i];
-          if (c >= 32 && c != '"' && c != '\\') dst[j++] = c;
-        }
-      }
-      dst[j] = '\0';
-    };
-
-    static char stName[40], rdsTxt[64], cleanSsid[40];
-    cleanJsonStr(stName, getStationName(), sizeof(stName));
-    cleanJsonStr(rdsTxt, getRadioText(), sizeof(rdsTxt));
-    cleanJsonStr(cleanSsid, ssid.c_str(), sizeof(cleanSsid));
-
     static char json[960];
-    int len = snprintf(json, sizeof(json),
-      "{\"freq_khz\":\"%s\",\"raw_freq\":%u,\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
-      "\"band_min\":%u,\"band_max\":%u,"
-      "\"mode\":\"%s\",\"mode_id\":%u,\"dig_mode\":%u,\"bfo\":%d,\"cal\":%d,"
-      "\"bw\":\"%s\",\"bw_idx\":%d,\"step\":\"%s\","
-      "\"agc\":%d,\"att_db\":%d,\"avc\":%d,\"softmute\":%d,\"squelch\":%u,"
-      "\"rssi\":%u,\"snr\":%u,\"s_level\":%d,\"stereo\":%s,"
-      "\"station\":\"%s\",\"rds_text\":\"%s\",\"local_time\":\"%s\",\"vbat\":%.2f,"
-      "\"brt\":%u,\"theme\":%u,\"theme_name\":\"%s\",\"cmd\":%u,"
-      "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
-      "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
-      "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
-      "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu}",
-      freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
-      (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
-      ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
-      getCurrentBandwidth()->desc, (int)bands[bandIdx].bandwidthIdx, getCurrentStep()->desc,
-      (int)agcIdx, (int)agcNdx, (int)curAvc, (int)curSm, (unsigned int)currentSquelch,
-      rssi, snr, getStrength(rssi), isStereo ? "true" : "false",
-      stName, rdsTxt, tStr, batteryMonitor(),
-      (unsigned int)currentBrt, (unsigned int)themeIdx, TH.name, (unsigned int)currentCmd,
-      (unsigned int)uiLayoutIdx, ft8GetViewMode(), isAp ? "true" : "false", ip.c_str(), cleanSsid,
-      clockAvailable() ? "true" : "false", ntpIsAvailable() ? "NTP" : "Manual",
-      ft8GetCurrentSlotSecond(), ft8IsDecodingNow() ? "true" : "false",
-      (unsigned long)ft8GetLastDurationMs(), volume,
-      ft8IsSpeakerMuted() ? "true" : "false",
-      ft8WebAudioActive() ? "true" : "false",
-      ft8GetAudioLevel(), (unsigned int)ESP.getFreeHeap(),
-      (unsigned long)ft8GetTotalDecoded()
-    );
-    if (len < 0) len = 0;
-    if (len >= (int)sizeof(json)) len = sizeof(json) - 1;
+    int len = buildStatusJson(json, sizeof(json));
     AsyncWebServerResponse *response = new FlashResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
@@ -1242,15 +1447,6 @@ static void webInit()
     request->send(response);
   });
 
-  // /api/audio?from=N - Continuous web audio: uint32 LE start sample number, then 6 kHz mu-law samples.
-  // Pass the previous start + length as `from`; a different start in the reply means samples were skipped.
-  server.on("/api/audio", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    uint32_t from = request->hasParam("from") ? (uint32_t)strtoul(request->getParam("from")->value().c_str(), NULL, 10) : 0;
-    uint32_t count = 0;
-    uint32_t start = ft8WebAudioBegin(from, &count);
-    request->send(new AudioResponse(start, count));
-  });
-
   // /api/wifi/list - Return all 8 saved WiFi slots + connected SSID
   server.on("/api/wifi/list", HTTP_GET, [] (AsyncWebServerRequest *request) {
     prefs.begin("network", true, STORAGE_PARTITION);
@@ -1323,6 +1519,8 @@ static void webInit()
     request->send(404, "text/plain", "Not found");
   });
 
+  ws.onEvent(wsOnEvent);
+  server.addHandler(&ws);
   server.begin();
   Serial.printf("[Web] HTTP server started on port 80 (free_heap=%u, free_8bit=%u, max_alloc=%u)\r\n",
                 (unsigned int)ESP.getFreeHeap(),

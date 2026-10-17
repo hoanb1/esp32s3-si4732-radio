@@ -96,11 +96,12 @@ uint32_t ft8GetTotalDecoded();
 int ft8GetTrafficCount();
 const FT8MessageEntry* ft8GetTrafficEntry(int idx);
 const uint8_t* ft8GetWebWaterfallBuffer(); // 93 * 120 bytes
+uint32_t ft8GetWebWaterfallRowCount(); // rows added to the web waterfall since boot (row 0 is the newest)
 void ft8AddLog(const char *fmt, ...);
 String ft8GetLogsJson();
 size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index); // WAV audio stream from live ADC ring buffer
 uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count);  // start sample number and length of the next /api/audio chunk
 size_t ft8WebAudioCopy(uint8_t *dst, uint32_t seq, size_t n);  // copy mu-law samples seq..seq+n-1
-bool ft8WebAudioActive();  // true while web audio has paused FT8 decoding and the waterfall
+bool ft8WebAudioActive();  // true while web audio has paused FT8 decoding
 
 #endif // LAYOUT_FT8_H

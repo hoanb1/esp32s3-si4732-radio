@@ -22,7 +22,7 @@
 #define FT8_RS_UP           3
 #define FT8_RS_DOWN         8
 #define FT8_RS_TAPS         96    // taps per polyphase branch (prototype = 288 taps at 48 kHz)
-#define FT8_RAW_RING        4096  // 256 ms of raw 16 kHz samples
+#define FT8_RAW_RING        2048  // 128 ms of raw 16 kHz samples (the resampler drains it every 4 ms)
 #define FT8_BLOCK_SAMPLES   960   // 160 ms per FT8 symbol @ 6000 Hz
 #define FT8_RING_BLOCKS     4     // 4 x 160 ms = 640 ms ring buffer (absorbs WiFi/I2C jitter without dropping blocks)
 #define FT8_MAX_CANDIDATES  100
@@ -33,8 +33,20 @@
 // Battery ADC reading (GPIO35), taken at boot before ADC1 switches to DMA mode
 volatile uint16_t g_latestVbatRaw = 2400;
 
-// Lock-free 4-block ADC capture ring buffer (4 * 960 * 2 bytes = 7,680 bytes)
-static int16_t adcBuf[FT8_RING_BLOCKS][FT8_BLOCK_SAMPLES];
+// The ADC buffers below hold 32-bit words and live in the 32-bit-only IRAM heap (~30 KB that
+// nothing else uses): byte-addressable DRAM is what WiFi, lwIP and the web server run out of.
+// IRAM only takes 32-bit integer loads/stores: never bytewise (no memset/memcpy), and no floats
+// (FPU loads from IRAM raise LoadStoreError).
+static void *iramAlloc(size_t bytes) {
+  void *p = heap_caps_malloc(bytes, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT);   // IRAM only
+  if (!p) p = heap_caps_malloc(bytes, MALLOC_CAP_32BIT);
+  if (p) for (size_t i = 0; i < bytes / 4; i++) ((volatile uint32_t *)p)[i] = 0;
+  return p;
+}
+
+// Lock-free 4-block ADC capture ring buffer (4 * 960 * 4 bytes in IRAM)
+// volatile: keeps the compiler from narrowing reads to 16-bit loads, which IRAM rejects
+static volatile int32_t (*adcBuf)[FT8_BLOCK_SAMPLES] = NULL;
 static volatile uint8_t adcWriteBlock = 0;
 static volatile uint8_t adcReadBlock = 0;
 static volatile uint8_t readyBufIdx = 0;
@@ -45,15 +57,16 @@ static volatile uint16_t adcBlockIndex[FT8_RING_BLOCKS];  // block number within
 static volatile uint32_t adcTotalBlocks = 0;
 static hw_timer_t *adcTimer = NULL;
 static volatile bool adcRunning = false;
-static volatile uint16_t adcRaw[FT8_RAW_RING];
+static volatile uint32_t *adcRaw = NULL;                   // FT8_RAW_RING words in IRAM
 static volatile uint32_t adcRawHead = 0;                   // total raw samples written by the timer ISR
 static uint32_t monSlotId = 0xFFFFFFFF;                     // slot currently being collected into liveMon
 static bool monSlotUsable = false;                           // false if the slot start was missed
 
 // Web audio: continuous 6 kHz mu-law ring read by absolute sample number, so consecutive
 // /api/audio requests join without gaps or repeats. This board has no spare heap for it (WiFi
-// stalls below ~40 KB free), so while someone listens FT8 decoding and the waterfall pause and
-// the ring borrows the FT8 waterfall magnitude buffer; they resume WEB_AUD_IDLE_MS after the last request.
+// stalls below ~40 KB free), so while someone listens the ring borrows the tail of the FT8
+// waterfall magnitude buffer: the waterfall keeps running on the rows left in front of it, and
+// FT8 decoding (which needs all 79 symbols) pauses until WEB_AUD_IDLE_MS after the last request.
 #define WEB_AUD_RING_MAX    16384 // 2.7 s
 #define WEB_AUD_IDLE_MS     3000
 static uint8_t *volatile webAudRing = NULL;
@@ -61,6 +74,7 @@ static volatile uint32_t webAudMask = 0;
 static volatile uint32_t webAudHead = 0;                    // total samples written
 static volatile uint32_t webAudLastReq = 0;                 // millis() of the last /api/audio request
 static volatile bool webAudWanted = false;
+static int webAudSavedMaxBlocks = 0;                         // liveMon.wf.max_blocks while the ring is borrowed
 static float webAudDc = 950.0f;
 
 // Live ADC signal statistics
@@ -82,6 +96,7 @@ extern "C" {
 // Waterfall buffer (36 rows x 120 cols = 4,320 bytes, shared by Web UI and LCD)
 #define WEB_WF_ROWS 36
 static uint8_t webWf[WEB_WF_ROWS * 120];
+static uint32_t webWfRowCount = 0;   // rows ever added, so /ws can send only the new ones
 #define LCD_WF_ROWS 36
 #define LCD_WF_COLS 120
 
@@ -164,6 +179,7 @@ void ft8AddLog(const char *fmt, ...) {
   snprintf(ft8Logs[ft8LogHead], sizeof(ft8Logs[0]), "[%02u:%02u:%02u] %s", h, m, s, buf);
   ft8LogHead = (ft8LogHead + 1) % FT8_MAX_LOGS;
   if (ft8LogCount < FT8_MAX_LOGS) ft8LogCount++;
+  Serial.printf("%s\r\n", buf);   // also into the web radio log
 }
 
 String ft8GetLogsJson() {
@@ -261,7 +277,7 @@ static uint32_t ft8SlotId(uint32_t *msIntoSlot) {
 // SAR ADC registers (pipelined: collect the previous conversion, start the next one), and a task resamples
 // 16 kHz -> 6 kHz with a polyphase FIR (low-pass ~2.75 kHz). Blocks of 960 samples (one FT8 symbol) are
 // tagged with their slot id and index; block 0 starts at the input sample taken at the slot start.
-static float rsTaps[FT8_RS_UP][FT8_RS_TAPS];
+static float rsTaps[FT8_RS_UP][FT8_RS_TAPS];   // DRAM: the FPU cannot load floats from IRAM
 static float rsHist[FT8_RS_TAPS];
 
 static void rsDesign() {
@@ -358,7 +374,7 @@ static void adcTask(void *arg) {
         }
 
         uint8_t wBuf = adcWriteBlock;
-        adcBuf[wBuf][sampleIdx] = (int16_t)lroundf(acc);
+        adcBuf[wBuf][sampleIdx] = (int32_t)lroundf(acc);
         uint8_t *ring = webAudRing;
         if (ring) {
           webAudDc += (acc - webAudDc) * (1.0f / 2048.0f);
@@ -435,8 +451,11 @@ void ft8Init() {
   g_latestVbatRaw = (uint16_t)analogRead(35);
 
   // Start crystal-timed capture of GPIO34 audio
+  adcBuf = (volatile int32_t (*)[FT8_BLOCK_SAMPLES])iramAlloc(sizeof(int32_t) * FT8_RING_BLOCKS * FT8_BLOCK_SAMPLES);
+  adcRaw = (volatile uint32_t *)iramAlloc(sizeof(uint32_t) * FT8_RAW_RING);
+  if (!adcBuf || !adcRaw) Serial.println("[FT8] ADC buffer allocation failed");
   rsDesign();
-  bool adcOk = adcStart();
+  bool adcOk = adcBuf && adcRaw && adcStart();
   xTaskCreatePinnedToCore(adcTask, "ft8_adc", 4096, NULL, 5, NULL, 1);
   Serial.printf("[FT8] ADC capture %s (%d Hz timer, resample %d/%d -> %d Hz)\r\n",
                 adcOk ? "running" : "FAILED", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
@@ -539,6 +558,7 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
 
   // Scroll waterfall (WEB_WF_ROWS x 120 cols) down by 1 row
   memmove(&webWf[120], &webWf[0], (WEB_WF_ROWS - 1) * 120);
+  webWfRowCount++;
   bool ssbMode = isSSB();
   for (int c = 0; c < 120; c++) {
     int audioVis = 0;
@@ -752,27 +772,33 @@ void ft8RequestRedraw() {
   g_webRedrawPending = true;
 }
 
-// Hand the FT8 waterfall buffer to web audio while someone listens, and take it back when they stop
+// Lend the tail of the FT8 waterfall buffer to web audio while someone listens, and take it back when they stop
 static void webAudioService() {
   bool listening = webAudWanted && millis() - webAudLastReq < WEB_AUD_IDLE_MS;
   if (listening && !webAudRing) {
-    uint8_t *mag = (uint8_t *)liveMon.wf.mag;
-    size_t size = (size_t)liveMon.wf.max_blocks * liveMon.wf.num_bins * sizeof(liveMon.wf.mag[0]);
+    const size_t row = (size_t)liveMon.wf.block_stride * sizeof(liveMon.wf.mag[0]);
+    const size_t size = (size_t)liveMon.wf.max_blocks * row;
     size_t ring = WEB_AUD_RING_MAX;
-    while (ring > size) ring >>= 1;
+    while (ring > size / 2) ring >>= 1;   // leave at least half of the rows to the waterfall
+    uint8_t *mag = (uint8_t *)liveMon.wf.mag;
     // Needs byte-addressable DRAM (not 32-bit-only IRAM)
-    if (!mag || ring < 4096 || (uint32_t)mag < 0x3FF80000UL || (uint32_t)mag >= 0x40000000UL) return;
+    if (!mag || !row || ring < 4096 || (uint32_t)mag < 0x3FF80000UL || (uint32_t)mag >= 0x40000000UL) return;
     monitor_reset(&liveMon);
-    memset(mag, 0xFF, ring);              // mu-law silence
+    webAudSavedMaxBlocks = liveMon.wf.max_blocks;
+    liveMon.wf.max_blocks = (int)((size - ring) / row);   // the waterfall wraps over these rows
+    uint8_t *tail = mag + size - ring;
+    memset(tail, 0xFF, ring);             // mu-law silence
     webAudMask = ring - 1;
-    webAudRing = mag;
-    Serial.printf("[AUD] Web audio on (%u-sample ring): FT8 decoding and waterfall paused\r\n", (unsigned)ring);
+    webAudRing = tail;
+    Serial.printf("[AUD] Web audio on (%u-sample ring, waterfall on %d rows): FT8 decoding paused\r\n",
+                  (unsigned)ring, liveMon.wf.max_blocks);
   } else if (!listening && webAudRing) {
     webAudRing = NULL;
     webAudWanted = false;
+    liveMon.wf.max_blocks = webAudSavedMaxBlocks;
     monitor_reset(&liveMon);
     monSlotId = 0xFFFFFFFF;               // restart FT8 collection at the next slot start
-    Serial.println("[AUD] Web audio off: FT8 decoding and waterfall resumed");
+    Serial.println("[AUD] Web audio off: FT8 decoding resumed");
   }
 }
 
@@ -802,7 +828,7 @@ bool ft8TickWaterfall() {
   // Drain any pending 160ms ADC blocks from the lock-free ring buffer
   while (adcReadBlock != adcWriteBlock) {
     uint8_t rBuf = adcReadBlock;
-    int16_t *raw = (int16_t *)adcBuf[rBuf];
+    volatile int32_t *raw = adcBuf[rBuf];
 
     // A block from a new slot starts a new FT8 collection; block 0 begins exactly at the slot start
     uint32_t blkSlot = adcBlockSlot[rBuf];
@@ -821,9 +847,9 @@ bool ft8TickWaterfall() {
       if (digActive) needRedraw = true;
     }
     for (int i = 1; i < FT8_BLOCK_SAMPLES - 1; i++) {
-      int16_t prev = raw[i - 1];
-      int16_t cur  = raw[i];
-      int16_t next = raw[i + 1];
+      int32_t prev = raw[i - 1];
+      int32_t cur  = raw[i];
+      int32_t next = raw[i + 1];
       if (abs(cur - prev) > 300 && abs(cur - next) > 300) {
         raw[i] = (prev + next) >> 1;
       }
@@ -834,14 +860,18 @@ bool ft8TickWaterfall() {
       Serial.write((const uint8_t *)"AUD0", 4);
       ft8AudioStreamSeq = adcBlockCounter[rBuf];
       Serial.write((const uint8_t *)&ft8AudioStreamSeq, 4);
-      Serial.write((const uint8_t *)raw, FT8_BLOCK_SAMPLES * 2);
+      int16_t pcm[96];
+      for (int i = 0; i < FT8_BLOCK_SAMPLES; i += 96) {
+        for (int j = 0; j < 96; j++) pcm[j] = (int16_t)raw[i + j];
+        Serial.write((const uint8_t *)pcm, sizeof(pcm));
+      }
     }
 
     int32_t sum = 0;
     int16_t minV = 4095;
     int16_t maxV = 0;
     for (int i = 0; i < FT8_BLOCK_SAMPLES; i++) {
-      int16_t v = raw[i];
+      int16_t v = (int16_t)raw[i];
       sum += v;
       if (v < minV) minV = v;
       if (v > maxV) maxV = v;
@@ -871,15 +901,15 @@ bool ft8TickWaterfall() {
     if (vu > 100) vu = 100;
     ft8AudioLevel = (uint8_t)vu;
 
-    if (webAudRing) continue;   // web audio owns the waterfall buffer
-
     // In non-digital mode (FM / AM / SSB Voice), wrap monitor blocks continuously so waterfall never pauses
-    if (!digActive && liveMon.wf.num_blocks >= liveMon.wf.max_blocks) {
+    // (also while web audio holds part of the buffer: FT8 cannot decode then, so just keep scrolling)
+    bool scrollOnly = !digActive || webAudRing;
+    if (scrollOnly && liveMon.wf.num_blocks >= liveMon.wf.max_blocks) {
       monitor_reset(&liveMon);
     }
 
     // Feed live 960-sample frame into FT8 STFT waterfall if slot hasn't finished yet
-    if (!slotDecoded && liveMon.wf.num_blocks < liveMon.wf.max_blocks) {
+    if ((!slotDecoded || webAudRing) && liveMon.wf.num_blocks < liveMon.wf.max_blocks) {
       int blockIdx = liveMon.wf.num_blocks;
       monitor_process(&liveMon, dspFrame);
       pushMonitorRowToWaterfalls(&liveMon, blockIdx);
@@ -1100,6 +1130,7 @@ void ft8ToggleAudioStream() {
   ft8AudioStreamOn = !ft8AudioStreamOn;
   Serial.flush();
   Serial.updateBaudRate(ft8AudioStreamOn ? 921600 : 115200);
+  Serial.setCapture(!ft8AudioStreamOn);   // keep the binary stream out of the web log
   ft8AudioStreamSeq = 0;
 }
 
@@ -1118,6 +1149,7 @@ const FT8MessageEntry* ft8GetTrafficEntry(int idx) {
   return &ft8Traffic[idx];
 }
 const uint8_t* ft8GetWebWaterfallBuffer() { return webWf; }
+uint32_t ft8GetWebWaterfallRowCount() { return webWfRowCount; }
 
 // Stream WAV audio (960 samples @ 6000 Hz, 16-bit PCM mono = 1964 bytes total) in chunks of any size
 uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count) {
@@ -1148,6 +1180,7 @@ bool ft8WebAudioActive() {
 }
 
 size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index) {
+  if (!adcBuf) return 0;
   const uint32_t numSamples = FT8_BLOCK_SAMPLES;
   const uint32_t dataBytes = numSamples * 2;
   const uint32_t totalSize = 44 + dataBytes;

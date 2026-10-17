@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <TFT_eSPI.h>
 #include <SI4735-fixed.h>
+#include "WebLog.h"
+
+// Serial output is also streamed to the web log card (see WebLog.h)
+#undef Serial
+#define Serial LogSerial
 
 #define RECEIVER_DESC  "ESP32-SI4732 Receiver"
 #define RECEIVER_NAME  "ATS-Mini"
