@@ -8,6 +8,8 @@
 
 #include <WiFi.h>
 #include <esp_timer.h>
+#include <soc/sens_struct.h>
+#include <hal/misc.h>
 #include <sys/time.h>
 #include <stdarg.h>
 #include <math.h>
@@ -16,6 +18,11 @@
 
 #define FT8_ADC_PIN         34
 #define FT8_SAMPLE_RATE     6000
+#define FT8_ADC_RATE        16000 // GPIO34 sampled by a hardware timer (80 MHz / 5 / 1000), resampled 3/8 to 6 kHz
+#define FT8_RS_UP           3
+#define FT8_RS_DOWN         8
+#define FT8_RS_TAPS         96    // taps per polyphase branch (prototype = 288 taps at 48 kHz)
+#define FT8_RAW_RING        4096  // 256 ms of raw 16 kHz samples
 #define FT8_BLOCK_SAMPLES   960   // 160 ms per FT8 symbol @ 6000 Hz
 #define FT8_RING_BLOCKS     4     // 4 x 160 ms = 640 ms ring buffer (absorbs WiFi/I2C jitter without dropping blocks)
 #define FT8_MAX_CANDIDATES  100
@@ -23,19 +30,25 @@
 #define FT8_MIN_SYNC_SCORE  4     // Catch all weak & moderate off-air FT8 signals
 #define FT8_ADC_VOLUME      48    // SI4732 volume for GPIO34 capture; the line out sits only ~0.1 V above the ADC floor, so louder clips
 
-// Global latest battery ADC reading updated safely by the ADC timer task
+// Battery ADC reading (GPIO35), taken at boot before ADC1 switches to DMA mode
 volatile uint16_t g_latestVbatRaw = 2400;
 
 // Lock-free 4-block ADC capture ring buffer (4 * 960 * 2 bytes = 7,680 bytes)
 static int16_t adcBuf[FT8_RING_BLOCKS][FT8_BLOCK_SAMPLES];
 static volatile uint8_t adcWriteBlock = 0;
 static volatile uint8_t adcReadBlock = 0;
-static volatile uint16_t adcSampleIdx = 0;
 static volatile uint8_t readyBufIdx = 0;
 static volatile uint32_t adcDroppedBlocks = 0;
 static volatile uint32_t adcBlockCounter[FT8_RING_BLOCKS];
+static volatile uint32_t adcBlockSlot[FT8_RING_BLOCKS];   // 15 s slot id the block belongs to
+static volatile uint16_t adcBlockIndex[FT8_RING_BLOCKS];  // block number within that slot (0 = starts at :00.0)
 static volatile uint32_t adcTotalBlocks = 0;
-static esp_timer_handle_t ft8AdcTimer = NULL;
+static hw_timer_t *adcTimer = NULL;
+static volatile bool adcRunning = false;
+static volatile uint16_t adcRaw[FT8_RAW_RING];
+static volatile uint32_t adcRawHead = 0;                   // total raw samples written by the timer ISR
+static uint32_t monSlotId = 0xFFFFFFFF;                     // slot currently being collected into liveMon
+static bool monSlotUsable = false;                           // false if the slot start was missed
 
 // Live ADC signal statistics
 static float lastAdcMean = 950.0f;
@@ -80,7 +93,7 @@ static bool ft8IsDecoding = false;
 static uint32_t ft8LastDurationMs = 0;
 static uint8_t ft8ViewMode = FT8_VIEW_SPLIT;
 static uint8_t ft8DigitalMode = FT8_DIG_OFF;
-static bool ft8SpeakerMuted = true;
+static bool ft8SpeakerMuted = false;  // Speaker amplifier off (SI4732 keeps feeding GPIO34); set automatically in FT8/FT4
 static uint8_t ft8AdcVolume = FT8_ADC_VOLUME;   // Speaker off by default in FT8/FT4 (the SI4732 runs loud for the ADC)
 static bool ft8AudioStreamOn = false;
 static uint32_t ft8AudioStreamSeq = 0;
@@ -220,75 +233,139 @@ void ft8SetEpochTime(uint32_t epoch, uint16_t ms) {
   ft8AddLog("[INFO] UTC clock set: %02u:%02u:%02u", h, m, s);
 }
 
-// Hardware-crystal phase-locked 6000.000000 Hz ADC sampler using esp_timer_get_time()
-// Polls at 125 us (8000 Hz oversampling) and emits exact 6000.000 Hz samples (6 samples / 1000 us)
-// Immune to Core 0 WiFi interrupt delays (linearly interpolates any missed sample without phase/timing drift)
-static volatile int16_t lastValidAdc = 950;
-static volatile int64_t adcEpochUs = 0;
-static volatile uint64_t adcEmittedSamples = 0;
-static volatile int32_t adcAccumSum = 0;
-static volatile int16_t adcAccumCount = 0;
+// 15 s slot id and position inside the slot from the UTC clock
+static uint32_t ft8SlotId(uint32_t *msIntoSlot) {
+  uint8_t h = 0, m = 0, s = 0;
+  uint16_t ms = 0;
+  ft8GetCurrentUTC(&h, &m, &s, &ms);
+  uint32_t daySec = (uint32_t)h * 3600UL + (uint32_t)m * 60UL + s;
+  if (msIntoSlot) *msIntoSlot = (daySec % 15) * 1000UL + ms;
+  return daySec / 15;
+}
 
-static void adcTimerCallback(void *arg) {
-  int64_t nowUs = esp_timer_get_time();
-  if (adcEpochUs == 0) {
-    adcEpochUs = nowUs;
-    adcEmittedSamples = 0;
-    adcAccumSum = 0;
-    adcAccumCount = 0;
+// Crystal-timed ADC capture: a hardware timer interrupt reads GPIO34 at exactly 16 kHz straight from the
+// SAR ADC registers (pipelined: collect the previous conversion, start the next one), and a task resamples
+// 16 kHz -> 6 kHz with a polyphase FIR (low-pass ~2.75 kHz). Blocks of 960 samples (one FT8 symbol) are
+// tagged with their slot id and index; block 0 starts at the input sample taken at the slot start.
+static float rsTaps[FT8_RS_UP][FT8_RS_TAPS];
+static float rsHist[FT8_RS_TAPS];
+
+static void rsDesign() {
+  const int n = FT8_RS_UP * FT8_RS_TAPS;
+  const float fs = (float)FT8_ADC_RATE * FT8_RS_UP;   // 48 kHz prototype rate
+  const float fc = 2750.0f / fs;                      // cycles per sample
+  float proto[FT8_RS_UP * FT8_RS_TAPS];
+  float sum = 0.0f;
+  for (int i = 0; i < n; i++) {
+    float m = i - (n - 1) / 2.0f;
+    float sinc = (fabsf(m) < 1e-6f) ? 2.0f * fc : sinf(2.0f * (float)M_PI * fc * m) / ((float)M_PI * m);
+    float w = 0.54f - 0.46f * cosf(2.0f * (float)M_PI * i / (n - 1));
+    proto[i] = sinc * w;
+    sum += proto[i];
   }
+  for (int i = 0; i < n; i++) rsTaps[i % FT8_RS_UP][i / FT8_RS_UP] = proto[i] * FT8_RS_UP / sum;
+}
 
-  int raw = analogRead(FT8_ADC_PIN);
-  if (raw <= 2 || raw >= 4090) {
-    raw = lastValidAdc;
-  }
-  adcAccumSum += raw;
-  adcAccumCount++;
+static void IRAM_ATTR adcTimerIsr() {
+  uint16_t v = (uint16_t)HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas_start1, meas1_data_sar);
+  SENS.sar_meas_start1.meas1_start_sar = 0;
+  SENS.sar_meas_start1.meas1_start_sar = 1;
+  uint32_t h = adcRawHead;
+  adcRaw[h & (FT8_RAW_RING - 1)] = v;
+  adcRawHead = h + 1;
+}
 
-  // Exact target sample index at 6000.000000 Hz (6 samples per 1000 us)
-  uint64_t targetSamples = ((uint64_t)(nowUs - adcEpochUs) * 6ULL) / 1000ULL;
-  if (targetSamples <= adcEmittedSamples) {
-    return; // Oversample and average until next 166.667 us sample boundary
-  }
+static void adcTask(void *arg) {
+  uint32_t tail = adcRawHead;           // next raw sample to consume (absolute index)
+  uint32_t histCount = 0;
+  int histPos = 0;
+  uint64_t outIdx = 0;                  // absolute output sample index
+  uint64_t inBase = tail;               // raw index corresponding to output 0
+  uint16_t sampleIdx = 0;
+  uint16_t blockInSlot = 0;
+  uint32_t slotId = 0xFFFFFFFF;
+  uint32_t pendSlot = 0xFFFFFFFF;
+  uint32_t pendInIdx = 0;               // raw index taken at the slot boundary
+  const uint32_t groupDelay = (FT8_RS_TAPS - 1) / 2;   // FIR delay in raw samples
 
-  int16_t curSample = (int16_t)(adcAccumSum / adcAccumCount);
-  adcAccumSum = 0;
-  adcAccumCount = 0;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(4));
+    if (!adcRunning) { tail = adcRawHead; continue; }
 
-  uint64_t gap = targetSamples - adcEmittedSamples;
-  if (gap > 3000) {
-    // Resync epoch only if paused for >500 ms
-    adcEpochUs = nowUs;
-    adcEmittedSamples = 0;
-    targetSamples = 0;
-    gap = 1;
-  }
+    // Locate the next slot boundary in the raw stream
+    uint32_t msInto = 0;
+    uint32_t nowSlot = ft8SlotId(&msInto);
+    uint32_t head = adcRawHead;
+    if (nowSlot != slotId && nowSlot != pendSlot) {
+      pendSlot = nowSlot;
+      pendInIdx = head - msInto * (FT8_ADC_RATE / 1000);
+    }
+    if (head - tail > FT8_RAW_RING - 64) tail = head - (FT8_RAW_RING - 64);   // overrun: skip ahead
 
-  for (uint64_t s = 1; s <= gap; s++) {
-    int16_t val = (gap == 1) ? curSample
-                             : (int16_t)(lastValidAdc + ((int32_t)(curSample - lastValidAdc) * (int32_t)s) / (int32_t)gap);
-    uint8_t wBuf = adcWriteBlock;
-    uint16_t idx = adcSampleIdx;
-    adcBuf[wBuf][idx] = val;
-    idx++;
+    while (tail != head) {
+      rsHist[histPos] = (float)adcRaw[tail & (FT8_RAW_RING - 1)];
+      histPos = (histPos + 1) % FT8_RS_TAPS;
+      if (histCount < FT8_RS_TAPS) histCount++;
+      uint32_t newest = tail;
+      tail++;
 
-    if (idx >= FT8_BLOCK_SAMPLES) {
-      adcBlockCounter[wBuf] = adcTotalBlocks++;
-      readyBufIdx = wBuf;
-      adcSampleIdx = 0;
-      uint8_t nextW = (wBuf + 1) % FT8_RING_BLOCKS;
-      if (nextW != adcReadBlock) {
-        adcWriteBlock = nextW;
-      } else if (!slotDecoded && !ft8IsDecoding) {
-        adcDroppedBlocks++;
+      // Emit every output whose newest needed input is available: m = floor(8n/3)
+      for (;;) {
+        uint64_t prod = (outIdx + 1) * FT8_RS_DOWN;
+        uint32_t m = (uint32_t)(inBase + prod / FT8_RS_UP);
+        if ((int32_t)(m - newest) > 0) break;
+        int phase = prod % FT8_RS_UP;
+        outIdx++;
+        if (histCount < FT8_RS_TAPS) continue;
+        float acc = 0.0f;
+        int k = (histPos + FT8_RS_TAPS - 1 - (int)(newest - m)) % FT8_RS_TAPS;
+        for (int q = 0; q < FT8_RS_TAPS; q++) {
+          acc += rsTaps[phase][q] * rsHist[k];
+          if (--k < 0) k = FT8_RS_TAPS - 1;
+        }
+
+        // New slot: start block 0 at the output that corresponds to the boundary input sample
+        if (pendSlot != 0xFFFFFFFF && (int32_t)(m - (pendInIdx + groupDelay)) >= 0) {
+          slotId = pendSlot;
+          pendSlot = 0xFFFFFFFF;
+          sampleIdx = 0;
+          blockInSlot = 0;
+        }
+
+        uint8_t wBuf = adcWriteBlock;
+        adcBuf[wBuf][sampleIdx] = (int16_t)lroundf(acc);
+        if (++sampleIdx >= FT8_BLOCK_SAMPLES) {
+          sampleIdx = 0;
+          adcBlockCounter[wBuf] = adcTotalBlocks++;
+          adcBlockSlot[wBuf] = slotId;
+          adcBlockIndex[wBuf] = blockInSlot++;
+          readyBufIdx = wBuf;
+          uint8_t nextW = (wBuf + 1) % FT8_RING_BLOCKS;
+          if (nextW != adcReadBlock) adcWriteBlock = nextW;
+          else if (!slotDecoded && !ft8IsDecoding) adcDroppedBlocks++;
+        }
       }
-    } else {
-      adcSampleIdx = idx;
     }
   }
+}
 
-  lastValidAdc = curSample;
-  adcEmittedSamples = targetSamples;
+static bool adcStart() {
+  // One regular read configures ADC1 channel 6 (GPIO34), 0 dB attenuation and the RTC controller
+  analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
+  analogRead(FT8_ADC_PIN);
+  SENS.sar_meas_wait2.force_xpd_sar = 3;                // keep the SAR ADC powered
+  SENS.sar_meas_start1.meas1_start_force = 1;
+  SENS.sar_meas_start1.sar1_en_pad_force = 1;
+  SENS.sar_meas_start1.sar1_en_pad = (1 << 6);          // ADC1_CH6
+  SENS.sar_meas_start1.meas1_start_sar = 0;
+  SENS.sar_meas_start1.meas1_start_sar = 1;
+
+  adcTimer = timerBegin(16000000);                      // 80 MHz / 5
+  if (!adcTimer) return false;
+  timerAttachInterrupt(adcTimer, &adcTimerIsr);
+  timerAlarm(adcTimer, 16000000 / FT8_ADC_RATE, true, 0);
+  adcRunning = true;
+  return true;
 }
 
 void ft8Init() {
@@ -297,13 +374,6 @@ void ft8Init() {
   hashInit();
   callHashIf.lookup_hash = hashLookup;
   callHashIf.save_hash = hashSave;
-
-  // Configure ADC1 on GPIO35 (VBAT once at boot) and GPIO34 (Audio continuous with 0dB attenuation = 0..0.95V max hardware sensitivity for lower speaker volume)
-  analogReadResolution(12);
-  analogSetPinAttenuation(35, ADC_11db);
-  g_latestVbatRaw = (uint16_t)analogRead(35);
-  analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
-  lastValidAdc = (int16_t)analogRead(FT8_ADC_PIN);
 
   // Initialize FT8 DSP monitor: 200..2900 Hz @ 6000 Hz, time_osr=1 (allocated in 32-bit IRAM), freq_osr=1
   Serial.printf("[FT8] Before monitor: IRAM-only free=%u, largest 32bit=%u\r\n",
@@ -328,15 +398,17 @@ void ft8Init() {
 
   memset(webWf, 0, sizeof(webWf));
 
-  // Start periodic ADC timer (125 us oversampling into hardware crystal-locked 6000.000 Hz grid)
-  esp_timer_create_args_t timerArgs = {};
-  timerArgs.callback = &adcTimerCallback;
-  timerArgs.arg = NULL;
-  timerArgs.dispatch_method = ESP_TIMER_TASK;
-  timerArgs.name = "ft8_adc";
-  if (esp_timer_create(&timerArgs, &ft8AdcTimer) == ESP_OK) {
-    esp_timer_start_periodic(ft8AdcTimer, 125);
-  }
+  // Battery is read once before the ADC1 DMA driver takes over the unit
+  analogReadResolution(12);
+  analogSetPinAttenuation(35, ADC_11db);
+  g_latestVbatRaw = (uint16_t)analogRead(35);
+
+  // Start crystal-timed capture of GPIO34 audio
+  rsDesign();
+  bool adcOk = adcStart();
+  xTaskCreatePinnedToCore(adcTask, "ft8_adc", 4096, NULL, 5, NULL, 1);
+  Serial.printf("[FT8] ADC capture %s (%d Hz timer, resample %d/%d -> %d Hz)\r\n",
+                adcOk ? "running" : "FAILED", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
 
   ft8AddLog("[INFO] FT8 DSP receiver started on GPIO34 (6000 Hz, 200..2900 Hz)");
 }
@@ -631,11 +703,8 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
               isTest ? "TEST" : "LIVE", decodedNow, (unsigned long)ft8LastDurationMs, mon->wf.num_blocks);
   }
 
-  // Flush any ADC blocks queued during the 13.6s..14.65s guard-interval decode
-  // so the ring buffer is completely empty when the next 15s slot begins at :00.0s
+  // Discard ADC blocks queued during the decode (tail of this slot, not needed any more)
   adcReadBlock = adcWriteBlock;
-  adcSampleIdx = 0;
-  adcEpochUs = 0;
 
   return decodedNow;
 }
@@ -671,29 +740,29 @@ bool ft8TickWaterfall() {
   uint8_t slotSec = s % 15;
   bool digActive = (ft8DigitalMode != FT8_DIG_OFF) && (currentMode == USB || currentMode == LSB);
 
-  // Check if a new 15s FT8 slot has started (:00, :15, :30, :45 UTC) FIRST
-  // so we reset the monitor and align block 0 to :00.0s before draining new blocks
-  if (lastSlotSec != 255 && slotSec < lastSlotSec) {
-    if (!sleepOn() && isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0)) {
-      Serial.printf("[FT8] Recovering SI4732 SSB patch / GPIO34 bias (mean=%.0f, patch=0x%04X)...\r\n",
-                    lastAdcMean, rx.getPatchId());
-      unloadSSB();
-      selectBand(bandIdx, false);
-    }
-    adcReadBlock = adcWriteBlock;
-    adcSampleIdx = 0;
-    adcEpochUs = 0;
-    adcDroppedBlocks = 0;
-    monitor_reset(&liveMon);
-    slotDecoded = false;
-    if (uiLayoutIdx == UI_FT8) needRedraw = true;
-  }
   lastSlotSec = slotSec;
 
   // Drain any pending 160ms ADC blocks from the lock-free ring buffer
   while (adcReadBlock != adcWriteBlock) {
     uint8_t rBuf = adcReadBlock;
     int16_t *raw = (int16_t *)adcBuf[rBuf];
+
+    // A block from a new slot starts a new FT8 collection; block 0 begins exactly at the slot start
+    uint32_t blkSlot = adcBlockSlot[rBuf];
+    if (blkSlot != monSlotId) {
+      if (!sleepOn() && isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0)) {
+        Serial.printf("[FT8] Recovering SI4732 SSB patch / GPIO34 bias (mean=%.0f, patch=0x%04X)...\r\n",
+                      lastAdcMean, rx.getPatchId());
+        unloadSSB();
+        selectBand(bandIdx, false);
+      }
+      monSlotId = blkSlot;
+      monSlotUsable = (adcBlockIndex[rBuf] == 0);
+      adcDroppedBlocks = 0;
+      monitor_reset(&liveMon);
+      slotDecoded = digActive && !monSlotUsable;   // a slot whose start was missed cannot be time-aligned
+      if (uiLayoutIdx == UI_FT8) needRedraw = true;
+    }
     for (int i = 1; i < FT8_BLOCK_SAMPLES - 1; i++) {
       int16_t prev = raw[i - 1];
       int16_t cur  = raw[i];
@@ -832,6 +901,8 @@ uint8_t ft8GetViewMode() {
 
 void ft8SetDigitalMode(uint8_t digMode) {
   if (digMode > 2) digMode = FT8_DIG_OFF;
+  // FT8/FT4 run the SI4732 loud for the ADC, so silence the speaker when entering them and restore it when leaving
+  if (digMode != ft8DigitalMode) ft8SpeakerMuted = (digMode != FT8_DIG_OFF);
   ft8DigitalMode = digMode;
   if (monInitialized) monitor_reset(&liveMon);
   slotDecoded = false;
@@ -923,18 +994,16 @@ void ft8ToggleSpeakerMute() {
 // Single place that decides SI4732 volume and speaker amplifier state.
 // FT8/FT4 need a fixed, high SI4732 line level on GPIO34 (volume <= 36 is below the ADC noise floor),
 // so in digital modes the speaker is silenced with the amplifier instead of the SI4732 volume.
+// The speaker and GPIO34 share the SI4732 line out: with the speaker on, the user volume wins
+// (decoding is best near ft8AdcVolume); with it off, the ADC level is used.
 void ft8ApplyAudio() {
   bool digital = ft8GetDigitalMode() != FT8_DIG_OFF;
-  bool speaker = !sleepOn() && !muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH) && !(digital && ft8SpeakerMuted);
+  bool speaker = !sleepOn() && !muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH) && !ft8SpeakerMuted;
 
-  if (digital) {
-    rx.setVolume(ft8AdcVolume);
+  // The SI4732 keeps producing audio for the ADC whatever the speaker does; MUTE_MAIN/SQUELCH are handled by muteOn()
+  if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
+    rx.setVolume(digital && !speaker ? ft8AdcVolume : volume);
     rx.setAudioMute(false);
-  } else if (speaker) {
-    rx.setVolume(volume);
-    rx.setAudioMute(false);
-  } else if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
-    rx.setVolume(0);
   }
 #if PIN_AMP_EN >= 0
   digitalWrite(PIN_AMP_EN, speaker ? HIGH : LOW);
@@ -951,12 +1020,10 @@ bool ft8IsSpeakerMuted() {
 }
 
 bool ft8ToggleAdcTimer() {
-  static bool running = true;
-  if (!ft8AdcTimer) return false;
-  if (running) esp_timer_stop(ft8AdcTimer);
-  else esp_timer_start_periodic(ft8AdcTimer, 125);
-  running = !running;
-  return running;
+  if (!adcTimer) return false;
+  if (adcRunning) { adcRunning = false; timerStop(adcTimer); }
+  else { timerStart(adcTimer); adcRunning = true; }
+  return adcRunning;
 }
 
 void ft8ToggleAudioStream() {

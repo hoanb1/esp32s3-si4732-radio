@@ -345,6 +345,7 @@ details.card summary::-webkit-details-marker{display:none}
           <input type="range" id="volSlider" min="0" max="63" oninput="T('volText',this.value)" onchange="sendCtrl('volume',{val:this.value})">
           <button onclick="changeVol(5)">+</button>
         </div>
+        <div class="row" id="volHint" style="display:none;font-size:12px;opacity:.7"></div>
         <div class="row">
           <button id="muteBtn" class="flex1" onclick="sendCtrl('mute')">🔊 Speaker</button>
           <button id="webAudioBtn" class="primary flex1" onclick="toggleWebAudio()">🎧 Web audio: OFF</button>
@@ -774,6 +775,9 @@ async function fetchStatus() {
 
   V('volSlider', d.volume);
   if ($('volSlider') !== document.activeElement) T('volText', d.volume);
+  const dig = d.dig_mode !== undefined && d.dig_mode !== 2;
+  S('volHint', 'display', dig ? '' : 'none');
+  if (dig) T('volHint', d.mute ? 'FT8/FT4: speaker off, decoder level fixed at 48' : 'FT8/FT4: volume also feeds the decoder, keep it near 48');
   T('muteBtn', d.mute ? '🔇 Speaker muted' : '🔊 Speaker on');
   C('muteBtn', d.mute ? 'danger flex1' : 'flex1');
 
