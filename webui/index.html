@@ -29,13 +29,13 @@ body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background
 
 /* Header */
 header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 14px;gap:8px}
-h1{font-size:1.1rem;color:var(--cyan);font-weight:700}
+h1{font-size:1.1rem;color:var(--text);font-weight:700}
 h1 small{font-size:.75rem;color:var(--muted);font-weight:500;margin-left:6px}
 .badges{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .badge{padding:3px 9px;border-radius:999px;font-size:.74rem;font-weight:600;background:#1a2b47;border:1px solid var(--border);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .badge.ok{background:rgba(0,230,118,.12);color:var(--green);border-color:rgba(0,230,118,.4)}
 .badge.warn{background:rgba(255,171,0,.14);color:var(--amber);border-color:rgba(255,171,0,.4)}
-.badge.info{background:rgba(0,229,255,.12);color:var(--cyan);border-color:rgba(0,229,255,.35)}
+.badge.info{color:var(--text)}
 .badge.err{background:rgba(255,82,82,.14);color:var(--red);border-color:rgba(255,82,82,.45)}
 .dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
 
@@ -53,14 +53,14 @@ h1 small{font-size:.75rem;color:var(--muted);font-weight:500;margin-left:6px}
 .sb.plus{background:var(--red)}
 .icons{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pill{padding:2px 7px;border-radius:4px;background:#1a2942;color:var(--muted);border:1px solid #2b4266;font-size:.7rem}
-.pill.on{background:rgba(255,171,0,.2);color:var(--amber);border-color:var(--amber)}
+.pill.on{background:rgba(0,229,255,.15);color:var(--cyan);border-color:var(--cyan)}
 .pill.btn{cursor:pointer}
 
 .vfo{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:2px 4px}
 .bandmode{display:flex;flex-direction:column;gap:5px;min-width:88px}
-.band{font-size:1.2rem;font-weight:900;color:var(--amber);line-height:1}
-.modebox{display:inline-block;padding:2px 10px;border:2px solid var(--amber);border-radius:6px;color:var(--amber);font-weight:900;font-size:.95rem;text-align:center;letter-spacing:1px}
-.modebox.dig{border-color:var(--green);color:var(--green);background:rgba(0,230,118,.1)}
+.band{font-size:1.2rem;font-weight:900;color:var(--text);line-height:1}
+.modebox{display:inline-block;padding:2px 10px;border:2px solid var(--border);border-radius:6px;color:var(--text);font-weight:900;font-size:.95rem;text-align:center;letter-spacing:1px}
+.modebox.dig{border-color:var(--cyan);color:var(--cyan)}
 .freq{display:flex;align-items:baseline;gap:8px;margin:0 auto}
 .freq b{font-size:3rem;font-weight:900;color:#fff;letter-spacing:1px;line-height:1}
 .freq>span{font-size:1rem;color:var(--cyan);font-weight:800}
@@ -91,11 +91,11 @@ details.more[open]>summary{margin-bottom:6px}
 @media(max-width:420px){.freq b{font-size:2.3rem}}
 .vfo-r{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:.73rem;color:var(--muted)}
 .rds{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:20px;padding:0 4px;font-size:.8rem;color:var(--cyan);font-weight:600;flex-wrap:wrap}
-.rds .st{color:var(--green);font-weight:800}
+.rds .st{color:var(--text);font-weight:800}
 #scaleCanvas{width:100%;height:38px;display:block;background:#040811;border:1px solid #1d3254;border-radius:6px;cursor:pointer}
 
 .side-r{display:flex;flex-direction:column;justify-content:flex-start;gap:7px;background:#081120;border:1px solid #22385c;border-radius:8px;padding:8px}
-.hdr-sm{display:flex;justify-content:space-between;align-items:center;font-size:.76rem;font-weight:700;color:var(--cyan)}
+.hdr-sm{display:flex;justify-content:space-between;align-items:center;font-size:.76rem;font-weight:700;color:var(--muted)}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
 .g5{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
 .g3 button,.g5 button{padding:5px 3px;font-size:.73rem}
@@ -107,11 +107,11 @@ details.more[open]>summary{margin-bottom:6px}
 @media(max-width:780px){.grid-2,.grid-3{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;min-width:0}
 .card-hdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:7px;gap:8px;flex-wrap:wrap}
-.card-title{font-size:.86rem;font-weight:700;color:var(--cyan);text-transform:uppercase;letter-spacing:.4px}
+.card-title{font-size:.86rem;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.4px}
 .lbl{font-size:.75rem;color:var(--muted);font-weight:600}
 .grp{background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px}
 .grp-hdr{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:.76rem;color:var(--muted);flex-wrap:wrap}
-.grp-hdr b{color:var(--cyan);font-size:.82rem}
+.grp-hdr b{color:var(--text);font-size:.82rem}
 .row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .flex1{flex:1;min-width:0}
 
@@ -120,12 +120,10 @@ button{background:#1b2c4a;color:var(--text);border:1px solid #2d4670;padding:6px
 button:hover{background:#253c63;border-color:var(--cyan)}
 button:active{transform:translateY(1px)}
 button.primary{background:#006978;border-color:var(--cyan);color:#fff}
-button.success{background:#145a32;border-color:var(--green);color:#fff}
-button.warn{background:#6e4700;border-color:var(--amber);color:#fff}
-button.danger{background:#6e1c1c;border-color:var(--red);color:#fff}
+button.danger{color:var(--red)}
+button.danger:hover{border-color:var(--red)}
 button.active{background:rgba(0,229,255,.22);border-color:var(--cyan);color:var(--cyan)}
 button:disabled{opacity:.35;cursor:not-allowed}
-button.active-dig{background:rgba(0,230,118,.22);border-color:var(--green);color:var(--green)}
 button.sm{padding:3px 8px;font-size:.72rem}
 input[type=text],input[type=password],select{background:#091220;border:1px solid #2b446e;color:var(--text);padding:6px 9px;border-radius:7px;font:inherit;font-size:.82rem;outline:none;min-width:0}
 input:focus,select:focus{border-color:var(--cyan)}
@@ -134,17 +132,15 @@ input[type=range]{accent-color:var(--cyan);cursor:pointer;width:100%;min-width:6
 .dialbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dialbar .dialmodes{flex:1;display:flex;gap:4px;flex-wrap:wrap}
 .dialbar .dialmodes button{padding:3px 10px;font-size:.74rem;font-weight:800;min-width:46px}
-select.band{background:none;border:none;padding:0 2px;font-family:inherit;font-size:1.2rem;font-weight:900;color:var(--amber);cursor:pointer;max-width:120px}
+select.band{background:none;border:none;padding:0 2px;font-family:inherit;font-size:1.2rem;font-weight:900;color:var(--text);cursor:pointer;max-width:120px}
 select.band option{color:var(--text);background:var(--card);font-size:.9rem;font-weight:600}
 @media(max-width:650px){.modes{grid-template-columns:repeat(4,1fr)}}
 .modes button{padding:7px 4px;font-size:.82rem;font-weight:800;flex-direction:column;gap:1px}
 .modes small{font-size:.62rem;font-weight:500;color:var(--muted)}
-.modes .active small,.modes .active-dig small{color:inherit}
+.modes .active small{color:inherit}
 .tune{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
 @media(max-width:420px){.tune{grid-template-columns:repeat(4,1fr)}}
 .tune button{font-size:.76rem;padding:6px 3px}
-.tune .n{color:#ff9e80;border-color:#4e2c26}
-.tune .p{color:#80d8ff;border-color:#24455c}
 .g7{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
 .sl{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .sl div{display:flex;align-items:center;gap:4px}
@@ -155,9 +151,9 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 .chip{display:inline-flex;align-items:center;background:#152540;border:1px solid #29436b;border-radius:7px;overflow:hidden;font-size:.75rem}
 .chip button{background:transparent;border:none;border-radius:0;padding:4px 8px}
 .chip button:hover{background:rgba(0,229,255,.15);color:var(--cyan)}
-.chip .f{color:var(--green);margin-left:4px;font-size:.72rem}
-.chip .m{color:var(--amber);font-size:.66rem;margin-left:3px}
-.chip .del{background:rgba(255,82,82,.15);border-left:1px solid #29436b;color:var(--red);padding:4px 7px;font-weight:800}
+.chip .f{color:var(--text);margin-left:4px;font-size:.72rem}
+.chip .m{color:var(--muted);font-size:.66rem;margin-left:3px}
+.chip .del{border-left:1px solid #29436b;color:var(--muted);padding:4px 7px;font-weight:800}
 .chip .del:hover{background:var(--red);color:#fff}
 
 /* Waterfall */
@@ -168,7 +164,7 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 .wf-axis{display:flex;justify-content:space-between;padding:3px 8px;background:#0a1322;font-size:.72rem;color:var(--muted);border-top:1px solid #1c2e4a}
 
 /* FT8 / FT4 */
-.ft8{border-color:rgba(0,230,118,.45)}
+.ft8{}
 .hidden{display:none!important}
 /* Station map */
 #stationMap{position:relative;height:400px;border:1px solid #1e3252;border-radius:8px;background:#050b15;overflow:hidden;touch-action:none;cursor:grab;user-select:none}
@@ -181,7 +177,7 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 #mapSvg .glabel{fill:#24405f;font:600 7px ui-monospace,monospace}
 #mapSvg .dot{stroke:#050b15;vector-effect:non-scaling-stroke;cursor:pointer}
 #mapSvg .dot:hover{stroke:#fff}
-#mapSvg .home{fill:#ff4081;stroke:#fff;vector-effect:non-scaling-stroke}
+#mapSvg .home{fill:var(--cyan);stroke:#fff;vector-effect:non-scaling-stroke}
 .map-btns{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px}
 .map-btns button{width:28px;height:28px;padding:0;font-size:.9rem}
 .map-pop{position:absolute;z-index:2;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.76rem;line-height:1.45;pointer-events:none;max-width:280px;box-shadow:0 4px 14px rgba(0,0,0,.5)}
@@ -190,19 +186,19 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 .slot{display:flex;align-items:center;gap:10px;background:#091322;padding:7px 12px;border-radius:8px;border:1px solid #1e3456;flex-wrap:wrap}
 .slot-bar{flex:1;min-width:120px;height:12px;background:#050b14;border-radius:6px;overflow:hidden;border:1px solid #253c61}
 .slot-fill{height:100%;width:0;background:var(--cyan);transition:width .3s linear}
-.slot-fill.dec{background:var(--amber)}
+.slot-fill.dec{background:var(--muted)}
 .tbl{max-height:300px;overflow:auto;border:1px solid #1e3252;border-radius:8px;background:#08111f}
 table{width:100%;border-collapse:collapse;font-size:.8rem}
 th,td{padding:5px 9px;text-align:left;border-bottom:1px solid #162640;white-space:nowrap}
 td:last-child{white-space:normal}
-th{background:#12213a;color:var(--cyan);position:sticky;top:0;font-size:.72rem;text-transform:uppercase}
-tr.cq{background:rgba(0,230,118,.1);color:#9cffc7;font-weight:700}
-.call{color:var(--amber);font-weight:700;cursor:pointer;text-decoration:underline dotted}
+th{background:#12213a;color:var(--muted);position:sticky;top:0;font-size:.72rem;text-transform:uppercase}
+tr.cq{background:rgba(0,229,255,.07);font-weight:700}
+.call{color:var(--cyan);font-weight:700;cursor:pointer;text-decoration:underline dotted}
 .empty{text-align:center;color:var(--muted);padding:16px!important;white-space:normal}
 .vu{height:8px;background:#060c17;border:1px solid #243a5e;border-radius:5px;overflow:hidden}
 .vu div{height:100%;width:0;background:linear-gradient(90deg,#00e676 0%,#ffab00 75%,#ff5252 100%)}
 
-details.card summary{cursor:pointer;font-weight:700;color:var(--cyan);font-size:.86rem;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px}
+details.card summary{cursor:pointer;font-weight:700;color:var(--text);font-size:.86rem;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px}
 details.card summary::-webkit-details-marker{display:none}
 .logs{background:#060c16;border:1px solid #1d3152;border-radius:8px;padding:8px 10px;height:160px;overflow-y:auto;font-size:.74rem;color:#9ec3e6;white-space:pre-wrap;word-break:break-word}
 .wslots{display:grid;grid-template-columns:1fr 1fr;gap:6px}
@@ -236,8 +232,8 @@ details.card summary::-webkit-details-marker{display:none}
           <span id="sLevelText" class="mono" style="color:var(--green)">S0</span>
         </div>
         <div class="icons">
-          <span>RSSI <b id="rssiVal" style="color:var(--cyan)">0</b> dBµV</span>
-          <span>SNR <b id="snrVal" style="color:var(--green)">0</b> dB</span>
+          <span>RSSI <b id="rssiVal">0</b> dBµV</span>
+          <span>SNR <b id="snrVal">0</b> dB</span>
           <span class="pill" id="stereoPill">MONO</span>
           <span class="pill btn" id="layoutPill" onclick="sendCtrl('view_toggle')" title="Cycle the LCD layout">LCD: --</span>
         </div>
@@ -253,10 +249,10 @@ details.card summary::-webkit-details-marker{display:none}
         </div>
         <div class="vfo-r">
           <div class="row">
-            <button class="warn" onclick="sendCtrl('seek',{dir:-1})" title="Seek down">⏮ Seek</button>
-            <button class="warn" onclick="sendCtrl('seek',{dir:1})" title="Seek up">Seek ⏭</button>
+            <button onclick="sendCtrl('seek',{dir:-1})" title="Seek down">⏮ Seek</button>
+            <button onclick="sendCtrl('seek',{dir:1})" title="Seek up">Seek ⏭</button>
           </div>
-          <span class="mono">BFO <b id="bfoChip" style="color:var(--cyan)">0 Hz</b> · Cal <b id="calChip" style="color:var(--amber)">0 Hz</b></span>
+          <span class="mono">BFO <b id="bfoChip">0 Hz</b> · Cal <b id="calChip">0 Hz</b></span>
         </div>
       </div>
 
@@ -275,7 +271,7 @@ details.card summary::-webkit-details-marker{display:none}
 
       <div class="rds">
         <div>📡 <span class="st" id="stationDisplay">---</span> <span id="rdsTextDisplay" class="muted"></span></div>
-        <div class="muted" style="font-size:.74rem">Decoded: <b id="msgCountTop" style="color:var(--green)">0</b></div>
+        <div class="muted" style="font-size:.74rem">Decoded: <b id="msgCountTop" style="color:var(--text)">0</b></div>
       </div>
 
       <div class="tune dialsteps mono">
@@ -285,7 +281,7 @@ details.card summary::-webkit-details-marker{display:none}
         <button class="n" onclick="tuneStep(-1)">-1k</button>
         <button class="n hzb" onclick="tuneHz(-100)" title="Fine tune (SSB, CW, FT8, FT4)">-100</button>
         <button class="n hzb" onclick="tuneHz(-10)" title="Fine tune (SSB, CW, FT8, FT4)">-10</button>
-        <button class="warn hzb" onclick="sendCtrl('bfo_reset')" title="Clear the BFO offset">0</button>
+        <button class="hzb" onclick="sendCtrl('bfo_reset')" title="Clear the BFO offset">0</button>
         <button class="p hzb" onclick="tuneHz(10)" title="Fine tune (SSB, CW, FT8, FT4)">+10</button>
         <button class="p hzb" onclick="tuneHz(100)" title="Fine tune (SSB, CW, FT8, FT4)">+100</button>
         <button class="p" onclick="tuneStep(1)">+1k</button>
@@ -306,7 +302,7 @@ details.card summary::-webkit-details-marker{display:none}
         <div class="row" id="volHint" style="display:none;font-size:12px;opacity:.7"></div>
         <div class="row">
           <button id="muteBtn" class="flex1" onclick="sendCtrl('mute')">🔊 Speaker</button>
-          <button id="webAudioBtn" class="primary flex1" onclick="toggleWebAudio()">🎧 Web audio: OFF</button>
+          <button id="webAudioBtn" class="flex1" onclick="toggleWebAudio()">🎧 Web audio: OFF</button>
         </div>
         <div class="row" style="flex-wrap:nowrap">
           <span class="lbl" style="white-space:nowrap">VU (GPIO34)</span>
@@ -405,7 +401,7 @@ details.card summary::-webkit-details-marker{display:none}
       </select>
       <div class="row" title="Saved to the same list as the LCD Memory menu">
         <input type="text" id="bmNameInput" class="flex1" maxlength="9" placeholder="Save current frequency as… (max 9 chars)" onkeydown="if(event.key==='Enter')saveCurrentBookmark()">
-        <button class="success" onclick="saveCurrentBookmark()">+ Save</button>
+        <button class="primary" onclick="saveCurrentBookmark()">+ Save</button>
       </div>
       <div class="chips" id="bookmarksContainer"></div>
     </div>
@@ -416,7 +412,7 @@ details.card summary::-webkit-details-marker{display:none}
     <div class="card-hdr">
       <span class="card-title">🌊 Audio Waterfall (200–2900 Hz)</span>
       <div class="row">
-        <span id="wfHoverFreq" class="mono" style="font-size:.78rem;color:var(--amber);min-width:62px">--- Hz</span>
+        <span id="wfHoverFreq" class="mono" style="font-size:.78rem;min-width:62px">--- Hz</span>
         <button id="wfBtn" onclick="toggleWf()" style="padding:3px 9px;font-size:.74rem" title="Stop fetching the waterfall if the page or the radio lags">Waterfall: ON</button>
         <select id="wfPalette" style="padding:3px 6px;font-size:.74rem">
           <option value="0">Classic</option>
@@ -436,7 +432,7 @@ details.card summary::-webkit-details-marker{display:none}
   <div class="card ft8 hidden" id="ft8DecoderCard">
     <div class="card-hdr">
       <div class="row">
-        <span class="card-title" style="color:var(--green)">🛰️ <span id="digTitleMode">FT8</span> Decoder</span>
+        <span class="card-title">🛰️ <span id="digTitleMode">FT8</span> Decoder</span>
         <span class="badge ok" id="decodeStatusBadge">Listening</span>
       </div>
       <div class="row">
@@ -448,7 +444,7 @@ details.card summary::-webkit-details-marker{display:none}
     </div>
 
     <div class="slot">
-      <b id="slotText" class="mono" style="font-size:.86rem;min-width:120px;color:var(--cyan)">Slot 0 / 15 s</b>
+      <b id="slotText" class="mono" style="font-size:.86rem;min-width:120px">Slot 0 / 15 s</b>
       <div class="slot-bar"><div class="slot-fill" id="slotFill"></div></div>
       <span id="lastDurText" class="muted" style="font-size:.76rem">Auto decode each slot</span>
     </div>
@@ -462,7 +458,7 @@ details.card summary::-webkit-details-marker{display:none}
       </div>
       <div class="row">
         <input type="text" id="callFilter" placeholder="Filter call / grid / text" style="padding:4px 9px;font-size:.78rem;width:190px" oninput="renderTrafficTable()">
-        <label class="lbl" style="color:var(--green);display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="cqOnlyChk" onchange="renderTrafficTable()"> CQ only</label>
+        <label class="lbl" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="cqOnlyChk" onchange="renderTrafficTable()"> CQ only</label>
         <button class="sm" onclick="copyTrafficLog()">📋 Copy</button>
         <button class="sm danger" onclick="clearTraffic()">🗑️ Clear</button>
       </div>
@@ -480,7 +476,7 @@ details.card summary::-webkit-details-marker{display:none}
   <div class="card hidden" id="mapCard">
     <div class="card-hdr">
       <div class="row">
-        <span class="card-title" style="color:var(--green)">🗺️ Stations heard</span>
+        <span class="card-title">🗺️ Stations heard</span>
         <span class="badge info" id="mapCount">0 stations</span>
       </div>
       <div class="row">
@@ -494,7 +490,7 @@ details.card summary::-webkit-details-marker{display:none}
       </div>
     </div>
     <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapDots"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
-    <div class="lbl">SNR:<span class="legend-dot" style="background:#00e676"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#ffab00"></span>-13…-18<span class="legend-dot" style="background:#ff5252"></span>below -18 · grid squares are ~100 × 200 km, so a dot marks the square's center</div>
+    <div class="lbl">SNR:<span class="legend-dot" style="background:#e0fbff"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#00838f"></span>-13…-18<span class="legend-dot" style="background:#4a6380"></span>below -18 · grid squares are ~100 × 200 km, so a dot marks the square's center</div>
   </div>
 
   <!-- Live radio log (Serial output pushed over /ws) -->
@@ -527,7 +523,7 @@ details.card summary::-webkit-details-marker{display:none}
         <div id="wifiSlots" class="wslots"></div>
         <div class="row">
           <button class="primary" onclick="saveWifiConfig(false)">💾 Save</button>
-          <button class="success" onclick="saveWifiConfig(true)">⚡ Save &amp; reconnect</button>
+          <button onclick="saveWifiConfig(true)">⚡ Save &amp; reconnect</button>
           <span id="wifiMsg" class="lbl"></span>
         </div>
       </div>
@@ -776,7 +772,7 @@ function drawTuningScale(d) {
   }
   ctx.strokeStyle = '#3d5e8c'; ctx.stroke(minor);
   ctx.strokeStyle = '#88b4e6'; ctx.stroke(major);
-  ctx.strokeStyle = ctx.fillStyle = '#ff5252';
+  ctx.strokeStyle = ctx.fillStyle = '#00e5ff';
   ctx.lineWidth = 2.5;
   ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(cx - 6, 0); ctx.lineTo(cx + 6, 0); ctx.lineTo(cx, 8); ctx.closePath(); ctx.fill();
@@ -832,7 +828,7 @@ function applyStatus(d) {
   const dialBand = $('dialBandSelect');
   if (dialBand !== document.activeElement && dialBand.value !== String(d.band_id)) dialBand.value = d.band_id;
   const activeMode = (dig || mode === 'CW') ? mode : ['FM', 'LSB', 'USB', 'AM'][d.mode_id];
-  for (const m in MODE_CMD) C('mBtn' + m, m === activeMode ? (dig ? 'active-dig' : 'active') : '');
+  for (const m in MODE_CMD) C('mBtn' + m, m === activeMode ? 'active' : '');
 
   T('stationDisplay', d.station || (isFt8 ? 'FT8 15 s' : isFt4 ? 'FT4 7.5 s' : '---'));
   T('rdsTextDisplay', d.rds_text ? '— ' + d.rds_text : '');
@@ -876,7 +872,7 @@ function applyStatus(d) {
   S('volHint', 'display', dig ? '' : 'none');
   if (dig) T('volHint', d.web_audio ? 'FT8/FT4 decoding paused while web audio is on' : d.mute ? 'FT8/FT4: speaker off, decoder level fixed at 48' : 'FT8/FT4: volume also feeds the decoder, keep it near 48');
   T('muteBtn', d.mute ? '🔇 Speaker muted' : '🔊 Speaker on');
-  C('muteBtn', d.mute ? 'danger flex1' : 'flex1');
+  C('muteBtn', d.mute ? 'flex1' : 'active flex1');
 
   const vu = Math.min(100, d.audio_level || 0);
   S('vuFill', 'width', vu + '%');
@@ -976,7 +972,7 @@ try { wfPal = parseInt(localStorage.getItem('wfPal') || '0', 10) || 0; } catch (
 try { wfOn = localStorage.getItem('wfOn') !== '0'; } catch (e) {}
 function showWfState() {
   T('wfBtn', wfOn ? 'Waterfall: ON' : 'Waterfall: OFF');
-  C('wfBtn', wfOn ? 'success' : '');
+  C('wfBtn', wfOn ? 'active' : '');
   wfCanvas.parentElement.classList.toggle('off', !wfOn);
 }
 function toggleWf() {
@@ -1046,8 +1042,8 @@ function renderTrafficTable() {
     return;
   }
   $('trafficBody').innerHTML = rows.map(m => {
-    const snrColor = m.snr >= 0 ? 'var(--green)' : (m.snr >= -12 ? 'var(--cyan)' : 'var(--muted)');
-    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrColor};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}</td></tr>`;
+    const snrCol = snrColor(m.snr);
+    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrCol};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}</td></tr>`;
   }).join('');
 }
 $('trafficBody').addEventListener('click', e => {
@@ -1211,7 +1207,7 @@ function renderLog() {
 function toggleWebAudio() {
   webAudioOn = !webAudioOn;
   T('webAudioBtn', webAudioOn ? '🎧 Web audio: ON' : '🎧 Web audio: OFF');
-  C('webAudioBtn', webAudioOn ? 'success flex1' : 'primary flex1');
+  C('webAudioBtn', webAudioOn ? 'active flex1' : 'flex1');
   if (webAudioOn) {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     audioCtx.resume();
@@ -1366,7 +1362,7 @@ function clearMap() {
   if (!confirm('Remove all stations from the map?')) return;
   stations = {}; saveStations(); renderMap();
 }
-function snrColor(s) { return s >= 0 ? '#00e676' : s >= -12 ? '#00e5ff' : s >= -18 ? '#ffab00' : '#ff5252'; }
+function snrColor(s) { return s >= 0 ? '#e0fbff' : s >= -12 ? '#00e5ff' : s >= -18 ? '#00838f' : '#4a6380'; }
 
 // Equirectangular map, 2 SVG units per degree (same projection as /map.svg); centered on the home longitude
 const SVGNS = 'http://www.w3.org/2000/svg';
