@@ -101,6 +101,7 @@ uint32_t ft8GetWebWaterfallRowCount(); // rows added to the web waterfall since 
 #define FT8_HIRES_ROWS 8
 uint16_t ft8GetHiResBins();
 const uint8_t *ft8GetHiResRow(uint32_t rowNo);
+const uint8_t *ft8GetHiResMeta(uint32_t rowNo);   // [block index in FT8 slot or 255, slot of the hour 0..239]
 void ft8AddLog(const char *fmt, ...);
 String ft8GetLogsJson();
 size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index); // WAV audio stream from live ADC ring buffer

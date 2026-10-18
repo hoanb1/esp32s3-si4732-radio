@@ -103,9 +103,12 @@ static uint32_t webWfRowCount = 0;   // rows ever added, so /ws can send only th
 #define HR_ROWS     8
 #define HR_MAX_BINS 440
 static uint8_t hrRows[HR_ROWS][HR_MAX_BINS / 2];
+static uint8_t hrMeta[HR_ROWS][2];   // block index within the FT8 slot (255 = not slot aligned), slot of the hour (0..239)
 static uint16_t hrBins = 0;
 
-static void storeHiResRow(const uint8_t *mag, int numBins, uint32_t rowNo) {
+static void storeHiResRow(const uint8_t *mag, int numBins, uint32_t rowNo, uint8_t blockInSlot, uint8_t slotOfHour) {
+  hrMeta[rowNo % HR_ROWS][0] = blockInSlot;
+  hrMeta[rowNo % HR_ROWS][1] = slotOfHour;
   if (numBins > HR_MAX_BINS) numBins = HR_MAX_BINS;
   // Row median (0.5 dB units) from a histogram
   uint16_t hist[256] = {0};
@@ -583,7 +586,8 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
 
   // Scroll waterfall (WEB_WF_ROWS x 120 cols) down by 1 row
   memmove(&webWf[120], &webWf[0], (WEB_WF_ROWS - 1) * 120);
-  storeHiResRow(rowMag0, numBins, webWfRowCount);
+  bool slotAligned = (ft8DigitalMode != FT8_DIG_OFF) && (currentMode == USB || currentMode == LSB) && monSlotUsable;
+  storeHiResRow(rowMag0, numBins, webWfRowCount, slotAligned ? (uint8_t)blockIdx : 255, (uint8_t)(monSlotId % 240));
   webWfRowCount++;
   bool ssbMode = isSSB();
   for (int c = 0; c < 120; c++) {
@@ -1180,6 +1184,7 @@ const uint8_t* ft8GetWebWaterfallBuffer() { return webWf; }
 uint32_t ft8GetWebWaterfallRowCount() { return webWfRowCount; }
 uint16_t ft8GetHiResBins() { return hrBins; }
 const uint8_t *ft8GetHiResRow(uint32_t rowNo) { return hrRows[rowNo % HR_ROWS]; }
+const uint8_t *ft8GetHiResMeta(uint32_t rowNo) { return hrMeta[rowNo % HR_ROWS]; }
 
 // Stream WAV audio (960 samples @ 6000 Hz, 16-bit PCM mono = 1964 bytes total) in chunks of any size
 uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count) {

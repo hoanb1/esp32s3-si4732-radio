@@ -161,7 +161,8 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 .chip .del:hover{background:var(--red);color:#fff}
 
 /* Waterfall */
-.wf{background:#040811;border:1px solid #253b61;border-radius:8px;overflow:hidden}
+.wf{background:#040811;border:1px solid #253b61;border-radius:8px;overflow:hidden;position:relative}
+#wfOverlay{position:absolute;left:0;top:0;width:100%;height:420px;pointer-events:none}
 .wf.off canvas{opacity:.25}
 #wfCanvas{width:100%;height:420px;display:block;image-rendering:pixelated;image-rendering:crisp-edges;cursor:crosshair}
 .wf-axis{display:flex;justify-content:space-between;padding:3px 8px;background:#0a1322;font-size:.72rem;color:var(--muted);border-top:1px solid #1c2e4a}
@@ -409,6 +410,7 @@ details.card summary::-webkit-details-marker{display:none}
     </div>
     <div class="wf">
       <canvas id="wfCanvas" width="120" height="200"></canvas>
+      <canvas id="wfOverlay"></canvas>
       <div class="wf-axis mono"><span>200</span><span>740</span><span>1280</span><span>1820</span><span>2360</span><span>2900 Hz</span></div>
     </div>
   </div>
@@ -1084,9 +1086,12 @@ function addWaterfallRows(b) {
 
 // 'H' frame: bins (u16 LE), row count, then rows of bins/2 bytes, oldest first; 4 bits per 6.25 Hz bin
 // = level above the row median in 1.5 dB steps. The canvas switches to one pixel per bin.
+// Each row also carries its block index in the FT8 slot (0 = :00/:15/:30/:45, 255 = not slot aligned)
+// and the slot of the hour; FT8/FT4 slot starts are drawn as labelled lines on an overlay canvas.
 let hrW = 0, hrBuf = null, hrImg = null;
+const hrBlk = new Uint8Array(WF_ROWS).fill(255), hrSlot = new Uint8Array(WF_ROWS);
 function addHiResRows(b) {
-  const bins = b[1] | (b[2] << 8), n = b[3], rb = (bins + 1) >> 1;
+  const bins = b[1] | (b[2] << 8), n = b[3], rb = 2 + ((bins + 1) >> 1);
   if (!bins || !n || b.length < 4 + n * rb) return;
   if (bins !== hrW) {
     hrW = bins;
@@ -1096,7 +1101,9 @@ function addHiResRows(b) {
   }
   for (let r = 0; r < n; r++) {
     hrBuf.copyWithin(bins, 0, (WF_ROWS - 1) * bins);   // newest row on top
-    const o = 4 + r * rb;
+    hrBlk.copyWithin(1, 0, WF_ROWS - 1); hrSlot.copyWithin(1, 0, WF_ROWS - 1);
+    hrBlk[0] = b[4 + r * rb]; hrSlot[0] = b[5 + r * rb];
+    const o = 6 + r * rb;
     for (let k = 0; k < bins; k++) {
       const v = b[o + (k >> 1)];
       hrBuf[k] = ((k & 1) ? v >> 4 : v & 15) * 17;
@@ -1112,6 +1119,32 @@ function drawHiRes() {
     px[j] = lut[k]; px[j + 1] = lut[k + 1]; px[j + 2] = lut[k + 2]; px[j + 3] = 255;
   }
   wfCtx.putImageData(hrImg, 0, 0);
+  drawSlotOverlay();
+}
+
+const wfOv = $('wfOverlay'), wfOvCtx = wfOv.getContext('2d');
+function drawSlotOverlay() {
+  const r = wfOv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (wfOv.width !== W || wfOv.height !== H) { wfOv.width = W; wfOv.height = H; }
+  wfOvCtx.clearRect(0, 0, W, H);
+  if (!(curStatus.mode === 'FT8' || curStatus.mode === 'FT4')) return;
+  const now = new Date(), hourNow = now.getUTCHours(), minNow = now.getUTCMinutes();
+  wfOvCtx.font = `${11 * dpr}px monospace`;
+  wfOvCtx.textBaseline = 'bottom';
+  for (let i = 0; i < WF_ROWS; i++) {
+    if (hrBlk[i] !== 0) continue;
+    const y = Math.round((i + 1) / WF_ROWS * H) - dpr;   // bottom edge of the first row of the slot
+    wfOvCtx.fillStyle = 'rgba(255,193,7,.85)';
+    wfOvCtx.fillRect(0, y, W, Math.max(1, dpr));
+    const sec = hrSlot[i] * 15, mm = Math.floor(sec / 60);
+    const hh = (mm > minNow + 5 ? hourNow + 23 : hourNow) % 24;   // slot from the previous hour
+    const label = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`;
+    wfOvCtx.fillStyle = 'rgba(4,8,17,.75)';
+    wfOvCtx.fillRect(2 * dpr, y - 14 * dpr, wfOvCtx.measureText(label).width + 6 * dpr, 13 * dpr);
+    wfOvCtx.fillStyle = '#ffc107';
+    wfOvCtx.fillText(label, 5 * dpr, y - 2 * dpr);
+  }
 }
 
 function addLogLine(line) {

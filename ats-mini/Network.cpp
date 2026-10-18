@@ -64,7 +64,8 @@ AsyncWebServer server(80);
 //   text  '{...}'   status JSON (same as /api/status), every 500 ms
 //   text  other     a radio log line (WebLog.h)
 //   binary 'W' n    the n newest waterfall rows (120 bytes each, newest first)
-//   binary 'H' bins(u16 LE) n   n full-resolution rows (bins/2 bytes each, 4 bits per 6.25 Hz bin, oldest first)
+//   binary 'H' bins(u16 LE) n   n full-resolution rows, oldest first, each: block index in the FT8 slot
+//                   (255 = not slot aligned), slot of the hour (0..239), bins/2 bytes (4 bits per 6.25 Hz bin)
 //   binary 'A' seq  web audio: uint32 LE start sample number + 6 kHz mu-law samples,
 //                   only to pages that asked with "audio=1"
 //
@@ -1218,13 +1219,17 @@ static void wsTick()
       // Same rows at full resolution; the radio keeps only the last FT8_HIRES_ROWS, so a page that is
       // still catching up gets them from the next tick on
       uint16_t hb = ft8GetHiResBins();
-      size_t rowBytes = (hb + 1) / 2;
+      size_t rowBytes = 2 + (hb + 1) / 2;
       if (hb && rows && behind <= FT8_HIRES_ROWS && wsHeapOk(4 + rows * rowBytes)) {
         auto hbuf = std::make_shared<std::vector<uint8_t>>(4 + rows * rowBytes);
         uint8_t *h = hbuf->data();
         h[0] = 'H'; h[1] = hb & 0xFF; h[2] = hb >> 8; h[3] = (uint8_t)rows;
         uint32_t first = wfHead - behind;   // oldest pending row, same rows as the 'W' frame
-        for (uint32_t r = 0; r < rows; r++) memcpy(h + 4 + r * rowBytes, ft8GetHiResRow(first + r), rowBytes);
+        for (uint32_t r = 0; r < rows; r++) {
+          uint8_t *dst = h + 4 + r * rowBytes;
+          memcpy(dst, ft8GetHiResMeta(first + r), 2);
+          memcpy(dst + 2, ft8GetHiResRow(first + r), rowBytes - 2);
+        }
         c->binary(hbuf);
       }
       if (rows) {
