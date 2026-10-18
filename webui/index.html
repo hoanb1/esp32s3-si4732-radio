@@ -176,6 +176,7 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 #mapSvg .grid{fill:none;stroke:#1d3554;stroke-width:.6;vector-effect:non-scaling-stroke}
 #mapSvg .glabel{fill:#24405f;font:600 7px ui-monospace,monospace}
 #mapSvg .path{fill:none;stroke-width:1.2;stroke-opacity:.45;stroke-linecap:round;vector-effect:non-scaling-stroke;pointer-events:none}
+#mapSvg .path.p2p{stroke-dasharray:5 3}
 #mapSvg .path.hi{stroke-width:2.2;stroke-opacity:1}
 #mapSvg .dot{stroke:#050b15;vector-effect:non-scaling-stroke;cursor:pointer}
 #mapSvg .dot:hover{stroke:#fff}
@@ -1335,6 +1336,13 @@ function parseGridMsg(msg) {
   if (!/[0-9]/.test(call) || !/[A-Z]/.test(call) || call.length < 3) return null;
   return { call, grid };
 }
+// Who a station is calling: "TO FROM ..." -> { from, to }; a CQ -> { from, to: null }
+function parseContact(msg) {
+  const t = (msg || '').trim().toUpperCase().split(/\s+/).map(c => c.replace(/^<|>$/g, ''));
+  const ok = c => c && c.length >= 3 && /[0-9]/.test(c) && /[A-Z]/.test(c) && !/[^A-Z0-9/]/.test(c);
+  if (t[0] === 'CQ' || t[0].startsWith('CQ_')) { const g = parseGridMsg(msg); return g ? { from: g.call, to: null } : null; }
+  return t.length >= 2 && ok(t[0]) && ok(t[1]) ? { from: t[1], to: t[0] } : null;
+}
 function ingestStations(list) {
   const khz = parseFloat(curStatus.freq_khz) || 0, band = bandName(khz), now = Date.now();
   let changed = false;
@@ -1342,12 +1350,15 @@ function ingestStations(list) {
     const key = `${m.time}|${m.msg}`;
     if (seenMsgs.has(key)) continue;
     seenMsgs.add(key);
-    const p = parseGridMsg(m.msg);
-    if (!p) continue;
-    const s = stations[p.call] || { n: 0, best: -99 };
-    Object.assign(s, { grid: p.grid, snr: m.snr, t: now, band, utc: m.time, msg: m.msg, n: s.n + 1, best: Math.max(s.best, m.snr) });
-    stations[p.call] = s;
-    changed = true;
+    const p = parseGridMsg(m.msg), c = parseContact(m.msg);
+    if (p) {
+      const s = stations[p.call] || { n: 0, best: -99 };
+      Object.assign(s, { grid: p.grid, snr: m.snr, t: now, band, utc: m.time, msg: m.msg, n: s.n + 1, best: Math.max(s.best, m.snr) });
+      stations[p.call] = s;
+      changed = true;
+    }
+    // The latest message decides the line: to the station it calls, or to us for a CQ
+    if (c && stations[c.from] && stations[c.from].to !== c.to) { stations[c.from].to = c.to; changed = true; }
   }
   if (seenMsgs.size > 2000) seenMsgs = new Set([...seenMsgs].slice(-500));
   if (changed) { saveStations(); renderMap(); }
@@ -1507,7 +1518,7 @@ function mapFit() {
     const pop = $('mapPop'), r = el.getBoundingClientRect(), cr = c.getBoundingClientRect();
     pop.innerHTML = c.dataset.info;
     pop.classList.remove('hidden');
-    $('mapLines').querySelectorAll('.path').forEach(p => p.classList.toggle('hi', p.dataset.call === c.dataset.call));
+    $('mapLines').querySelectorAll('.path').forEach(p => p.classList.toggle('hi', p.dataset.call === c.dataset.call || p.dataset.to === c.dataset.call));
     const x = cr.left - r.left + 12, y = cr.top - r.top + 12;
     pop.style.left = Math.min(x, r.width - pop.offsetWidth - 6) + 'px';
     pop.style.top = (y + pop.offsetHeight > r.height ? y - pop.offsetHeight - 18 : y) + 'px';
@@ -1534,17 +1545,23 @@ function renderMap() {
   if (!mapLoaded) return;
   const home = gridToLatLon(homeGrid), g = $('mapDots'), lines = $('mapLines');
   g.textContent = ''; lines.textContent = '';
+  const shown = new Map(list);
   // Weakest first so strong stations draw on top
   list.sort((a, b) => a[1].snr - b[1].snr).forEach(([call, s]) => {
     const ll = gridToLatLon(s.grid);
     if (!ll) return;
     const [km, deg] = distBearing(home, ll);
     const ago = Math.round((now - s.t) / 60000);
-    const pts = greatCircle(home, ll), [x, y] = pts[pts.length - 1].split(',').map(Number);
-    svgEl('polyline', { class: 'path', points: pts.join(' '), stroke: snrColor(s.snr), 'data-call': call }, lines);
-    const c = svgEl('circle', { class: 'dot', cx: x, cy: y, fill: snrColor(s.snr), 'data-call': call }, g);
+    // In a contact the line joins the two stations; a CQ or a partner not on the map joins us
+    const peer = s.to && shown.has(s.to) && gridToLatLon(shown.get(s.to).grid);
+    const pts = peer ? greatCircle(ll, peer) : greatCircle(home, ll);
+    const both = peer && shown.get(s.to).to === call && s.to < call;   // a two-way contact gets one line
+    if (!both) svgEl('polyline', { class: peer ? 'path p2p' : 'path', points: pts.join(' '), stroke: snrColor(s.snr), 'data-call': call, 'data-to': peer ? s.to : '' }, lines);
+    const [x, y] = toXY(ll);
+    const c = svgEl('circle', { class: 'dot', cx: wrapX(x), cy: y, fill: snrColor(s.snr), 'data-call': call }, g);
     c.dataset.info = `<b class="mono">${esc(call)}</b> · ${esc(s.grid)} · ${esc(s.band)}<br>` +
       `SNR ${s.snr > 0 ? '+' : ''}${s.snr} dB (best ${s.best > 0 ? '+' : ''}${s.best}) · heard ${s.n}×<br>` +
+      (peer ? `Working <b class="mono">${esc(s.to)}</b><br>` : '') +
       `${km.toLocaleString()} km · ${deg}° · ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}<br>` +
       `<span class="mono muted">${esc(s.utc)} ${esc(s.msg)}</span>`;
   });
