@@ -477,11 +477,11 @@ int remoteDoCommand(char key)
         hz = hz * 10 + (uint32_t)(Serial.read() - '0');
       }
       if (hz >= 31130 && hz <= 34406) rx.setRefClock(hz);
-      rx.setFrequency(currentFrequency);
+      rxSetFrequency(currentFrequency);
       Serial.printf("[TEST] REFCLK=%lu, re-tuned %u kHz\r\n", (unsigned long)hz, currentFrequency);
       break;
     }
-    case 'J': // J<0.1ppm> or J-<0.1ppm>: set SSB crystal ppm correction, saved to NVS; J alone prints it
+    case 'J': // J<0.1ppm> or J-<0.1ppm>: set AM/SSB crystal ppm correction, saved to NVS; J alone prints it
     {
       delay(15);
       bool neg = Serial.peek() == '-';
@@ -495,6 +495,7 @@ int remoteDoCommand(char key)
       if (have) {
         ssbPpmCal10 = (int16_t)(neg ? -v : v);
         ssbPpmSave();
+        rxSetFrequency(currentFrequency);
         if (isSSB()) applySSBBfo();
       }
       Serial.printf("[CAL] SSB crystal correction %+.1f ppm\r\n", ssbPpmCal10 / 10.0f);

@@ -337,9 +337,32 @@ uint32_t consumeEncoderCounts()
 //
 // Switch radio to given band
 //
-// SI4732 reference crystal error in 0.1 ppm (+ = receiver tunes high), corrected through the SSB BFO.
-// Measured 2026-10-17 with a 10.000 MHz carrier: dial 9998 kHz USB gave a 1025.5 Hz tone -> +97.5 ppm
-int16_t ssbPpmCal10 = 975;
+// SI4732 reference crystal error in 0.1 ppm (+ = receiver tunes high), corrected in AM and SSB.
+// Measured 2026-10-18 with the 10.000 MHz test carrier (serial Q10000): dial 9991 kHz USB gave a 683 Hz tone
+// with +61.2 ppm applied -> +892.9 ppm (21 kHz at 12m). Serial J<0.1ppm> sets it, saved to NVS.
+int16_t ssbPpmCal10 = 8929;
+
+// Whole kHz of the crystal correction go into the SI4732 tune frequency, because the SSB BFO only reaches
+// about +-16 kHz; the BFO takes the remainder (applySSBBfo)
+static int16_t rxTuneShiftKhz = 0;
+
+static int ppmCorrectionHz(uint16_t khz)
+{
+  return (int)lroundf((float)khz * (float)ssbPpmCal10 / 10000.0f);
+}
+
+// Tune the SI4732 to a dial frequency in kHz, crystal error included (AM and SSB; FM is left as is)
+void rxSetFrequency(uint16_t khz)
+{
+  rxTuneShiftKhz = (currentMode == FM) ? 0 : (int16_t)lroundf(ppmCorrectionHz(khz) / 1000.0f);
+  rx.setFrequency(khz - rxTuneShiftKhz);
+}
+
+// Dial frequency in kHz the SI4732 is tuned to
+uint16_t rxGetFrequency()
+{
+  return rx.getFrequency() + rxTuneShiftKhz;
+}
 
 void ssbPpmLoad()
 {
@@ -371,7 +394,7 @@ void applySSBBfo()
   if(currentMode == USB || currentMode == LSB)
   {
     cal = (currentMode == USB) ? band->usbCal : band->lsbCal;
-    cal -= (int)lroundf((float)currentFrequency * (float)ssbPpmCal10 / 10000.0f);
+    cal -= ppmCorrectionHz(currentFrequency) - rxTuneShiftKhz * 1000;
   }
   // To move frequency forward, need to move the BFO backwards
   rx.setSSBBfo(-(currentBFO + cal));
@@ -389,7 +412,7 @@ void useBand(const Band *band)
     // rx.setMaxDelaySetFrequency(60);
     rx.setFM(band->minimumFreq, band->maximumFreq, band->currentFreq, getCurrentStep()->step);
     rx.setRefClock(32802);
-    rx.setFrequency(band->currentFreq);
+    rxSetFrequency(band->currentFreq);
     // rx.setTuneFrequencyAntennaCapacitor(0);
     rx.setSeekFmLimits(band->minimumFreq, band->maximumFreq);
 
@@ -411,7 +434,7 @@ void useBand(const Band *band)
     {
       rx.setAM(band->minimumFreq, band->maximumFreq, band->currentFreq, getCurrentStep()->step);
       rx.setRefClock(32802);
-      rx.setFrequency(band->currentFreq);
+      rxSetFrequency(band->currentFreq);
       // More sensitive seek thresholds
       // https://github.com/pu2clr/SI4735/issues/7#issuecomment-810963604
       rx.setSeekAmRssiThreshold(10); // default is 25
@@ -422,7 +445,7 @@ void useBand(const Band *band)
       // Configure SI4732 for SSB (SI4732 step not used, set to 0)
       rx.setSSB(band->minimumFreq, band->maximumFreq, band->currentFreq, 0, currentMode);
       rx.setRefClock(32802);
-      rx.setFrequency(band->currentFreq);
+      rxSetFrequency(band->currentFreq);
       // Ensure wide 4.0 kHz audio passband (300..2500 Hz flat) and true SSB mode (DSP_AFCDIS=1, AVC_DIVIDER=0) for FT8
       rx.setSSBDspAfc(1);
       rx.setSSBAvcDivider(0);
@@ -507,12 +530,12 @@ bool updateBFO(int newBFO, bool wrap)
   if(newFreq != currentFrequency)
   {
     // Apply new frequency
-    rx.setFrequency(newFreq);
+    rxSetFrequency(newFreq);
 
     // Re-apply to remove noise
     doAgc(0);
     // Update current frequency
-    currentFrequency = rx.getFrequency();
+    currentFrequency = rxGetFrequency();
   }
 
   // Update current BFO
@@ -543,10 +566,10 @@ bool updateFrequency(int newFreq, bool wrap)
   }
 
   // Set new frequency
-  rx.setFrequency(newFreq);
+  rxSetFrequency(newFreq);
 
   // Update current frequency
-  currentFrequency = rx.getFrequency();
+  currentFrequency = rxGetFrequency();
 
   // Clear BFO, if present; the ppm correction depends on frequency so re-apply it either way
   if(currentBFO) updateBFO(0, true);
@@ -609,7 +632,7 @@ bool doSeek(int16_t enc, int16_t enca)
       // Flag is set by rotary encoder and cleared on seek/scan entry
       seekStop = false;
       rx.seekStationProgress(showFrequencySeek, checkStopSeeking, enc>0? 1 : 0);
-      updateFrequency(rx.getFrequency(), true);
+      updateFrequency(rxGetFrequency(), true);
     }
   }
   else if(seekMode() == SEEK_SCHEDULE && enc)

@@ -211,6 +211,8 @@ void netStop();
 bool ntpIsAvailable();
 extern int16_t ssbPpmCal10;
 void applySSBBfo();
+void rxSetFrequency(uint16_t khz);
+uint16_t rxGetFrequency();
 void ssbPpmLoad();
 void ssbPpmSave();
 bool ntpSyncTime();
