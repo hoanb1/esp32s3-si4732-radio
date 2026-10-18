@@ -125,7 +125,7 @@ button.danger:hover{border-color:var(--red)}
 button.active{background:rgba(0,229,255,.22);border-color:var(--cyan);color:var(--cyan)}
 button:disabled{opacity:.35;cursor:not-allowed}
 button.sm{padding:3px 8px;font-size:.72rem}
-input[type=text],input[type=password],select{background:#091220;border:1px solid #2b446e;color:var(--text);padding:6px 9px;border-radius:7px;font:inherit;font-size:.82rem;outline:none;min-width:0}
+input[type=text],input[type=password],input[type=number],select{background:#091220;border:1px solid #2b446e;color:var(--text);padding:6px 9px;border-radius:7px;font:inherit;font-size:.82rem;outline:none;min-width:0}
 input:focus,select:focus{border-color:var(--cyan)}
 input[type=range]{accent-color:var(--cyan);cursor:pointer;width:100%;min-width:60px}
 .modes{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
@@ -203,6 +203,17 @@ tr.cq{background:rgba(0,229,255,.07);font-weight:700}
 
 details.card summary{cursor:pointer;font-weight:700;color:var(--text);font-size:.86rem;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:8px}
 details.card summary::-webkit-details-marker{display:none}
+.tx-grid{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;margin:4px 0 8px}
+.tx-grid .lbl{font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:.68rem}
+.tx-grid .row label{display:inline-flex;align-items:center;gap:5px;font-size:.76rem;color:var(--muted)}
+.tx-grid input,.tx-grid select{padding:4px 8px;font-size:.8rem}
+.tx-arm{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid #2d4670;background:#1b2c4a;font-size:.76rem;font-weight:700;cursor:pointer;user-select:none}
+.tx-arm input{accent-color:var(--red);cursor:pointer}
+.tx-arm.on{background:rgba(255,82,82,.16);border-color:var(--red);color:var(--red)}
+.tx-plan{font-size:.76rem;padding:6px 10px;border-radius:7px;background:#091220;border:1px solid #1d3152;margin-bottom:8px}
+.tx-plan.warn{border-color:rgba(255,171,0,.45);color:var(--amber)}
+.tx-plan.ok{color:var(--muted)}
+@media (max-width:640px){.tx-grid{grid-template-columns:1fr}}
 .logs{background:#060c16;border:1px solid #1d3152;border-radius:8px;padding:8px 10px;height:160px;overflow-y:auto;font-size:.74rem;color:#9ec3e6;white-space:pre-wrap;word-break:break-word}
 .wslots{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 @media(max-width:520px){.wslots{grid-template-columns:1fr}}
@@ -480,39 +491,47 @@ details.card summary::-webkit-details-marker{display:none}
     <div class="card-hdr">
       <div class="row">
         <span class="card-title">📡 FT8 Transmit</span>
-        <span class="badge info" id="txBadge">idle</span>
+        <span class="badge info" id="txBadge">loading…</span>
       </div>
       <div class="row">
-        <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-weight:700" title="Nothing is transmitted unless this is ticked. Off after every reboot; unticking stops a transmission at once.">
-          <input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"> Enable TX
+        <label class="tx-arm" id="txArm" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once.">
+          <input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span>
         </label>
-        <button class="primary" id="txCqBtn" onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
-        <button class="danger" onclick="txAction('stop')" title="Stop the sequencer and any transmission">⏹ Stop TX</button>
+        <button class="primary" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
+        <button class="danger" onclick="txAction('stop')" title="Stop the QSO and any transmission now">⏹ Stop</button>
       </div>
     </div>
-    <div class="row">
-      <span class="lbl">Callsign</span>
-      <input type="text" id="txCall" maxlength="10" placeholder="XV5QH" style="padding:4px 9px;font-size:.78rem;width:96px;text-transform:uppercase">
-      <span class="lbl">Grid</span>
-      <input type="text" id="txGrid" maxlength="4" placeholder="OL21" style="padding:4px 9px;font-size:.78rem;width:60px;text-transform:uppercase">
-      <span class="lbl">TX audio Hz</span>
-      <input type="number" id="txAudio" min="200" max="2900" step="10" style="padding:4px 6px;font-size:.78rem;width:72px">
-      <span class="lbl">Output</span>
-      <select id="txPin" style="padding:4px 6px;font-size:.78rem">
-        <option value="0">GPIO0 (MCLK)</option><option value="16">GPIO16 (BCK)</option>
-      </select>
-      <span class="lbl">ESP32 ppm</span>
-      <input type="number" id="txPpm" step="0.1" style="padding:4px 6px;font-size:.78rem;width:64px">
-      <button class="sm primary" onclick="txSave()">💾 Save</button>
-      <span id="txSaveMsg" class="lbl"></span>
+
+    <div class="tx-plan" id="txPlan">Loading transmitter status…</div>
+
+    <div class="tx-grid">
+      <span class="lbl">Station</span>
+      <div class="row">
+        <label>Callsign <input type="text" id="txCall" maxlength="10" placeholder="your call" style="width:96px;text-transform:uppercase"></label>
+        <label>Grid <input type="text" id="txGrid" maxlength="4" placeholder="AA00" style="width:62px;text-transform:uppercase"></label>
+      </div>
+      <span class="lbl">Transmitter</span>
+      <div class="row">
+        <label>Output
+          <select id="txPin">
+            <option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option>
+            <option value="16">GPIO16 – BCK, backlight wire (bench tests)</option>
+          </select>
+        </label>
+        <label>Audio <input type="number" id="txAudio" min="200" max="2900" step="10" style="width:76px"> Hz</label>
+        <label>Crystal <input type="number" id="txPpm" step="0.1" style="width:68px"> ppm</label>
+        <button class="sm primary" onclick="txSave()">💾 Save</button>
+        <span id="txSaveMsg" class="lbl"></span>
+      </div>
+      <span class="lbl">Send</span>
+      <div class="row">
+        <input type="text" id="txMsg" maxlength="37" placeholder="free message for the next slot" style="flex:1 1 220px;max-width:340px;text-transform:uppercase" onkeydown="if(event.key==='Enter')$('txSendBtn').click()">
+        <button class="sm" id="txSendBtn" disabled onclick="txAction('send',{msg:$('txMsg').value})">📤 Send</button>
+        <span class="lbl" style="text-transform:none;letter-spacing:0;font-weight:400">or click <b>↩ Answer</b> on a CQ in the decoder</span>
+      </div>
     </div>
-    <div class="lbl" id="txPlan" style="margin:6px 0">–</div>
-    <div class="row">
-      <input type="text" id="txMsg" maxlength="37" placeholder="Free message, e.g. XV5QH/P XV5QH RR73" style="padding:4px 9px;font-size:.78rem;width:300px;text-transform:uppercase">
-      <button class="sm" id="txSendBtn" onclick="txAction('send',{msg:$('txMsg').value})">📤 Send next slot</button>
-      <span class="lbl">Click <b>Answer</b> on a CQ in the messages to call that station.</span>
-    </div>
-    <div class="logs mono" id="txEvents" style="height:120px;margin-top:8px"></div>
+
+    <div class="logs mono" id="txEvents" style="height:auto;min-height:44px;max-height:140px">No transmissions yet</div>
   </div>
 
   <!-- Map of the stations heard (grid locators from FT8/FT4 messages, kept in this browser) -->
@@ -841,7 +860,7 @@ function updateFt8Visibility() {
   $('ft8DecoderCard').classList.toggle('hidden', !ft8Visible);
   $('mapCard').classList.toggle('hidden', !ft8Visible);
   $('txCard').classList.toggle('hidden', !ft8Visible);
-  if (shown) { showMap(); fetchTx(true); }
+  if (shown) { fetchTx(); showMap(); }
 }
 
 function setOnline(ok) {
@@ -1628,61 +1647,80 @@ function kick(ms = 0) {
 }
 
 // ---- FT8 transmitter (/api/ft8tx) ----
-let txState = {}, txFormLoaded = false, txTimer = null;
+// Fetched directly, not through req(): the shared queue can sit behind the map download for seconds
+let txState = {}, txFormLoaded = false, txTimer = null, txDirty = false;
+async function txFetch(opts) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const r = await fetch('/api/ft8tx', { cache: 'no-store', ...opts, signal: ctrl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    renderTx(await r.json());
+  } finally { clearTimeout(t); }
+}
 function renderTx(st) {
   const enabledChanged = !!txState.enabled !== !!st.enabled;
   txState = st;
-  if (enabledChanged) renderTrafficTable();   // its Answer buttons follow Enable TX
-  if (!txFormLoaded) {
+  if (enabledChanged) renderTrafficTable();   // its Answer buttons follow the TX switch
+  if (!txFormLoaded && !txDirty) {
     $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio;
     $('txPin').value = String(st.pin); $('txPpm').value = st.ppm;
     txFormLoaded = true;
   }
-  const live = st.on ? 'TX ' + st.text : !st.enabled ? 'TX disabled' : st.qso;
-  C('txBadge', st.on ? 'badge err' : st.qso !== 'idle' ? 'badge warn' : 'badge info');
-  T('txBadge', live + (st.dx && st.qso !== 'idle' ? ' · ' + st.dx : ''));
+  const busy = st.on || st.qso !== 'idle';
+  C('txBadge', st.on ? 'badge err' : busy ? 'badge warn' : st.enabled ? 'badge ok' : 'badge info');
+  T('txBadge', st.on ? 'on air: ' + st.text : st.qso !== 'idle' ? st.qso + (st.dx ? ' · ' + st.dx : '') : st.enabled ? 'ready' : 'idle');
   if (document.activeElement !== $('txEnable')) $('txEnable').checked = !!st.enabled;
-  $('txSendBtn').disabled = !st.enabled || !st.call;
-  let plan;
-  if (!st.call) plan = '⚠️ Enter your callsign and grid, then Save. Nothing is sent without a callsign.';
+  C('txArm', st.enabled ? 'tx-arm on' : 'tx-arm');
+  T('txArmText', st.enabled ? 'TX enabled' : 'TX off');
+
+  let plan, ok = false;
+  if (!st.call || !st.grid) plan = '⚠️ Enter your callsign and grid below, then Save. Nothing is sent without a callsign.';
   else if (!st.usb) plan = '⚠️ Switch the radio to FT8 (USB) to transmit.';
-  else if (!st.plan) plan = `⚠️ ${(st.rf / 1e6).toFixed(4)} MHz is out of reach: the ESP32 APLL makes exact 6.25 Hz FT8 tones only around 3.5–5 MHz. Tune to 80 m FT8, 3573 kHz.`;
-  else plan = `RF ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone 7 off by ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz · square wave, use a low-pass filter before an antenna`;
+  else if (!st.plan) plan = `⚠️ ${(st.rf / 1e6).toFixed(4)} MHz is out of reach: exact 6.25 Hz FT8 tones only work around 3.5–5 MHz. Tune to 80 m FT8 (3573 kHz) to transmit.`;
+  else {
+    ok = true;
+    plan = `✅ ${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone error ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz` +
+      (st.enabled ? '' : ' · turn TX on to transmit') + ' · square wave: use an 80 m low-pass filter before an antenna';
+  }
   T('txPlan', plan);
-  $('txCqBtn').disabled = !st.enabled || !st.call || st.qso !== 'idle';
+  C('txPlan', ok ? 'tx-plan ok' : 'tx-plan warn');
+  const canSend = ok && st.enabled;
+  $('txCqBtn').disabled = !canSend || busy;
+  $('txSendBtn').disabled = !canSend || !!st.busy;
   const ev = (st.events || []).join('\n') || 'No transmissions yet';
   if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
 }
-async function fetchTx(force) {
+async function fetchTx() {
   clearTimeout(txTimer);
   if (ft8Visible && !document.hidden) {
-    try { renderTx(await req('/api/ft8tx')); } catch (e) {}
+    try { await txFetch(); } catch (e) { T('txPlan', 'Could not reach the transmitter status, retrying…'); C('txPlan', 'tx-plan warn'); }
   }
-  txTimer = setTimeout(fetchTx, txState.on || txState.qso !== 'idle' ? 1000 : 3000);
+  txTimer = setTimeout(fetchTx, txState.on || (txState.qso && txState.qso !== 'idle') ? 1000 : 3000);
 }
 async function txAction(action, params = {}) {
   if (['cq', 'answer', 'send'].includes(action) && !txState.enabled) {
-    T('txSaveMsg', 'Tick Enable TX first');
+    T('txSaveMsg', 'Turn TX on first');
     setTimeout(() => T('txSaveMsg', ''), 2500);
     return;
   }
   try {
-    renderTx(await req('/api/ft8tx', {
+    await txFetch({
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ action, ...params }).toString()
-    }));
+    });
   } catch (e) {}
   setTimeout(fetchTx, 400);
 }
+['txCall', 'txGrid', 'txAudio', 'txPin', 'txPpm'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
 async function txSave() {
   const call = $('txCall').value.trim().toUpperCase(), grid = $('txGrid').value.trim().toUpperCase();
-  if (!/^[A-Z0-9/]{3,10}$/.test(call) || !/\d/.test(call) || !/^[A-R]{2}\d\d$/.test(grid)) {
-    T('txSaveMsg', 'Callsign or grid looks wrong'); return;
-  }
+  if (!/^[A-Z0-9/]{3,10}$/.test(call) || !/\d/.test(call)) { T('txSaveMsg', 'Callsign looks wrong'); return; }
+  if (!/^[A-R]{2}\d\d$/.test(grid)) { T('txSaveMsg', 'Grid must be like OL21'); return; }
   await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, ppm: $('txPpm').value });
-  txFormLoaded = false;
-  T('txSaveMsg', 'Saved');
+  txDirty = false; txFormLoaded = false;
+  T('txSaveMsg', 'Saved ✓');
   setTimeout(() => T('txSaveMsg', ''), 2500);
 }
 
@@ -1710,6 +1748,7 @@ syncBrowserTime();
 loadBookmarks();
 kick(0);
 wsConnect();
+fetchTx();
 </script>
 </body>
 </html>
