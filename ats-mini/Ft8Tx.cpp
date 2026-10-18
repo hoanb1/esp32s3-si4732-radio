@@ -366,8 +366,8 @@ static bool txQueue(const char *text) {
 }
 
 // Last TX / QSO events for the web page ("HH:MM:SS text")
-#define TX_EVENTS 10
-static char txEvents[TX_EVENTS][72];
+#define TX_EVENTS 8
+static char txEvents[TX_EVENTS][64];
 static uint8_t txEventHead = 0, txEventCount = 0;
 static uint32_t txEventSeq = 0;
 static void txEvent(const char *fmt, ...) {
@@ -657,7 +657,7 @@ void ft8TxCommand(const char *args) {
 
 // ---- Web API: GET /api/ft8tx = status; POST action=save|cq|answer|stop|send ----
 // The web handler runs in the AsyncTCP task, so it only queues K command lines for ft8TxPoll()
-#define TX_WEBQ 6
+#define TX_WEBQ 4
 static char txWebQ[TX_WEBQ][48];
 static volatile uint8_t txWebHead = 0, txWebTail = 0;
 static portMUX_TYPE txWebMux = portMUX_INITIALIZER_UNLOCKED;
@@ -703,7 +703,9 @@ static String txStatusJson() {
            "{\"call\":\"%s\",\"grid\":\"%s\",\"audio\":%u,\"pin\":%d,\"ppm\":%.1f,\"usb\":%s,\"plan\":%s,",
            myCall, myGrid, txAudioHz, txPin, txPpm10 / 10.0, currentMode == USB ? "true" : "false",
            here ? "true" : "false");
-  String out = b;
+  String out;
+  out.reserve(160 + TX_EVENTS * 68);   // one allocation: the heap is tight while pages load
+  out = b;
   snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
            here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0, txEnabled ? "true" : "false",
            txOn ? "true" : "false",

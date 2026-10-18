@@ -1647,16 +1647,11 @@ function kick(ms = 0) {
 }
 
 // ---- FT8 transmitter (/api/ft8tx) ----
-// Fetched directly, not through req(): the shared queue can sit behind the map download for seconds
+// Goes through req() like every other request: the ESP32 has no PSRAM, and parallel requests ran it
+// out of heap until WiFi stopped answering. The first fetch is queued before the map download.
 let txState = {}, txFormLoaded = false, txTimer = null, txDirty = false;
 async function txFetch(opts) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 4000);
-  try {
-    const r = await fetch('/api/ft8tx', { cache: 'no-store', ...opts, signal: ctrl.signal });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    renderTx(await r.json());
-  } finally { clearTimeout(t); }
+  renderTx(await req('/api/ft8tx', opts || {}));
 }
 function renderTx(st) {
   const enabledChanged = !!txState.enabled !== !!st.enabled;
