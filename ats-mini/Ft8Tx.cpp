@@ -43,6 +43,7 @@ static double txVcoMin = 350e6;       // APLL VCO lower limit tried by the searc
 static bool txLatchSdm = false;       // pulse SDM_STOP after each tone write (as the IDF does)
 static bool txWifiOff = false;        // stop WiFi while an FT8 message is sent
 static double planForHz = 0;          // RF frequency the current plan was made for
+static bool txEnabled = false;        // "Enable TX" (as in WSJT-X): off after every boot, nothing is sent while off
 static uint32_t planUs = 0;           // time the last divider search took
 
 // APLL / I2S setup chosen by txPlan()
@@ -74,6 +75,12 @@ static uint32_t txSlotNow(uint32_t *intoMs) {
 }
 static uint32_t txSlotNo = UINT32_MAX;   // slot of the last queued message
 static void txEvent(const char *fmt, ...);   // web page event log, below
+
+static bool txAllowed() {
+  if (txEnabled) return true;
+  Serial.println("[TX] Transmit is disabled (Ke1 or the Enable TX box on the web page)");
+  return false;
+}
 
 static double xtalHz() { return TX_XTAL_HZ * (1.0 + txPpm10 * 1e-7); }
 
@@ -331,6 +338,7 @@ static bool txSetStation(const char *call, const char *grid) {
 
 // Encode a message and send it in the next slot (this slot if it is still before 0.5 s)
 static bool txQueue(const char *text) {
+  if (!txAllowed()) return false;
   if (txTask) {
     Serial.printf("[TX] Busy, '%s' not sent\r\n", text);
     return false;
@@ -405,6 +413,7 @@ static void qsoSet(QsoState st, const char *why) {
 }
 
 static void qsoStart(QsoState st, const char *want) {
+  if (!txAllowed()) return;
   if (!myCall[0] || !myGrid[0]) {
     Serial.println("[QSO] Set the station first: Kn<call> <grid>");
     return;
@@ -531,23 +540,37 @@ void ft8TxSlotDone() {
   if (m[0]) txQueue(m);
 }
 
+// Abort a message or carrier on air now
+static void txHalt() {
+  txAbort = true;
+  for (int i = 0; i < 50 && txTask; i++) delay(10);
+  txStop();
+  txAbort = false;
+}
+
 void ft8TxCommand(const char *args) {
   txLoad();
   while (*args == ' ') args++;
   char op = *args ? *args++ : '?';
   while (*args == ' ') args++;
 
-  if (op != '0' && op != '?' && txTask) {
+  if (op != '0' && op != '?' && op != 'e' && op != 'x' && txTask) {
     Serial.println("[TX] Busy (K0 aborts)");
     return;
   }
   switch (op) {
     case '0':   // stop everything
-      txAbort = true;
-      for (int i = 0; i < 50 && txTask; i++) delay(10);
-      txStop();
-      txAbort = false;
+      txHalt();
       Serial.println("[TX] OFF");
+      break;
+    case 'e':   // Ke1 / Ke0: enable or disable transmitting; disabling stops the QSO and any TX at once
+      txEnabled = atoi(args) != 0;
+      if (!txEnabled) {
+        if (qso != Q_IDLE) qsoSet(Q_IDLE, "TX disabled");
+        txHalt();
+      }
+      Serial.printf("[TX] Transmit %s\r\n", txEnabled ? "ENABLED" : "disabled");
+      txEvent("TX %s", txEnabled ? "enabled" : "disabled");
       break;
     case 'f':   // Kf<Hz>: debug, fixed RF frequency of tone 0 (Kf0 = follow the dial again)
       txFreqHz = atof(args);
@@ -583,7 +606,7 @@ void ft8TxCommand(const char *args) {
       break;
     case 'c':   // Kc[tone]: steady carrier on a tone (0..7)
     {
-      if (!txPlanReady()) break;
+      if (!txAllowed() || !txPlanReady()) break;
       int k = constrain(atoi(args), 0, 7);
       txSetTone(k);
       txStart();
@@ -591,7 +614,7 @@ void ft8TxCommand(const char *args) {
       break;
     }
     case 't':   // Kt: tone ladder test
-      if (!txPlanReady()) break;
+      if (!txAllowed() || !txPlanReady()) break;
       txStop();
       xTaskCreatePinnedToCore(txToneTestTask, "ft8tx", 4096, NULL, 20, &txTask, 1);
       break;
@@ -625,7 +648,7 @@ void ft8TxCommand(const char *args) {
                     (long)tv.tv_sec, (long)(tv.tv_usec / 1000));
       if (!planOk) txReplan();
       else txPrintPlan();
-      Serial.printf("[TX] %s, latch %d, WiFi off %d. Commands: Kn<call> <grid> Kq Ka[call] Kx Km<msg> K0 Kc<tone> Kt Ko<audio Hz> Kp<gpio> Ku<0.1ppm> Kf<Hz> Kv<MHz> Kl Kw\r\n",
+      Serial.printf("[TX] %s, latch %d, WiFi off %d. Commands: Ke<0|1> Kn<call> <grid> Kq Ka[call] Kx Km<msg> K0 Kc<tone> Kt Ko<audio Hz> Kp<gpio> Ku<0.1ppm> Kf<Hz> Kv<MHz> Kl Kw\r\n",
                     txOn ? "ON" : "off", txLatchSdm, txWifiOff);
       break;
     }
@@ -681,8 +704,9 @@ static String txStatusJson() {
            myCall, myGrid, txAudioHz, txPin, txPpm10 / 10.0, currentMode == USB ? "true" : "false",
            here ? "true" : "false");
   String out = b;
-  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
-           here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0, txOn ? "true" : "false",
+  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
+           here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0, txEnabled ? "true" : "false",
+           txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;
   snprintf(b, sizeof(b), "\"qso\":\"%s\",\"dx\":\"%s\",\"rpt_sent\":\"%s\",\"rpt_rcvd\":\"%s\",\"seq\":%lu,\"events\":[",
@@ -723,6 +747,8 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
     } else if (action == "answer") {
       snprintf(line, sizeof(line), "a %s", param("call").c_str());
       txWebPush(line);
+    } else if (action == "enable") {
+      txWebPush(param("on") == "1" ? "e1" : "e0");
     } else if (action == "stop") {
       txWebPush("x");
       txWebPush("0");

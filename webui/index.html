@@ -483,6 +483,9 @@ details.card summary::-webkit-details-marker{display:none}
         <span class="badge info" id="txBadge">idle</span>
       </div>
       <div class="row">
+        <label class="lbl" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-weight:700" title="Nothing is transmitted unless this is ticked. Off after every reboot; unticking stops a transmission at once.">
+          <input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"> Enable TX
+        </label>
         <button class="primary" id="txCqBtn" onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
         <button class="danger" onclick="txAction('stop')" title="Stop the sequencer and any transmission">⏹ Stop TX</button>
       </div>
@@ -506,7 +509,7 @@ details.card summary::-webkit-details-marker{display:none}
     <div class="lbl" id="txPlan" style="margin:6px 0">–</div>
     <div class="row">
       <input type="text" id="txMsg" maxlength="37" placeholder="Free message, e.g. XV5QH/P XV5QH RR73" style="padding:4px 9px;font-size:.78rem;width:300px;text-transform:uppercase">
-      <button class="sm" onclick="txAction('send',{msg:$('txMsg').value})">📤 Send next slot</button>
+      <button class="sm" id="txSendBtn" onclick="txAction('send',{msg:$('txMsg').value})">📤 Send next slot</button>
       <span class="lbl">Click <b>Answer</b> on a CQ in the messages to call that station.</span>
     </div>
     <div class="logs mono" id="txEvents" style="height:120px;margin-top:8px"></div>
@@ -1084,7 +1087,7 @@ function renderTrafficTable() {
   }
   $('trafficBody').innerHTML = rows.map(m => {
     const snrCol = snrColor(m.snr);
-    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrCol};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}${(m.msg || '').startsWith('CQ ') && m.call && m.call !== txState.call ? ` <button class="sm" data-answer="${esc(m.call)}" title="Answer this CQ from the ESP32">↩ Answer</button>` : ''}</td></tr>`;
+    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrCol};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}${(m.msg || '').startsWith('CQ ') && m.call && m.call !== txState.call ? ` <button class="sm" data-answer="${esc(m.call)}" ${txState.enabled ? '' : 'disabled '}title="Answer this CQ from the ESP32 (needs Enable TX)">↩ Answer</button>` : ''}</td></tr>`;
   }).join('');
 }
 $('trafficBody').addEventListener('click', e => {
@@ -1627,22 +1630,26 @@ function kick(ms = 0) {
 // ---- FT8 transmitter (/api/ft8tx) ----
 let txState = {}, txFormLoaded = false, txTimer = null;
 function renderTx(st) {
+  const enabledChanged = !!txState.enabled !== !!st.enabled;
   txState = st;
+  if (enabledChanged) renderTrafficTable();   // its Answer buttons follow Enable TX
   if (!txFormLoaded) {
     $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio;
     $('txPin').value = String(st.pin); $('txPpm').value = st.ppm;
     txFormLoaded = true;
   }
-  const live = st.on ? 'TX ' + st.text : st.qso;
+  const live = st.on ? 'TX ' + st.text : !st.enabled ? 'TX disabled' : st.qso;
   C('txBadge', st.on ? 'badge err' : st.qso !== 'idle' ? 'badge warn' : 'badge info');
-  T('txBadge', live + (st.dx ? ' · ' + st.dx : ''));
+  T('txBadge', live + (st.dx && st.qso !== 'idle' ? ' · ' + st.dx : ''));
+  if (document.activeElement !== $('txEnable')) $('txEnable').checked = !!st.enabled;
+  $('txSendBtn').disabled = !st.enabled || !st.call;
   let plan;
   if (!st.call) plan = '⚠️ Enter your callsign and grid, then Save. Nothing is sent without a callsign.';
   else if (!st.usb) plan = '⚠️ Switch the radio to FT8 (USB) to transmit.';
   else if (!st.plan) plan = `⚠️ ${(st.rf / 1e6).toFixed(4)} MHz is out of reach: the ESP32 APLL makes exact 6.25 Hz FT8 tones only around 3.5–5 MHz. Tune to 80 m FT8, 3573 kHz.`;
   else plan = `RF ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone 7 off by ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz · square wave, use a low-pass filter before an antenna`;
   T('txPlan', plan);
-  $('txCqBtn').disabled = !st.call || st.qso !== 'idle';
+  $('txCqBtn').disabled = !st.enabled || !st.call || st.qso !== 'idle';
   const ev = (st.events || []).join('\n') || 'No transmissions yet';
   if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
 }
@@ -1654,6 +1661,11 @@ async function fetchTx(force) {
   txTimer = setTimeout(fetchTx, txState.on || txState.qso !== 'idle' ? 1000 : 3000);
 }
 async function txAction(action, params = {}) {
+  if (['cq', 'answer', 'send'].includes(action) && !txState.enabled) {
+    T('txSaveMsg', 'Tick Enable TX first');
+    setTimeout(() => T('txSaveMsg', ''), 2500);
+    return;
+  }
   try {
     renderTx(await req('/api/ft8tx', {
       method: 'POST',
