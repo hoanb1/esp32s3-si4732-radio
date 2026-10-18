@@ -13,4 +13,12 @@
 void ft8TxCommand(const char *args);
 bool ft8TxBusy();   // carrier or FT8 message being sent
 
+// QSO sequencer hooks, called by the live decoder: each decoded message, then once per slot
+void ft8TxOnDecode(const char *text, int snr);
+void ft8TxSlotDone();
+
+void ft8TxPoll();   // from loop(): loads the saved settings and runs commands queued by the web page
+class AsyncWebServer;
+void ft8TxRegisterWeb(AsyncWebServer &server);   // GET/POST /api/ft8tx
+
 #endif // FT8_TX_H

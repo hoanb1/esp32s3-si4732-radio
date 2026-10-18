@@ -12,6 +12,7 @@
 #include "Themes.h"
 #include "Utils.h"
 #include "EIBI.h"
+#include "Ft8Tx.h"
 #include "Layout-FT8.h"
 #include "esp_bt.h"
 
@@ -818,6 +819,7 @@ void loop()
 
   // Periodically print status to serial
   remoteTickTime();
+  ft8TxPoll();
 
   // if(encCount && getCpuFrequencyMhz()!=240) setCpuFrequencyMhz(240);
 

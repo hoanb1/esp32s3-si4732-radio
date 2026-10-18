@@ -475,6 +475,43 @@ details.card summary::-webkit-details-marker{display:none}
     </div>
   </div>
 
+  <!-- FT8 transmitter on the ESP32 itself (APLL on GPIO0 or GPIO16, 80 m only) -->
+  <div class="card hidden" id="txCard">
+    <div class="card-hdr">
+      <div class="row">
+        <span class="card-title">📡 FT8 Transmit</span>
+        <span class="badge info" id="txBadge">idle</span>
+      </div>
+      <div class="row">
+        <button class="primary" id="txCqBtn" onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
+        <button class="danger" onclick="txAction('stop')" title="Stop the sequencer and any transmission">⏹ Stop TX</button>
+      </div>
+    </div>
+    <div class="row">
+      <span class="lbl">Callsign</span>
+      <input type="text" id="txCall" maxlength="10" placeholder="XV5QH" style="padding:4px 9px;font-size:.78rem;width:96px;text-transform:uppercase">
+      <span class="lbl">Grid</span>
+      <input type="text" id="txGrid" maxlength="4" placeholder="OL21" style="padding:4px 9px;font-size:.78rem;width:60px;text-transform:uppercase">
+      <span class="lbl">TX audio Hz</span>
+      <input type="number" id="txAudio" min="200" max="2900" step="10" style="padding:4px 6px;font-size:.78rem;width:72px">
+      <span class="lbl">Output</span>
+      <select id="txPin" style="padding:4px 6px;font-size:.78rem">
+        <option value="0">GPIO0 (MCLK)</option><option value="16">GPIO16 (BCK)</option>
+      </select>
+      <span class="lbl">ESP32 ppm</span>
+      <input type="number" id="txPpm" step="0.1" style="padding:4px 6px;font-size:.78rem;width:64px">
+      <button class="sm primary" onclick="txSave()">💾 Save</button>
+      <span id="txSaveMsg" class="lbl"></span>
+    </div>
+    <div class="lbl" id="txPlan" style="margin:6px 0">–</div>
+    <div class="row">
+      <input type="text" id="txMsg" maxlength="37" placeholder="Free message, e.g. XV5QH/P XV5QH RR73" style="padding:4px 9px;font-size:.78rem;width:300px;text-transform:uppercase">
+      <button class="sm" onclick="txAction('send',{msg:$('txMsg').value})">📤 Send next slot</button>
+      <span class="lbl">Click <b>Answer</b> on a CQ in the messages to call that station.</span>
+    </div>
+    <div class="logs mono" id="txEvents" style="height:120px;margin-top:8px"></div>
+  </div>
+
   <!-- Map of the stations heard (grid locators from FT8/FT4 messages, kept in this browser) -->
   <div class="card hidden" id="mapCard">
     <div class="card-hdr">
@@ -800,7 +837,8 @@ function updateFt8Visibility() {
   ft8Visible = dig;
   $('ft8DecoderCard').classList.toggle('hidden', !ft8Visible);
   $('mapCard').classList.toggle('hidden', !ft8Visible);
-  if (shown) showMap();
+  $('txCard').classList.toggle('hidden', !ft8Visible);
+  if (shown) { showMap(); fetchTx(true); }
 }
 
 function setOnline(ok) {
@@ -1046,10 +1084,12 @@ function renderTrafficTable() {
   }
   $('trafficBody').innerHTML = rows.map(m => {
     const snrCol = snrColor(m.snr);
-    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrCol};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}</td></tr>`;
+    return `<tr${(m.msg || '').startsWith('CQ ') ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrCol};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}${(m.msg || '').startsWith('CQ ') && m.call && m.call !== txState.call ? ` <button class="sm" data-answer="${esc(m.call)}" title="Answer this CQ from the ESP32">↩ Answer</button>` : ''}</td></tr>`;
   }).join('');
 }
 $('trafficBody').addEventListener('click', e => {
+  const a = e.target.closest('[data-answer]');
+  if (a) { txAction('answer', { call: a.dataset.answer }); return; }
   const c = e.target.closest('.call');
   if (c) { $('callFilter').value = c.dataset.call; renderTrafficTable(); }
 });
@@ -1583,6 +1623,57 @@ function kick(ms = 0) {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(poll, ms);
 }
+
+// ---- FT8 transmitter (/api/ft8tx) ----
+let txState = {}, txFormLoaded = false, txTimer = null;
+function renderTx(st) {
+  txState = st;
+  if (!txFormLoaded) {
+    $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio;
+    $('txPin').value = String(st.pin); $('txPpm').value = st.ppm;
+    txFormLoaded = true;
+  }
+  const live = st.on ? 'TX ' + st.text : st.qso;
+  C('txBadge', st.on ? 'badge err' : st.qso !== 'idle' ? 'badge warn' : 'badge info');
+  T('txBadge', live + (st.dx ? ' · ' + st.dx : ''));
+  let plan;
+  if (!st.call) plan = '⚠️ Enter your callsign and grid, then Save. Nothing is sent without a callsign.';
+  else if (!st.usb) plan = '⚠️ Switch the radio to FT8 (USB) to transmit.';
+  else if (!st.plan) plan = `⚠️ ${(st.rf / 1e6).toFixed(4)} MHz is out of reach: the ESP32 APLL makes exact 6.25 Hz FT8 tones only around 3.5–5 MHz. Tune to 80 m FT8, 3573 kHz.`;
+  else plan = `RF ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone 7 off by ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz · square wave, use a low-pass filter before an antenna`;
+  T('txPlan', plan);
+  $('txCqBtn').disabled = !st.call || st.qso !== 'idle';
+  const ev = (st.events || []).join('\n') || 'No transmissions yet';
+  if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
+}
+async function fetchTx(force) {
+  clearTimeout(txTimer);
+  if (ft8Visible && !document.hidden) {
+    try { renderTx(await req('/api/ft8tx')); } catch (e) {}
+  }
+  txTimer = setTimeout(fetchTx, txState.on || txState.qso !== 'idle' ? 1000 : 3000);
+}
+async function txAction(action, params = {}) {
+  try {
+    renderTx(await req('/api/ft8tx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ action, ...params }).toString()
+    }));
+  } catch (e) {}
+  setTimeout(fetchTx, 400);
+}
+async function txSave() {
+  const call = $('txCall').value.trim().toUpperCase(), grid = $('txGrid').value.trim().toUpperCase();
+  if (!/^[A-Z0-9/]{3,10}$/.test(call) || !/\d/.test(call) || !/^[A-R]{2}\d\d$/.test(grid)) {
+    T('txSaveMsg', 'Callsign or grid looks wrong'); return;
+  }
+  await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, ppm: $('txPpm').value });
+  txFormLoaded = false;
+  T('txSaveMsg', 'Saved');
+  setTimeout(() => T('txSaveMsg', ''), 2500);
+}
+
 async function poll() {
   if (document.hidden) return;
   polling = true;

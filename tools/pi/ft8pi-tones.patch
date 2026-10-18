@@ -1,0 +1,43 @@
+--- a/ft8.cpp	2025-11-12 16:26:11.853387677 +0700
++++ b/ft8.cpp	2026-10-18 20:42:01.522758682 +0700
+@@ -754,18 +754,15 @@
+ 
+ void wait_every_15_sec(
+ ) {
+-  time_t t;
+-  struct tm* ptm;
++  // Start in the first 2 s of a slot, never before 0.5 s (DT >= 0)
++  struct timeval tv;
+   for(;;){
+-    time(&t);
+-    ptm = gmtime(&t);
+-    if(ptm->tm_sec == 0) break;
+-    if(ptm->tm_sec == 15) break;
+-    if(ptm->tm_sec == 30) break;
+-    if(ptm->tm_sec == 45) break;
++    gettimeofday(&tv, NULL);
++    long us = (tv.tv_sec % 15) * 1000000L + tv.tv_usec;
++    if (us < 500000) { usleep(500000 - us); break; }
++    if (us < 2000000) break;
+     usleep(1000);
+   }
+-  usleep(1000000); // wait another second
+ }
+ 
+ void print_usage() {
+@@ -1270,8 +1267,13 @@
+     // Create FT8 symbols
+     unsigned char symbols[NSYM];
+     unsigned char c77[10];
+-    ft8::pack77(message.c_str(), c77);
+-    ft8::genft8(c77, symbols);
++    if (message.size() == 2 + NSYM && message.compare(0, 2, "T:") == 0) {
++      // Raw tone list from an external encoder: "T:" + 79 digits 0..7
++      for (int i = 0; i < NSYM; i++) symbols[i] = message[2 + i] - '0';
++    } else {
++      ft8::pack77(message.c_str(), c77);
++      ft8::genft8(c77, symbols);
++    }
+ 
+     printf("FT8 codeblock: ");
+     for (int i = 0; i < (signed)(sizeof(symbols)/sizeof(*symbols)); i++) {

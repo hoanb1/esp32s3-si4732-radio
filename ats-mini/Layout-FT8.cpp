@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Draw.h"
 #include "Storage.h"
+#include "Ft8Tx.h"
 
 #include <WiFi.h>
 #include <esp_timer.h>
@@ -770,6 +771,7 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
     Serial.printf("  %s | %+3ddB | %+4.1fs | %4uHz | %-8s | %s\r\n",
                   timeStr, snrDb, entry->dt, freqHz, senderCall, text);
     ft8AddLog("[%s] %s | %+ddB | %uHz | %s", isTest ? "TEST" : "FT8", senderCall, snrDb, freqHz, text);
+    if (!isTest) ft8TxOnDecode(text, snrDb);
   }
 
   ft8LastDurationMs = millis() - t0;
@@ -958,8 +960,10 @@ bool ft8TickWaterfall() {
       if (cnt > 0) {
         needRedraw = true;
       }
+      ft8TxSlotDone();
     } else if (slotSec >= 14) {
       slotDecoded = true;
+      ft8TxSlotDone();
     }
   }
 
