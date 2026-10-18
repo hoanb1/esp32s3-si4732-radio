@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Draw.h"
 #include "Layout-FT8.h"
+#include "Ft8Tx.h"
 
 static uint32_t remoteTimer = millis();
 static uint8_t remoteSeqnum = 0;
@@ -467,6 +468,21 @@ int remoteDoCommand(char key)
         ledcWrite(PIN_LCD_BL, sleepOn() ? 0 : currentBrt);
         Serial.println("[TEST] Carrier OFF, backlight restored");
       }
+      break;
+    }
+    case 'K': // FT8 transmitter on the ESP32 APLL: K alone prints the commands
+    {
+      char line[48];
+      size_t n = 0;
+      uint32_t t0 = millis();
+      while (millis() - t0 < 100 && n < sizeof(line) - 1) {
+        if (Serial.available() <= 0) { delay(1); continue; }
+        char ch = Serial.read();
+        if (ch == '\r' || ch == '\n') break;
+        line[n++] = ch;
+      }
+      line[n] = 0;
+      ft8TxCommand(line);
       break;
     }
     case 'P': // Debug: P<Hz> sets SI4732 REFCLK_FREQ and re-tunes (no argument: re-tune only)
