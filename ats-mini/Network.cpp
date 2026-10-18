@@ -6,6 +6,7 @@
 #include "Draw.h"
 #include "Layout-FT8.h"
 #include "WebUI.h"
+#include "WorldMap.h"
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -1281,6 +1282,22 @@ static void webInit()
     AsyncWebServerResponse *response = new FlashResponse(200, "text/html; charset=utf-8", WEBUI_HTML_GZ, WEBUI_HTML_GZ_LEN);
     response->addHeader("Content-Encoding", "gzip");
     response->addHeader("ETag", WEBUI_ETAG);
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+  });
+
+  // World map for the web UI station map (Natural Earth 1:110m SVG, gzipped in flash), revalidated by ETag
+  server.on("/map.svg", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == WORLDMAP_ETAG) {
+      AsyncWebServerResponse *response = request->beginResponse(304);
+      response->addHeader("ETag", WORLDMAP_ETAG);
+      response->addHeader("Cache-Control", "no-cache");
+      request->send(response);
+      return;
+    }
+    AsyncWebServerResponse *response = new FlashResponse(200, "image/svg+xml", WORLDMAP_SVG_GZ, WORLDMAP_SVG_GZ_LEN);
+    response->addHeader("Content-Encoding", "gzip");
+    response->addHeader("ETag", WORLDMAP_ETAG);
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
   });

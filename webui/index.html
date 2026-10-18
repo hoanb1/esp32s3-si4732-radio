@@ -170,6 +170,23 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 /* FT8 / FT4 */
 .ft8{border-color:rgba(0,230,118,.45)}
 .hidden{display:none!important}
+/* Station map */
+#stationMap{position:relative;height:400px;border:1px solid #1e3252;border-radius:8px;background:#050b15;overflow:hidden;touch-action:none;cursor:grab;user-select:none}
+#stationMap.drag{cursor:grabbing}
+#mapSvg{width:100%;height:100%;display:block}
+#mapSvg .land{fill:#13233a}
+#mapSvg .coast{fill:none;stroke:#35608f;stroke-width:.8;vector-effect:non-scaling-stroke}
+#mapSvg .border{fill:none;stroke:#24405f;stroke-width:.6;vector-effect:non-scaling-stroke}
+#mapSvg .grid{fill:none;stroke:#1d3554;stroke-width:.6;vector-effect:non-scaling-stroke}
+#mapSvg .glabel{fill:#24405f;font:600 7px ui-monospace,monospace}
+#mapSvg .dot{stroke:#050b15;vector-effect:non-scaling-stroke;cursor:pointer}
+#mapSvg .dot:hover{stroke:#fff}
+#mapSvg .home{fill:#ff4081;stroke:#fff;vector-effect:non-scaling-stroke}
+.map-btns{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px}
+.map-btns button{width:28px;height:28px;padding:0;font-size:.9rem}
+.map-pop{position:absolute;z-index:2;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:.76rem;line-height:1.45;pointer-events:none;max-width:280px;box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.map-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.8rem}
+.legend-dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin:0 3px 0 8px;vertical-align:middle}
 .slot{display:flex;align-items:center;gap:10px;background:#091322;padding:7px 12px;border-radius:8px;border:1px solid #1e3456;flex-wrap:wrap}
 .slot-bar{flex:1;min-width:120px;height:12px;background:#050b14;border-radius:6px;overflow:hidden;border:1px solid #253c61}
 .slot-fill{height:100%;width:0;background:var(--cyan);transition:width .3s linear}
@@ -459,6 +476,27 @@ details.card summary::-webkit-details-marker{display:none}
     </div>
   </div>
 
+  <!-- Map of the stations heard (grid locators from FT8/FT4 messages, kept in this browser) -->
+  <div class="card hidden" id="mapCard">
+    <div class="card-hdr">
+      <div class="row">
+        <span class="card-title" style="color:var(--green)">🗺️ Stations heard</span>
+        <span class="badge info" id="mapCount">0 stations</span>
+      </div>
+      <div class="row">
+        <span class="lbl">My grid</span>
+        <input type="text" id="homeGrid" maxlength="6" style="padding:4px 9px;font-size:.78rem;width:80px;text-transform:uppercase" onchange="setHomeGrid(this.value)">
+        <select id="mapAge" style="padding:4px 6px;font-size:.78rem" onchange="saveMapPrefs();renderMap()">
+          <option value="1">Last 1 h</option><option value="6">Last 6 h</option><option value="24" selected>Last 24 h</option><option value="0">All</option>
+        </select>
+        <select id="mapBand" style="padding:4px 6px;font-size:.78rem" onchange="saveMapPrefs();renderMap()"><option value="">All bands</option></select>
+        <button class="sm danger" onclick="clearMap()">🗑️ Clear map</button>
+      </div>
+    </div>
+    <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapDots"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
+    <div class="lbl">SNR:<span class="legend-dot" style="background:#00e676"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#ffab00"></span>-13…-18<span class="legend-dot" style="background:#ff5252"></span>below -18 · grid squares are ~100 × 200 km, so a dot marks the square's center</div>
+  </div>
+
   <!-- Live radio log (Serial output pushed over /ws) -->
   <details class="card" id="logCard">
     <summary class="card-hdr">
@@ -547,7 +585,7 @@ function req(url, opts = {}, as = 'json', ms = 3000) {
     try {
       const r = await fetch(url, { cache: 'no-store', ...opts, signal: ctrl.signal });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      return as === 'json' ? await r.json() : as === 'buf' ? await r.arrayBuffer() : null;
+      return as === 'json' ? await r.json() : as === 'buf' ? await r.arrayBuffer() : as === 'text' ? await r.text() : null;
     } finally { clearTimeout(t); }
   };
   const p = chain.then(run);
@@ -759,8 +797,11 @@ scaleCanvas.addEventListener('click', e => {
 function isDigital() { return curStatus.mode === 'FT8' || curStatus.mode === 'FT4'; }
 function updateFt8Visibility() {
   const dig = isDigital();
+  const shown = dig && !ft8Visible;
   ft8Visible = dig;
   $('ft8DecoderCard').classList.toggle('hidden', !ft8Visible);
+  $('mapCard').classList.toggle('hidden', !ft8Visible);
+  if (shown) showMap();
 }
 
 function setOnline(ok) {
@@ -989,6 +1030,7 @@ async function fetchTraffic() {
   try {
     trafficCache = await req('/api/ft8/traffic', {}, 'json', 2500);
     renderTrafficTable();
+    ingestStations(trafficCache);
   } catch (e) {}
 }
 
@@ -1247,6 +1289,253 @@ $('sysDetails').addEventListener('toggle', e => {
 
 // Poll loop: one request at a time, paused while the tab is hidden
 const POLL_MS = 800;
+// ---- Station map: grid locators from FT8/FT4 messages, kept in localStorage ----
+const MAP_KEY = 'ft8Stations', MAP_PREFS = 'ft8MapPrefs';
+let stations = {}, seenMsgs = new Set(), homeGrid = 'OL31';
+try { stations = JSON.parse(localStorage.getItem(MAP_KEY) || '{}') || {}; } catch (e) { stations = {}; }
+try {
+  const p = JSON.parse(localStorage.getItem(MAP_PREFS) || '{}');
+  if (p.home) homeGrid = p.home;
+  if (p.age !== undefined) $('mapAge').value = p.age;
+  if (p.band !== undefined) $('mapBand').dataset.want = p.band;
+} catch (e) {}
+$('homeGrid').value = homeGrid;
+function saveMapPrefs() {
+  try { localStorage.setItem(MAP_PREFS, JSON.stringify({ home: homeGrid, age: $('mapAge').value, band: $('mapBand').value })); } catch (e) {}
+}
+function saveStations() { try { localStorage.setItem(MAP_KEY, JSON.stringify(stations)); } catch (e) {} }
+
+// Maidenhead locator (4 or 6 characters) -> center of the square
+function gridToLatLon(g) {
+  g = (g || '').toUpperCase();
+  if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g)) return null;
+  let lon = (g.charCodeAt(0) - 65) * 20 - 180 + (+g[2]) * 2;
+  let lat = (g.charCodeAt(1) - 65) * 10 - 90 + (+g[3]);
+  if (g.length === 6) { lon += (g.charCodeAt(4) - 65) / 12 + 1 / 24; lat += (g.charCodeAt(5) - 65) / 24 + 1 / 48; }
+  else { lon += 1; lat += 0.5; }
+  return [lat, lon];
+}
+function distBearing(a, b) {
+  const r = Math.PI / 180, [la1, lo1] = [a[0] * r, a[1] * r], [la2, lo2] = [b[0] * r, b[1] * r];
+  const d = 2 * 6371 * Math.asin(Math.sqrt(Math.sin((la2 - la1) / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin((lo2 - lo1) / 2) ** 2));
+  const y = Math.sin(lo2 - lo1) * Math.cos(la2), x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(lo2 - lo1);
+  return [Math.round(d), Math.round((Math.atan2(y, x) / r + 360) % 360)];
+}
+function bandName(khz) {
+  const b = [[1800,2000,'160m'],[3500,4000,'80m'],[5300,5410,'60m'],[7000,7300,'40m'],[10100,10150,'30m'],[14000,14350,'20m'],
+             [18068,18168,'17m'],[21000,21450,'15m'],[24890,24990,'12m'],[28000,29700,'10m']];
+  const f = b.find(x => khz >= x[0] && khz <= x[1]);
+  return f ? f[2] : (khz ? Math.round(khz) + ' kHz' : '?');
+}
+// Sender and grid of a message: "CQ [DX|POTA|..] CALL GRID" or "TO FROM GRID"
+function parseGridMsg(msg) {
+  const t = (msg || '').trim().toUpperCase().split(/\s+/);
+  if (t.length < 3) return null;
+  const grid = t[t.length - 1];
+  if (grid === 'RR73' || !gridToLatLon(grid)) return null;
+  const call = t[t.length - 2].replace(/^<|>$/g, '');
+  if (!/[0-9]/.test(call) || !/[A-Z]/.test(call) || call.length < 3) return null;
+  return { call, grid };
+}
+function ingestStations(list) {
+  const khz = parseFloat(curStatus.freq_khz) || 0, band = bandName(khz), now = Date.now();
+  let changed = false;
+  for (const m of list || []) {
+    const key = `${m.time}|${m.msg}`;
+    if (seenMsgs.has(key)) continue;
+    seenMsgs.add(key);
+    const p = parseGridMsg(m.msg);
+    if (!p) continue;
+    const s = stations[p.call] || { n: 0, best: -99 };
+    Object.assign(s, { grid: p.grid, snr: m.snr, t: now, band, utc: m.time, msg: m.msg, n: s.n + 1, best: Math.max(s.best, m.snr) });
+    stations[p.call] = s;
+    changed = true;
+  }
+  if (seenMsgs.size > 2000) seenMsgs = new Set([...seenMsgs].slice(-500));
+  if (changed) { saveStations(); renderMap(); }
+}
+function setHomeGrid(v) {
+  v = (v || '').trim().toUpperCase();
+  if (!gridToLatLon(v)) { $('homeGrid').value = homeGrid; return; }
+  homeGrid = v; $('homeGrid').value = v;
+  saveMapPrefs();
+  if (mapLoaded) resetView();
+  renderMap();
+}
+function clearMap() {
+  if (!confirm('Remove all stations from the map?')) return;
+  stations = {}; saveStations(); renderMap();
+}
+function snrColor(s) { return s >= 0 ? '#00e676' : s >= -12 ? '#00e5ff' : s >= -18 ? '#ffab00' : '#ff5252'; }
+
+// Equirectangular map, 2 SVG units per degree (same projection as /map.svg); centered on the home longitude
+const SVGNS = 'http://www.w3.org/2000/svg';
+let mapLoaded = false, mapLoading = false, view = null, homeX = 0;
+const toXY = ll => [(ll[1] + 180) * 2, (90 - ll[0]) * 2];
+function wrapX(x) { while (x < homeX - 360) x += 720; while (x >= homeX + 360) x -= 720; return x; }
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+async function showMap() {
+  if (mapLoaded) { applyView(); return; }
+  if (mapLoading) return;
+  mapLoading = true;
+  try {
+    const txt = await req('/map.svg', { cache: 'no-cache' }, 'text', 15000);
+    const doc = new DOMParser().parseFromString(txt, 'image/svg+xml');
+    const world = $('mapWorld');
+    // Three copies side by side so the map can be panned across the date line
+    const base = svgEl('g', {}, world);
+    doc.querySelectorAll('path').forEach(p => base.appendChild(document.importNode(p, true)));
+    for (const dx of [-720, 720]) world.appendChild(base.cloneNode(true)).setAttribute('transform', `translate(${dx} 0)`);
+    drawGrid();
+    mapLoaded = true;
+    $('mapNote').classList.add('hidden');
+    resetView();
+    renderMap();
+  } catch (e) {
+    T('mapNote', 'Could not load the map from the radio');
+  }
+  mapLoading = false;
+}
+// Maidenhead fields: 20 deg x 10 deg, labelled AA..RR
+function drawGrid() {
+  const g = $('mapGridG');
+  for (let lon = -540; lon <= 540; lon += 20) svgEl('line', { class: 'grid', x1: (lon + 180) * 2, y1: 0, x2: (lon + 180) * 2, y2: 360 }, g);
+  for (let lat = -80; lat <= 80; lat += 10) svgEl('line', { class: 'grid', x1: -720, y1: (90 - lat) * 2, x2: 1440, y2: (90 - lat) * 2 }, g);
+  for (let f = -18; f < 36; f++) for (let r = 0; r < 18; r++) {
+    const fi = ((f % 18) + 18) % 18;
+    svgEl('text', { class: 'glabel', x: f * 40 + 3, y: 360 - r * 20 - 4 }, g).textContent = String.fromCharCode(65 + fi, 65 + r);
+  }
+}
+function mapBox() { const r = $('stationMap').getBoundingClientRect(); return [r.width || 1, r.height || 1]; }
+function resetView() {
+  homeX = toXY(gridToLatLon(homeGrid))[0];
+  view = { x: homeX - 360, y: 0, w: 720 };
+}
+function applyView() {
+  if (!view) return;
+  const [bw, bh] = mapBox();
+  const h = view.w * bh / bw;
+  view.w = Math.min(Math.max(view.w, 8), 1080);
+  view.y = Math.min(Math.max(view.y, -40), 400 - h);
+  view.x = Math.min(Math.max(view.x, homeX - 900), homeX + 900 - view.w);
+  $('mapSvg').setAttribute('viewBox', `${view.x} ${view.y} ${view.w} ${h}`);
+  // Dots keep their size on screen
+  const k = view.w / bw;
+  $('mapDots').querySelectorAll('circle').forEach(c => c.setAttribute('r', (c.classList.contains('home') ? 6 : 5) * k));
+  $('mapGridG').style.display = k < 0.45 ? '' : 'none';   // locator grid once zoomed in
+  $('mapGridG').querySelectorAll('text').forEach(t => t.style.fontSize = (8 * k) + 'px');
+}
+function mapZoom(f, cx, cy) {
+  if (!view) return;
+  const [bw, bh] = mapBox();
+  if (cx === undefined) { cx = bw / 2; cy = bh / 2; }
+  const k = view.w / bw, px = view.x + cx * k, py = view.y + cy * k;
+  view.w /= f;
+  const k2 = view.w / bw;
+  view.x = px - cx * k2; view.y = py - cy * k2;
+  applyView();
+}
+function mapFit() {
+  if (!view) return;
+  const pts = [toXY(gridToLatLon(homeGrid))];
+  $('mapDots').querySelectorAll('circle').forEach(c => pts.push([+c.getAttribute('cx'), +c.getAttribute('cy')]));
+  const [bw, bh] = mapBox();
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  let w = Math.max(x1 - x0, (y1 - y0) * bw / bh, 60) * 1.15;
+  view = { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - w * bh / bw / 2, w };
+  applyView();
+}
+// Mouse/touch pan and zoom
+(() => {
+  const el = $('stationMap'), ptrs = new Map();
+  let last = null, pinch = 0;
+  el.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = el.getBoundingClientRect();
+    mapZoom(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  el.addEventListener('dblclick', e => { const r = el.getBoundingClientRect(); mapZoom(2, e.clientX - r.left, e.clientY - r.top); });
+  el.addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+    el.setPointerCapture(e.pointerId);
+    last = [e.clientX, e.clientY]; pinch = 0;
+    el.classList.add('drag');
+  });
+  el.addEventListener('pointermove', e => {
+    if (!ptrs.has(e.pointerId) || !view) return;
+    ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+    const [bw] = mapBox(), k = view.w / bw;
+    if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const r = el.getBoundingClientRect();
+      if (pinch) mapZoom(d / pinch, (a[0] + b[0]) / 2 - r.left, (a[1] + b[1]) / 2 - r.top);
+      pinch = d;
+      return;
+    }
+    view.x -= (e.clientX - last[0]) * k; view.y -= (e.clientY - last[1]) * k;
+    last = [e.clientX, e.clientY];
+    applyView();
+  });
+  const up = e => { ptrs.delete(e.pointerId); if (!ptrs.size) el.classList.remove('drag'); pinch = 0;
+                    if (ptrs.size === 1) last = [...ptrs.values()][0]; };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  // Station details on hover / tap
+  el.addEventListener('pointerover', e => {
+    const c = e.target.closest('circle[data-call]');
+    if (!c) return;
+    const pop = $('mapPop'), r = el.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    pop.innerHTML = c.dataset.info;
+    pop.classList.remove('hidden');
+    const x = cr.left - r.left + 12, y = cr.top - r.top + 12;
+    pop.style.left = Math.min(x, r.width - pop.offsetWidth - 6) + 'px';
+    pop.style.top = (y + pop.offsetHeight > r.height ? y - pop.offsetHeight - 18 : y) + 'px';
+  });
+  el.addEventListener('pointerout', e => { if (e.target.closest('circle[data-call]')) $('mapPop').classList.add('hidden'); });
+  window.addEventListener('resize', applyView);
+})();
+
+function renderMap() {
+  const ageH = +$('mapAge').value, now = Date.now();
+  // Band filter choices follow the bands seen so far
+  const bands = [...new Set(Object.values(stations).map(s => s.band))].sort();
+  const sel = $('mapBand'), want = sel.dataset.want !== undefined ? sel.dataset.want : sel.value;
+  const opts = '<option value="">All bands</option>' + bands.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join('');
+  if (sel.innerHTML !== opts) sel.innerHTML = opts;
+  sel.value = bands.includes(want) ? want : '';
+  delete sel.dataset.want;
+  const band = sel.value;
+  const list = Object.entries(stations).filter(([, s]) => (!ageH || now - s.t < ageH * 3600e3) && (!band || s.band === band));
+  T('mapCount', `${list.length} station${list.length === 1 ? '' : 's'}`);
+  if (!mapLoaded) return;
+  const home = gridToLatLon(homeGrid), g = $('mapDots');
+  g.textContent = '';
+  // Weakest first so strong stations draw on top
+  list.sort((a, b) => a[1].snr - b[1].snr).forEach(([call, s]) => {
+    const ll = gridToLatLon(s.grid);
+    if (!ll) return;
+    const [km, deg] = distBearing(home, ll);
+    const ago = Math.round((now - s.t) / 60000);
+    const [x, y] = toXY(ll);
+    const c = svgEl('circle', { class: 'dot', cx: wrapX(x), cy: y, fill: snrColor(s.snr), 'data-call': call }, g);
+    c.dataset.info = `<b class="mono">${esc(call)}</b> · ${esc(s.grid)} · ${esc(s.band)}<br>` +
+      `SNR ${s.snr > 0 ? '+' : ''}${s.snr} dB (best ${s.best > 0 ? '+' : ''}${s.best}) · heard ${s.n}×<br>` +
+      `${km.toLocaleString()} km · ${deg}° · ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}<br>` +
+      `<span class="mono muted">${esc(s.utc)} ${esc(s.msg)}</span>`;
+  });
+  const [hx, hy] = toXY(home);
+  const hc = svgEl('circle', { class: 'home', cx: hx, cy: hy, 'data-call': 'home' }, g);
+  hc.dataset.info = `<b>Home</b> ${esc(homeGrid)}`;
+  applyView();
+}
+
 let pollTimer = 0, polling = false, pollAgain = false, tick = 0;
 function kick(ms = 0) {
   if (polling) { pollAgain = true; return; }
