@@ -175,6 +175,8 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 #mapSvg .border{fill:none;stroke:#24405f;stroke-width:.6;vector-effect:non-scaling-stroke}
 #mapSvg .grid{fill:none;stroke:#1d3554;stroke-width:.6;vector-effect:non-scaling-stroke}
 #mapSvg .glabel{fill:#24405f;font:600 7px ui-monospace,monospace}
+#mapSvg .path{fill:none;stroke-width:1.2;stroke-opacity:.45;stroke-linecap:round;vector-effect:non-scaling-stroke;pointer-events:none}
+#mapSvg .path.hi{stroke-width:2.2;stroke-opacity:1}
 #mapSvg .dot{stroke:#050b15;vector-effect:non-scaling-stroke;cursor:pointer}
 #mapSvg .dot:hover{stroke:#fff}
 #mapSvg .home{fill:var(--cyan);stroke:#fff;vector-effect:non-scaling-stroke}
@@ -489,7 +491,7 @@ details.card summary::-webkit-details-marker{display:none}
         <button class="sm danger" onclick="clearMap()">🗑️ Clear map</button>
       </div>
     </div>
-    <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapDots"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
+    <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapLines"></g><g id="mapDots"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
     <div class="lbl">SNR:<span class="legend-dot" style="background:#e0fbff"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#00838f"></span>-13…-18<span class="legend-dot" style="background:#4a6380"></span>below -18 · grid squares are ~100 × 200 km, so a dot marks the square's center</div>
   </div>
 
@@ -1369,6 +1371,21 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 let mapLoaded = false, mapLoading = false, view = null, homeX = 0;
 const toXY = ll => [(ll[1] + 180) * 2, (90 - ll[0]) * 2];
 function wrapX(x) { while (x < homeX - 360) x += 720; while (x >= homeX + 360) x -= 720; return x; }
+// Great-circle path from a to b ([lat, lon]) as SVG points, longitude unwrapped from the home side
+function greatCircle(a, b, n = 48) {
+  const r = Math.PI / 180, v = ([la, lo]) => [Math.cos(la * r) * Math.cos(lo * r), Math.cos(la * r) * Math.sin(lo * r), Math.sin(la * r)];
+  const p = v(a), q = v(b), d = Math.acos(Math.min(1, Math.max(-1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2])));
+  const pts = [];
+  let x0 = wrapX(toXY(a)[0]), lon0 = a[1];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, s = Math.sin(d), ka = d < 1e-6 ? 1 - t : Math.sin((1 - t) * d) / s, kb = d < 1e-6 ? t : Math.sin(t * d) / s;
+    const x = ka * p[0] + kb * q[0], y = ka * p[1] + kb * q[1], z = ka * p[2] + kb * q[2];
+    const lat = Math.atan2(z, Math.hypot(x, y)) / r, lon = Math.atan2(y, x) / r;
+    x0 += ((lon - lon0 + 540) % 360 - 180) * 2; lon0 = lon;
+    pts.push(`${x0.toFixed(1)},${((90 - lat) * 2).toFixed(1)}`);
+  }
+  return pts;
+}
 function svgEl(tag, attrs, parent) {
   const e = document.createElementNS(SVGNS, tag);
   for (const k in attrs) e.setAttribute(k, attrs[k]);
@@ -1490,11 +1507,15 @@ function mapFit() {
     const pop = $('mapPop'), r = el.getBoundingClientRect(), cr = c.getBoundingClientRect();
     pop.innerHTML = c.dataset.info;
     pop.classList.remove('hidden');
+    $('mapLines').querySelectorAll('.path').forEach(p => p.classList.toggle('hi', p.dataset.call === c.dataset.call));
     const x = cr.left - r.left + 12, y = cr.top - r.top + 12;
     pop.style.left = Math.min(x, r.width - pop.offsetWidth - 6) + 'px';
     pop.style.top = (y + pop.offsetHeight > r.height ? y - pop.offsetHeight - 18 : y) + 'px';
   });
-  el.addEventListener('pointerout', e => { if (e.target.closest('circle[data-call]')) $('mapPop').classList.add('hidden'); });
+  el.addEventListener('pointerout', e => { if (e.target.closest('circle[data-call]')) {
+    $('mapPop').classList.add('hidden');
+    $('mapLines').querySelectorAll('.hi').forEach(p => p.classList.remove('hi'));
+  } });
   window.addEventListener('resize', applyView);
 })();
 
@@ -1511,16 +1532,17 @@ function renderMap() {
   const list = Object.entries(stations).filter(([, s]) => (!ageH || now - s.t < ageH * 3600e3) && (!band || s.band === band));
   T('mapCount', `${list.length} station${list.length === 1 ? '' : 's'}`);
   if (!mapLoaded) return;
-  const home = gridToLatLon(homeGrid), g = $('mapDots');
-  g.textContent = '';
+  const home = gridToLatLon(homeGrid), g = $('mapDots'), lines = $('mapLines');
+  g.textContent = ''; lines.textContent = '';
   // Weakest first so strong stations draw on top
   list.sort((a, b) => a[1].snr - b[1].snr).forEach(([call, s]) => {
     const ll = gridToLatLon(s.grid);
     if (!ll) return;
     const [km, deg] = distBearing(home, ll);
     const ago = Math.round((now - s.t) / 60000);
-    const [x, y] = toXY(ll);
-    const c = svgEl('circle', { class: 'dot', cx: wrapX(x), cy: y, fill: snrColor(s.snr), 'data-call': call }, g);
+    const pts = greatCircle(home, ll), [x, y] = pts[pts.length - 1].split(',').map(Number);
+    svgEl('polyline', { class: 'path', points: pts.join(' '), stroke: snrColor(s.snr), 'data-call': call }, lines);
+    const c = svgEl('circle', { class: 'dot', cx: x, cy: y, fill: snrColor(s.snr), 'data-call': call }, g);
     c.dataset.info = `<b class="mono">${esc(call)}</b> · ${esc(s.grid)} · ${esc(s.band)}<br>` +
       `SNR ${s.snr > 0 ? '+' : ''}${s.snr} dB (best ${s.best > 0 ? '+' : ''}${s.best}) · heard ${s.n}×<br>` +
       `${km.toLocaleString()} km · ${deg}° · ${ago < 1 ? 'just now' : ago < 120 ? ago + ' min ago' : Math.round(ago / 60) + ' h ago'}<br>` +
