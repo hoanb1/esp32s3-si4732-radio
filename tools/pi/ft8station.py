@@ -283,6 +283,9 @@ def main():
     sub.add_parser('listen', help='print decodes only')
     args = ap.parse_args()
 
+    if args.cmd != 'show' and os.geteuid() != 0:
+        sys.exit('ft8station needs root (it writes %s, drives the GPIO clock and stops/starts openwebrx):\n'
+                 '  sudo ft8station %s' % (CONF, ' '.join(sys.argv[1:])))
     conf = load_conf()
     if args.cmd == 'config':
         for k in ('call', 'grid', 'dial', 'audio', 'gain'):
