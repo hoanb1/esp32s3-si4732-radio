@@ -1382,7 +1382,7 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 let mapLoaded = false, mapLoading = false, view = null, homeX = 0;
 const toXY = ll => [(ll[1] + 180) * 2, (90 - ll[0]) * 2];
 function wrapX(x) { while (x < homeX - 360) x += 720; while (x >= homeX + 360) x -= 720; return x; }
-// Great-circle path from a to b ([lat, lon]) as SVG points, longitude unwrapped from the home side
+// Great-circle path from a to b ([lat, lon]) as [x, y] SVG points, longitude unwrapped from the home side
 function greatCircle(a, b, n = 48) {
   const r = Math.PI / 180, v = ([la, lo]) => [Math.cos(la * r) * Math.cos(lo * r), Math.cos(la * r) * Math.sin(lo * r), Math.sin(la * r)];
   const p = v(a), q = v(b), d = Math.acos(Math.min(1, Math.max(-1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2])));
@@ -1393,7 +1393,7 @@ function greatCircle(a, b, n = 48) {
     const x = ka * p[0] + kb * q[0], y = ka * p[1] + kb * q[1], z = ka * p[2] + kb * q[2];
     const lat = Math.atan2(z, Math.hypot(x, y)) / r, lon = Math.atan2(y, x) / r;
     x0 += ((lon - lon0 + 540) % 360 - 180) * 2; lon0 = lon;
-    pts.push(`${x0.toFixed(1)},${((90 - lat) * 2).toFixed(1)}`);
+    pts.push([x0, (90 - lat) * 2]);
   }
   return pts;
 }
@@ -1556,7 +1556,13 @@ function renderMap() {
     const peer = s.to && shown.has(s.to) && gridToLatLon(shown.get(s.to).grid);
     const pts = peer ? greatCircle(ll, peer) : greatCircle(home, ll);
     const both = peer && shown.get(s.to).to === call && s.to < call;   // a two-way contact gets one line
-    if (!both) svgEl('polyline', { class: peer ? 'path p2p' : 'path', points: pts.join(' '), stroke: snrColor(s.snr), 'data-call': call, 'data-to': peer ? s.to : '' }, lines);
+    // A path leaving the centered world also gets drawn one world over, where it meets the dot on the other side
+    const xs = pts.map(p => p[0]), shifts = [0];
+    if (Math.max(...xs) > homeX + 360) shifts.push(-720);
+    if (Math.min(...xs) < homeX - 360) shifts.push(720);
+    if (!both) for (const dx of shifts)
+      svgEl('polyline', { class: peer ? 'path p2p' : 'path', points: pts.map(p => `${(p[0] + dx).toFixed(1)},${p[1].toFixed(1)}`).join(' '),
+                          stroke: snrColor(s.snr), 'data-call': call, 'data-to': peer ? s.to : '' }, lines);
     const [x, y] = toXY(ll);
     const c = svgEl('circle', { class: 'dot', cx: wrapX(x), cy: y, fill: snrColor(s.snr), 'data-call': call }, g);
     c.dataset.info = `<b class="mono">${esc(call)}</b> · ${esc(s.grid)} · ${esc(s.band)}<br>` +
