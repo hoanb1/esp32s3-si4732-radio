@@ -18,6 +18,7 @@ ifdef HALF_STEP
 endif
 
 OPTIONS = \
+	--library ../libraries/ft8_lib \
 	--build-property "compiler.cpp.extra_flags=$(DEFINES)" \
 	--warnings all
 

@@ -85,6 +85,7 @@ bool ft8ToggleAdcTimer();
 
 // Print hardware/DSP diagnostic summary to Serial ('d' command)
 void ft8PrintDiag();
+void ft8SpikeCommand(const char *args);   // serial H: ADC spike filter threshold / on-off A/B test
 void ft8TestAudioRouting();
 
 // Getters for Web UI endpoints
@@ -93,6 +94,7 @@ bool ft8IsDecodingNow();
 uint32_t ft8GetLastDurationMs();
 uint8_t ft8GetAudioLevel();
 uint32_t ft8GetTotalDecoded();
+void ft8GetAdcClock(uint32_t *slot, uint32_t *raw, uint16_t *tail);
 int ft8GetTrafficCount();
 const FT8MessageEntry* ft8GetTrafficEntry(int idx);
 const uint8_t* ft8GetWebWaterfallBuffer(); // 93 * 120 bytes

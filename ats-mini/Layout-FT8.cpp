@@ -29,6 +29,11 @@
 #define FT8_MAX_CANDIDATES  100
 #define FT8_LDPC_ITERATIONS 35
 #define FT8_MIN_SYNC_SCORE  4     // Catch all weak & moderate off-air FT8 signals
+// A-priori CQ pass (ftx_decode_candidate_ap): for candidates that nearly decoded. On real 15 m slots it
+// took the ESP32 decoder from 1 to 5 of jt9's 9 decodes, with no false decodes on real or noise slots,
+// at 1-4 extra LDPC passes (~28 ms each) per slot.
+#define FT8_AP_MAX_ERRORS   12    // try AP when normal BP ends with 1..12 parity errors
+#define FT8_AP_MIN_SCORE    8     // and the candidate's sync score is at least this
 #define FT8_ADC_VOLUME      48    // SI4732 volume for GPIO34 capture; the line out sits only ~0.1 V above the ADC floor, so louder clips
 
 // Battery ADC reading (GPIO35), taken at boot before ADC1 switches to DMA mode
@@ -60,6 +65,9 @@ static hw_timer_t *adcTimer = NULL;
 static volatile bool adcRunning = false;
 static volatile uint32_t *adcRaw = NULL;                   // FT8_RAW_RING words in IRAM
 static volatile uint32_t adcRawHead = 0;                   // total raw samples written by the timer ISR
+static volatile uint32_t adcClkSlot = 0xFFFFFFFF;          // last slot boundary the capture aligned to,
+static volatile uint32_t adcClkRaw = 0;                    // the raw sample index taken at that boundary,
+static volatile uint16_t adcClkTail = 0;                   // and the partial block it cut (720 at 6000 Hz)
 static uint32_t monSlotId = 0xFFFFFFFF;                     // slot currently being collected into liveMon
 static bool monSlotUsable = false;                           // false if the slot start was missed
 
@@ -146,6 +154,15 @@ static uint32_t epochBaseMs = 0;
 static bool hasManualEpoch = false;
 static uint8_t lastSlotSec = 255;
 static bool slotDecoded = false;
+
+// ADC spike filter: a sample more than spikeThr counts from both neighbours is replaced by their mean.
+// At 6 kHz a loud 2-3 kHz tone also jumps that far between samples, so the threshold is adjustable
+// (serial H<n>, 0 = off) and H A alternates on/off by slot to compare decode counts on the air.
+static int16_t spikeThrSet = 300;      // configured threshold
+static int16_t spikeThr = 300;         // threshold used for the current slot
+static bool spikeAB = false;
+static uint32_t spikeFixes = 0;        // samples changed in the current slot
+static uint32_t abSlots[2] = {0, 0}, abDecodes[2] = {0, 0};   // [0] filter off, [1] filter on
 static bool ft8IsDecoding = false;
 static uint32_t ft8LastDurationMs = 0;
 static int ft8LastDecodeCount = 0;
@@ -396,6 +413,9 @@ static void adcTask(void *arg) {
 
         // New slot: start block 0 at the output that corresponds to the boundary input sample
         if (pendSlot != 0xFFFFFFFF && (int32_t)(m - (pendInIdx + groupDelay)) >= 0) {
+          adcClkTail = sampleIdx;
+          adcClkRaw = pendInIdx;
+          adcClkSlot = pendSlot;
           slotId = pendSlot;
           pendSlot = 0xFFFFFFFF;
           sampleIdx = 0;
@@ -439,7 +459,9 @@ static bool adcStart() {
   adcTimer = timerBegin(16000000);                      // 80 MHz / 5
   if (!adcTimer) return false;
   timerAttachInterrupt(adcTimer, &adcTimerIsr);
-  timerAlarm(adcTimer, 16000000 / FT8_ADC_RATE, true, 0);
+  // The auto-reload lands one count after the alarm, so the period is alarm + 1 ticks
+  // (an alarm of 1000 measured 239760 samples per 15 s slot, i.e. 16 MHz / 1001)
+  timerAlarm(adcTimer, 16000000 / FT8_ADC_RATE - 1, true, 0);
   adcRunning = true;
   return true;
 }
@@ -451,7 +473,13 @@ void ft8Init() {
   callHashIf.lookup_hash = hashLookup;
   callHashIf.save_hash = hashSave;
 
-  // Initialize FT8 DSP monitor: 200..2900 Hz @ 6000 Hz, time_osr=1 (allocated in 32-bit IRAM), freq_osr=1
+  // ADC buffers first, so they get the IRAM before the monitor's time-OSR halves (5.8 KB) do
+  adcBuf = (volatile int32_t (*)[FT8_BLOCK_SAMPLES])iramAlloc(sizeof(int32_t) * FT8_RING_BLOCKS * FT8_BLOCK_SAMPLES);
+  adcRaw = (volatile uint32_t *)iramAlloc(sizeof(uint32_t) * FT8_RAW_RING);
+
+  // Initialize FT8 DSP monitor: 200..2900 Hz @ 6000 Hz, time_osr=2, freq_osr=1. The local ft8_lib
+  // (WF_NIBBLE) packs both half-symbol time offsets as 4-bit levels into one 85 x 433 byte plane,
+  // the same RAM as 8-bit 1x1; offline tests on real slots gave 4.5x the decodes of 1x1.
   Serial.printf("[FT8] Before monitor: IRAM-only free=%u, largest 32bit=%u\r\n",
                 (unsigned int)(heap_caps_get_free_size(MALLOC_CAP_32BIT) - heap_caps_get_free_size(MALLOC_CAP_8BIT)),
                 (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_32BIT));
@@ -461,16 +489,18 @@ void ft8Init() {
   cfg.f_min = 200.0f;
   cfg.f_max = 2900.0f;
   cfg.sample_rate = FT8_SAMPLE_RATE;
-  cfg.time_osr = 1;
+  cfg.time_osr = 2;
   cfg.freq_osr = 1;
   cfg.protocol = FTX_PROTOCOL_FT8;
 
   monitor_init(&liveMon, &cfg);
   monInitialized = true;
-  Serial.printf("[FT8] DSP Monitor ready: wf.mag=%p, osr1=%p (%dx%d, time_osr=%d), free_heap=%u (8bit=%u)\r\n",
-                liveMon.wf.mag, liveMon.wf.mag_osr1, liveMon.wf.max_blocks, liveMon.wf.num_bins,
+  Serial.printf("[FT8] DSP Monitor ready: wf.mag=%p (%dx%d, time_osr=%d), free_heap=%u (8bit=%u)\r\n",
+                liveMon.wf.mag, liveMon.wf.max_blocks, liveMon.wf.num_bins,
                 liveMon.wf.time_osr, (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT));
+  Serial.printf("[FT8] OSR halves=%p, IRAM-only free=%u\r\n", liveMon.half_buf,
+                (unsigned int)(heap_caps_get_free_size(MALLOC_CAP_32BIT) - heap_caps_get_free_size(MALLOC_CAP_8BIT)));
 
   memset(webWf, 0, sizeof(webWf));
 
@@ -480,8 +510,6 @@ void ft8Init() {
   g_latestVbatRaw = (uint16_t)analogRead(35);
 
   // Start crystal-timed capture of GPIO34 audio
-  adcBuf = (volatile int32_t (*)[FT8_BLOCK_SAMPLES])iramAlloc(sizeof(int32_t) * FT8_RING_BLOCKS * FT8_BLOCK_SAMPLES);
-  adcRaw = (volatile uint32_t *)iramAlloc(sizeof(uint32_t) * FT8_RAW_RING);
   if (!adcBuf || !adcRaw) Serial.println("[FT8] ADC buffer allocation failed");
   rsDesign();
   bool adcOk = adcBuf && adcRaw && adcStart();
@@ -497,21 +525,19 @@ static int g_lastRowMinMag = 0;
 static int g_lastRowMaxMag = 0;
 static float g_absNoiseFloor = 111.0f;
 
-// Update shared Web UI & LCD waterfall (36 rows x 120 cols) from the latest FFT block in mon->wf
+// Update shared Web UI & LCD waterfall (36 rows x 120 cols) from the block monitor_process just added
+// (mon->row_db8 keeps its unquantized 8-bit magnitudes; the waterfall plane only holds 4-bit levels)
 static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
-  if (!mon || !mon->wf.mag || blockIdx < 0 || blockIdx >= mon->wf.max_blocks) return;
-  const uint8_t *rowMag0 = &mon->wf.mag[blockIdx * mon->wf.block_stride];
+  if (!mon || !mon->row_db8 || blockIdx < 0 || blockIdx >= mon->wf.max_blocks) return;
+  const uint8_t *rowMag0 = mon->row_db8;
   int numBins = mon->wf.num_bins;
-  const uint8_t *rowMag1 = (mon->wf.time_osr > 1 && mon->wf.mag_osr1)
-                           ? &mon->wf.mag_osr1[blockIdx * mon->wf.block_stride]
-                           : rowMag0;
 
   // Compute row mean, min, max across the passband (0.5 dB units)
   int sumMag = 0;
   int minMag = 255;
   int maxMag = 0;
   for (int b = 0; b < numBins; b++) {
-    int v = wf_read_u8(&rowMag0[b]);
+    int v = rowMag0[b];
     sumMag += v;
     if (v < minMag) minMag = v;
     if (v > maxMag) maxMag = v;
@@ -537,9 +563,7 @@ static void pushMonitorRowToWaterfalls(const monitor_t *mon, int blockIdx) {
     int s = 0;
     uint8_t pk = 0;
     for (int b = bStart; b < bEnd; b++) {
-      uint8_t m = wf_read_u8(&rowMag0[b]);
-      uint8_t m1 = wf_read_u8(&rowMag1[b]);
-      if (m1 > m) m = m1;
+      uint8_t m = rowMag0[b];
       s += m;
       if (m > pk) pk = m;
     }
@@ -678,10 +702,13 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
 
   ftx_candidate_t candidates[FT8_MAX_CANDIDATES];
   int numCandidates = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, candidates, FT8_MIN_SYNC_SCORE);
+  uint32_t syncMs = millis() - t0;
 
   uint16_t seenHashes[32];
   int numSeen = 0;
   int decodedNow = 0;
+  int numTried = 0, apDecodes = 0;
+  uint32_t ldpcUs = 0, ldpcMaxUs = 0;
 
   uint8_t utcH = 0, utcM = 0, utcS = 0;
   ft8GetCurrentUTC(&utcH, &utcM, &utcS);
@@ -698,12 +725,18 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
   for (int i = 0; i < numCandidates; i++) {
     // Never exceed 1050 ms (live) or 1400 ms (test) so decoding never starves Web UI or next FT8 slot
     if (millis() - t0 > (isTest ? 1400UL : 1050UL)) break;
+    numTried++;
 
     const ftx_candidate_t *cand = &candidates[i];
     ftx_message_t msg;
     ftx_decode_status_t status;
 
-    bool ok = ftx_decode_candidate(&mon->wf, cand, FT8_LDPC_ITERATIONS, &msg, &status);
+    uint32_t tc0 = micros();
+    bool ok = ftx_decode_candidate_ap(&mon->wf, cand, FT8_LDPC_ITERATIONS,
+                                      cand->score >= FT8_AP_MIN_SCORE ? FT8_AP_MAX_ERRORS : 0, &msg, &status);
+    uint32_t tc = micros() - tc0;
+    ldpcUs += tc;
+    if (tc > ldpcMaxUs) ldpcMaxUs = tc;
     if (status.ldpc_errors < minLdpcErr) {
       minLdpcErr = status.ldpc_errors;
       bestErrFreqHz = (uint16_t)roundf((mon->min_bin + cand->freq_offset + (float)cand->freq_sub / mon->wf.freq_osr) * 6.25f);
@@ -734,9 +767,8 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
     if (numSeen < 32) seenHashes[numSeen++] = msg.hash;
 
     // Compute SNR (dB), DT (s), and Audio Frequency (Hz)
-    int snrDb = (cand->score / 3) - 24;
-    if (snrDb < -24) snrDb = -24;
-    if (snrDb > 24) snrDb = 24;
+    // SNR in 2500 Hz from the re-encoded tones along the decoded path (WSJT-X style)
+    int snrDb = (int)lroundf(ftx_message_snr(&mon->wf, cand, &msg));
 
     float dtSec = (cand->time_offset + (float)cand->time_sub / mon->wf.time_osr) * 0.16f - (isTest ? 0.0f : 0.5f);
     uint16_t freqHz = (uint16_t)roundf((mon->min_bin + cand->freq_offset + (float)cand->freq_sub / mon->wf.freq_osr) * 6.25f);
@@ -767,6 +799,7 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
 
     decodedNow++;
     ft8TotalDecoded++;
+    if (status.used_ap) apDecodes++;
 
     Serial.printf("  %s | %+3ddB | %+4.1fs | %4uHz | %-8s | %s\r\n",
                   timeStr, snrDb, entry->dt, freqHz, senderCall, text);
@@ -778,9 +811,15 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
   ft8LastDecodeCount = decodedNow;
   ft8IsDecoding = false;
 
-  Serial.printf("[FT8 %s] %s %u kHz (BFO:%+d) | Decoded=%d in %lu ms (cand=%d, top=%d@%uHz, bestErr=%d@%uHz/DT%+4.1fs/sc%d, blk=%d, drop=%lu, Vpp=%d, RMS=%.1f)\r\n",
+  if (!isTest && spikeAB) {
+    abSlots[spikeThr > 0]++;
+    abDecodes[spikeThr > 0] += decodedNow;
+  }
+  Serial.printf("[FT8 %s] spike filter %s: %lu samples changed\r\n", isTest ? "TEST" : "LIVE",
+                spikeThr > 0 ? "on" : "OFF", (unsigned long)spikeFixes);
+  Serial.printf("[FT8 %s] %s %u kHz (BFO:%+d) | Decoded=%d (AP %d) in %lu ms (sync=%lu, ldpc=%lu/max%lu, cand=%d/%d, top=%d@%uHz, bestErr=%d@%uHz/DT%+4.1fs/sc%d, blk=%d, drop=%lu, Vpp=%d, RMS=%.1f)\r\n",
                 isTest ? "TEST" : "LIVE", getCurrentBand()->bandName, currentFrequency, currentBFO,
-                decodedNow, (unsigned long)ft8LastDurationMs, numCandidates, topScore, topFreqHz,
+                decodedNow, apDecodes, (unsigned long)ft8LastDurationMs, (unsigned long)syncMs, (unsigned long)(ldpcUs / 1000), (unsigned long)(ldpcMaxUs / 1000), numTried, numCandidates, topScore, topFreqHz,
                 minLdpcErr, bestErrFreqHz, bestErrDt, bestErrScore, mon->wf.num_blocks, (unsigned long)adcDroppedBlocks, lastAdcVpp, lastBlockRms);
   if (decodedNow > 0 || isTest) {
     ft8AddLog("[INFO] %s decode done: %d messages (%lu ms, %d blocks)",
@@ -877,13 +916,18 @@ bool ft8TickWaterfall() {
       monitor_reset(&liveMon);
       slotDecoded = digActive && !monSlotUsable;   // a slot whose start was missed cannot be time-aligned
       if (digActive) needRedraw = true;
+      spikeThr = (spikeAB && (blkSlot & 1)) ? 0 : spikeThrSet;
+      spikeFixes = 0;
     }
-    for (int i = 1; i < FT8_BLOCK_SAMPLES - 1; i++) {
-      int32_t prev = raw[i - 1];
-      int32_t cur  = raw[i];
-      int32_t next = raw[i + 1];
-      if (abs(cur - prev) > 300 && abs(cur - next) > 300) {
-        raw[i] = (prev + next) >> 1;
+    if (spikeThr > 0) {
+      for (int i = 1; i < FT8_BLOCK_SAMPLES - 1; i++) {
+        int32_t prev = raw[i - 1];
+        int32_t cur  = raw[i];
+        int32_t next = raw[i + 1];
+        if (abs(cur - prev) > spikeThr && abs(cur - next) > spikeThr) {
+          raw[i] = (prev + next) >> 1;
+          spikeFixes++;
+        }
       }
     }
 
@@ -1178,6 +1222,13 @@ void ft8ClearTraffic() {
 uint8_t ft8GetAudioLevel() { return ft8AudioLevel; }
 bool ft8IsDecodingNow() { return ft8IsDecoding; }
 uint32_t ft8GetLastDurationMs() { return ft8LastDurationMs; }
+// Capture clock check: raw 16 kHz samples between two slot boundaries should be 240000 per 15 s
+void ft8GetAdcClock(uint32_t *slot, uint32_t *raw, uint16_t *tail) {
+  *slot = adcClkSlot;
+  *raw = adcClkRaw;
+  *tail = adcClkTail;
+}
+
 uint32_t ft8GetTotalDecoded() { return ft8TotalDecoded; }
 int ft8GetTrafficCount() { return ft8TrafficCount; }
 const FT8MessageEntry* ft8GetTrafficEntry(int idx) {
@@ -1349,13 +1400,12 @@ void ft8PrintDiag() {
   if (liveMon.wf.mag && liveMon.wf.num_blocks > 0 && liveMon.wf.num_bins > 0) {
     int nBlk = liveMon.wf.num_blocks;
     int nBin = liveMon.wf.num_bins;
-    int stride = liveMon.wf.block_stride;
     uint16_t peakBins[5] = {0};
     int peakDiffs[5] = {0};
     for (int b = 2; b < nBin - 2; b++) {
       int sumB = 0, maxB = 0;
       for (int r = 0; r < nBlk; r++) {
-        uint8_t m = wf_read_u8(&liveMon.wf.mag[r * stride + b]);
+        int m = monitor_row_level(&liveMon.wf, r, b) - 100 + g_lastRowAvgMag;   // level above the local floor
         sumB += m;
         if (m > maxB) maxB = m;
       }
@@ -1654,4 +1704,19 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
   if (currentCmd != CMD_NONE) {
     drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
   }
+}
+
+// Serial H: H<n> sets the spike threshold (0 = off), HA toggles the on/off A/B test, H prints the tally
+void ft8SpikeCommand(const char *args) {
+  while (*args == ' ') args++;
+  if (*args == 'A' || *args == 'a') {
+    spikeAB = !spikeAB;
+    abSlots[0] = abSlots[1] = abDecodes[0] = abDecodes[1] = 0;
+  } else if (isDigit(*args)) {
+    spikeThrSet = (int16_t)atoi(args);
+  }
+  Serial.printf("[FT8] Spike filter threshold %d%s, A/B %s: off %lu decodes in %lu slots, on (%d) %lu decodes in %lu slots\r\n",
+                spikeThrSet, spikeThrSet ? "" : " (off)", spikeAB ? "RUNNING" : "stopped",
+                (unsigned long)abDecodes[0], (unsigned long)abSlots[0], spikeThrSet,
+                (unsigned long)abDecodes[1], (unsigned long)abSlots[1]);
 }

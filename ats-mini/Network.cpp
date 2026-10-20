@@ -1078,6 +1078,10 @@ static int buildStatusJson(char *json, size_t cap)
   cleanJsonStr(rdsTxt, getRadioText(), sizeof(rdsTxt));
   cleanJsonStr(cleanSsid, ssid.c_str(), sizeof(cleanSsid));
 
+  uint32_t adcSlot, adcSlotRaw;
+  uint16_t adcSlotTail;
+  ft8GetAdcClock(&adcSlot, &adcSlotRaw, &adcSlotTail);
+
   int len = snprintf(json, cap,
     "{\"freq_khz\":\"%s\",\"raw_freq\":%u,\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
     "\"band_min\":%u,\"band_max\":%u,"
@@ -1090,7 +1094,8 @@ static int buildStatusJson(char *json, size_t cap)
     "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
-    "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu}",
+    "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu,"
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1106,7 +1111,8 @@ static int buildStatusJson(char *json, size_t cap)
     ft8IsSpeakerMuted() ? "true" : "false",
     ft8WebAudioActive() ? "true" : "false",
     ft8GetAudioLevel(), (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-    (unsigned long)ft8GetTotalDecoded()
+    (unsigned long)ft8GetTotalDecoded(),
+    (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;

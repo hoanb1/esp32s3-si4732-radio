@@ -470,6 +470,21 @@ int remoteDoCommand(char key)
       }
       break;
     }
+    case 'H': // ADC spike filter: H<n> threshold (0 = off), HA alternate on/off per slot, H prints the A/B tally
+    {
+      char line[16];
+      size_t n = 0;
+      uint32_t t0 = millis();
+      while (millis() - t0 < 50 && n < sizeof(line) - 1) {
+        if (Serial.available() <= 0) { delay(1); continue; }
+        char ch = Serial.read();
+        if (ch == '\r' || ch == '\n') break;
+        line[n++] = ch;
+      }
+      line[n] = 0;
+      ft8SpikeCommand(line);
+      break;
+    }
     case 'K': // FT8 transmitter on the ESP32 APLL: K alone prints the commands
     {
       char line[48];

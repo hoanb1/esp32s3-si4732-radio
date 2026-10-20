@@ -1,0 +1,22 @@
+# ft8_lib (vendored, locally modified)
+
+FT8/FT4 library by Kārlis Goba, <https://github.com/kgoba/ft8_lib>, MIT license (see `LICENSE`).
+`src/fft/kiss_fft*` is KISS FFT by Mark Borgerding (BSD, see the headers).
+
+This copy is what the firmware is built and tested with, so it lives in the repo. Build with
+`--library libraries/ft8_lib` (or symlink this folder into `~/Arduino/libraries/`).
+
+Local changes on top of upstream, for the ESP32 without PSRAM:
+
+- `common/monitor.*`: `WF_NIBBLE` waterfall. The two time-OSR half-symbol planes are stored as
+  4-bit levels in one 85 × 433 byte plane, the same RAM as an 8-bit 1×1 waterfall. `half_buf` and
+  `row_db8` keep one block of float bits and the unquantized row for displays. Buffers are placed
+  in IRAM via `heap_caps` on ESP32.
+- `ft8/decode.*`: `ftx_message_snr()` (WSJT-X style SNR in 2500 Hz); a damped second BP pass when
+  the first one ends with 1..5 parity errors; `ftx_decode_candidate_ap()` with an a-priori "CQ" pass
+  (like WSJT-X AP type 1) for candidates that nearly decoded. On real 15 m slots AP took the decoder
+  from 1 to 5 of jt9's 9 decodes, with no false decodes in ~2,700 attempts on real and noise slots.
+- `ft8/ldpc.c`: faster BP for the ESP32 (fast-math for its divide-less FPU, a check-slot table
+  instead of searches, syndrome-based bit flipping) and the sketch's `g_ft8_dspFrame` buffer as
+  scratch RAM, so a sketch using this library must define `float g_ft8_dspFrame[]`.
+- `ft8/constants.*`: the generated `kFTX_LDPC_Nm_slot` table used by that BP.
