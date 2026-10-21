@@ -210,6 +210,19 @@ details.card summary::-webkit-details-marker{display:none}
 .tx-arm{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid #2d4670;background:#1b2c4a;font-size:.76rem;font-weight:700;cursor:pointer;user-select:none}
 .tx-arm input{accent-color:var(--red);cursor:pointer}
 .tx-arm.on{background:rgba(255,82,82,.16);border-color:var(--red);color:var(--red)}
+/* Tools menu and plain on/off switch */
+details.menu{position:relative}
+details.menu>summary{list-style:none;cursor:pointer;padding:3px 10px;border-radius:7px;border:1px solid var(--border);background:#1a2b47;font-size:.74rem;font-weight:600;color:var(--text)}
+details.menu>summary::-webkit-details-marker{display:none}
+details.menu[open]>summary{border-color:var(--cyan)}
+.menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:5;display:flex;flex-direction:column;gap:6px;min-width:220px;padding:10px;border-radius:9px;background:var(--card);border:1px solid var(--border);box-shadow:0 8px 24px rgba(0,0,0,.55)}
+.menu-pop>button{text-align:left;font-size:.76rem}
+details#txCard>summary .card-title::before{content:'▸ ';color:var(--muted)}
+details#txCard[open]>summary .card-title::before{content:'▾ '}
+details#txCard:not([open])>summary{border-bottom:0;padding-bottom:0}
+.sw{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid #2d4670;background:#1b2c4a;font-size:.76rem;font-weight:700;cursor:pointer;user-select:none}
+.sw input{accent-color:var(--cyan);cursor:pointer}
+.sw:has(input:checked){background:rgba(0,229,255,.12);border-color:var(--cyan);color:var(--cyan)}
 .tx-plan{font-size:.76rem;padding:6px 10px;border-radius:7px;background:#091220;border:1px solid #1d3152;margin-bottom:8px}
 .tx-plan.warn{border-color:rgba(255,171,0,.45);color:var(--amber)}
 .tx-plan.ok{color:var(--muted)}
@@ -449,12 +462,21 @@ details.card summary::-webkit-details-marker{display:none}
         <span class="card-title">🛰️ <span id="digTitleMode">FT8</span> Decoder</span>
         <span class="badge ok" id="decodeStatusBadge">Listening</span>
       </div>
-      <div class="row">
-        <button class="primary" onclick="sendCtrl('decode')" title="Decode the built-in WebSDR test vector">⚡ Test decode</button>
-        <button onclick="sendCtrl('sync')" title="Align the slot timer to :00">⏱️ Sync slot</button>
-        <button onclick="syncBrowserTime()" title="Set the radio clock from this browser (used only without NTP)">🌐 Set UTC</button>
-        <button onclick="sendCtrl('save_cal')" title="Store the current BFO offset as this band's calibration">💾 Save cal</button>
-      </div>
+      <details class="menu">
+        <summary class="sm-btn">⋯ Tools</summary>
+        <div class="menu-pop">
+          <span class="lbl">LCD view</span>
+          <div class="row">
+            <button class="sm" id="lcdMode0" onclick="sendCtrl('view',{mode:0})">Split</button>
+            <button class="sm" id="lcdMode1" onclick="sendCtrl('view',{mode:1})">Waterfall</button>
+            <button class="sm" id="lcdMode2" onclick="sendCtrl('view',{mode:2})">Messages</button>
+          </div>
+          <button onclick="sendCtrl('decode')" title="Decode the built-in WebSDR test vector">⚡ Test decode</button>
+          <button onclick="sendCtrl('sync')" title="Align the slot timer to :00">⏱️ Sync slot to :00</button>
+          <button onclick="syncBrowserTime()" title="Set the radio clock from this browser (used only without NTP)">🌐 Set UTC from browser</button>
+          <button onclick="sendCtrl('save_cal')" title="Store the current BFO offset as this band's calibration">💾 Save BFO as band cal</button>
+        </div>
+      </details>
     </div>
 
     <div class="slot">
@@ -463,13 +485,7 @@ details.card summary::-webkit-details-marker{display:none}
       <span id="lastDurText" class="muted" style="font-size:.76rem">Auto decode each slot</span>
     </div>
 
-    <div class="row" style="justify-content:space-between">
-      <div class="row">
-        <span class="lbl">LCD view:</span>
-        <button class="sm" id="lcdMode0" onclick="sendCtrl('view',{mode:0})">Split</button>
-        <button class="sm" id="lcdMode1" onclick="sendCtrl('view',{mode:1})">Waterfall</button>
-        <button class="sm" id="lcdMode2" onclick="sendCtrl('view',{mode:2})">Messages</button>
-      </div>
+    <div class="row" style="justify-content:flex-end">
       <div class="row">
         <input type="text" id="callFilter" placeholder="Filter call / grid / text" style="padding:4px 9px;font-size:.78rem;width:190px" oninput="renderTrafficTable()">
         <label class="lbl" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="cqOnlyChk" onchange="renderTrafficTable()"> CQ only</label>
@@ -486,30 +502,84 @@ details.card summary::-webkit-details-marker{display:none}
     </div>
   </div>
 
-  <!-- FT8 transmitter on the ESP32 itself (APLL on GPIO0 or GPIO16, 80 m only) -->
-  <div class="card hidden" id="txCard">
+  <!-- PSKReporter: upload what this radio decodes, and see who reported hearing your callsign -->
+  <div class="card hidden" id="heardCard">
     <div class="card-hdr">
       <div class="row">
-        <span class="card-title">📡 FT8 Transmit</span>
-        <span class="badge info" id="txBadge">loading…</span>
+        <span class="card-title">📶 PSKReporter</span>
+        <span class="badge info" id="heardBadge">not checked</span>
       </div>
-      <div class="row">
-        <label class="tx-arm" id="txArm" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once.">
-          <input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span>
-        </label>
-        <button class="primary" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
-        <button class="danger" onclick="txAction('stop')" title="Stop the QSO and any transmission now">⏹ Stop</button>
-      </div>
+      <a class="lbl" href="https://pskreporter.info/pskmap.html" target="_blank" rel="noopener" style="text-transform:none;letter-spacing:0">open pskreporter.info ↗</a>
     </div>
-
-    <div class="tx-plan" id="txPlan">Loading transmitter status…</div>
 
     <div class="tx-grid">
       <span class="lbl">Station</span>
       <div class="row">
         <label>Callsign <input type="text" id="txCall" maxlength="10" placeholder="your call" style="width:96px;text-transform:uppercase"></label>
         <label>Grid <input type="text" id="txGrid" maxlength="4" placeholder="AA00" style="width:62px;text-transform:uppercase"></label>
+        <button class="sm primary" onclick="txSave()">💾 Save</button>
       </div>
+      <span class="lbl">Upload</span>
+      <div class="row">
+        <label class="sw" id="pskrArm" title="Upload the stations you decode to pskreporter.info (needs Wi-Fi, a real UTC clock and your callsign + grid). Off by default.">
+          <input type="checkbox" id="pskrEnable" onchange="pskrSet(this.checked)"><span>Report my decodes</span>
+        </label>
+        <span class="lbl" id="pskrInfo" style="text-transform:none;letter-spacing:0;font-weight:400"></span>
+      </div>
+      <span class="lbl">Heard me</span>
+      <div class="row">
+        <button class="sm" id="heardBtn" onclick="heardCheck(true)">🔄 Check now</button>
+        <span class="lbl" id="heardNext" style="text-transform:none;letter-spacing:0;font-weight:400"></span>
+      </div>
+    </div>
+
+    <div class="tbl" style="max-height:220px"><table>
+      <thead><tr><th>Receiver</th><th>Grid</th><th>km</th><th>SNR</th><th>MHz</th><th>Ago</th></tr></thead>
+      <tbody id="heardBody"><tr><td colspan="6" class="empty">Stations that reported hearing your callsign in the last hour</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- Map of the stations heard (grid locators from FT8/FT4 messages, kept in this browser) -->
+  <div class="card hidden" id="mapCard">
+    <div class="card-hdr">
+      <div class="row">
+        <span class="card-title">🗺️ Stations heard</span>
+        <span class="badge info" id="mapCount">0 stations</span>
+      </div>
+      <div class="row">
+        <span class="lbl">My grid</span>
+        <input type="text" id="homeGrid" maxlength="6" style="padding:4px 9px;font-size:.78rem;width:80px;text-transform:uppercase" onchange="setHomeGrid(this.value)">
+        <select id="mapAge" style="padding:4px 6px;font-size:.78rem" onchange="saveMapPrefs();renderMap()">
+          <option value="1">Last 1 h</option><option value="6">Last 6 h</option><option value="24" selected>Last 24 h</option><option value="0">All</option>
+        </select>
+        <select id="mapBand" style="padding:4px 6px;font-size:.78rem" onchange="saveMapPrefs();renderMap()"><option value="">All bands</option></select>
+        <button class="sm danger" onclick="clearMap()">🗑️ Clear map</button>
+      </div>
+    </div>
+    <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapLines"></g><g id="mapDots"></g><g id="mapHeard"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
+    <div class="lbl">SNR:<span class="legend-dot" style="background:#e0fbff"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#00838f"></span>-13…-18<span class="legend-dot" style="background:#4a6380"></span>below -18<span class="legend-dot" style="background:none;border:2px solid #ff9800;width:7px;height:7px"></span>heard me (PSKReporter)</div>
+  </div>
+
+  <!-- FT8 transmitter on the ESP32 itself (APLL on GPIO0 or GPIO16, 80 m only) -->
+  <details class="card hidden" id="txCard">
+    <summary class="card-hdr">
+      <div class="row">
+        <span class="card-title">📡 FT8 Transmit <span class="muted" style="font-weight:500;text-transform:none;letter-spacing:0">· 80 m</span></span>
+        <span class="badge info" id="txBadge">loading…</span>
+      </div>
+      <button class="sm danger" onclick="event.preventDefault();txAction('stop')" title="Stop the QSO and any transmission now">⏹ Stop</button>
+    </summary>
+
+    <div class="row">
+      <label class="tx-arm" id="txArm" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once.">
+        <input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span>
+      </label>
+      <button class="primary" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
+    </div>
+
+    <div class="tx-plan" id="txPlan">Loading transmitter status…</div>
+
+    <div class="tx-grid">
       <span class="lbl">Transmitter</span>
       <div class="row">
         <label>Output
@@ -532,28 +602,7 @@ details.card summary::-webkit-details-marker{display:none}
     </div>
 
     <div class="logs mono" id="txEvents" style="height:auto;min-height:44px;max-height:140px">No transmissions yet</div>
-  </div>
-
-  <!-- Map of the stations heard (grid locators from FT8/FT4 messages, kept in this browser) -->
-  <div class="card hidden" id="mapCard">
-    <div class="card-hdr">
-      <div class="row">
-        <span class="card-title">🗺️ Stations heard</span>
-        <span class="badge info" id="mapCount">0 stations</span>
-      </div>
-      <div class="row">
-        <span class="lbl">My grid</span>
-        <input type="text" id="homeGrid" maxlength="6" style="padding:4px 9px;font-size:.78rem;width:80px;text-transform:uppercase" onchange="setHomeGrid(this.value)">
-        <select id="mapAge" style="padding:4px 6px;font-size:.78rem" onchange="saveMapPrefs();renderMap()">
-          <option value="1">Last 1 h</option><option value="6">Last 6 h</option><option value="24" selected>Last 24 h</option><option value="0">All</option>
-        </select>
-        <select id="mapBand" style="padding:4px 6px;font-size:.78rem" onchange="saveMapPrefs();renderMap()"><option value="">All bands</option></select>
-        <button class="sm danger" onclick="clearMap()">🗑️ Clear map</button>
-      </div>
-    </div>
-    <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapLines"></g><g id="mapDots"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
-    <div class="lbl">SNR:<span class="legend-dot" style="background:#e0fbff"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#00838f"></span>-13…-18<span class="legend-dot" style="background:#4a6380"></span>below -18 · grid squares are ~100 × 200 km, so a dot marks the square's center</div>
-  </div>
+  </details>
 
   <!-- Live radio log (Serial output pushed over /ws) -->
   <details class="card" id="logCard">
@@ -860,7 +909,9 @@ function updateFt8Visibility() {
   $('ft8DecoderCard').classList.toggle('hidden', !ft8Visible);
   $('mapCard').classList.toggle('hidden', !ft8Visible);
   $('txCard').classList.toggle('hidden', !ft8Visible);
-  if (shown) { fetchTx(); showMap(); }
+  $('heardCard').classList.toggle('hidden', !ft8Visible);
+  if (ft8Visible) pskrFetch();
+  if (shown) { fetchTx(); setTimeout(showMap, 1500); }   // the map after the page's first small requests
 }
 
 function setOnline(ok) {
@@ -1441,7 +1492,7 @@ function snrColor(s) { return s >= 0 ? '#e0fbff' : s >= -12 ? '#00e5ff' : s >= -
 
 // Equirectangular map, 2 SVG units per degree (same projection as /map.svg); centered on the home longitude
 const SVGNS = 'http://www.w3.org/2000/svg';
-let mapLoaded = false, mapLoading = false, view = null, homeX = 0;
+let mapLoaded = false, mapLoading = false, mapTries = 0, view = null, homeX = 0;
 const toXY = ll => [(ll[1] + 180) * 2, (90 - ll[0]) * 2];
 function wrapX(x) { while (x < homeX - 360) x += 720; while (x >= homeX + 360) x -= 720; return x; }
 // Great-circle path from a to b ([lat, lon]) as [x, y] SVG points, longitude unwrapped from the home side
@@ -1470,7 +1521,7 @@ async function showMap() {
   if (mapLoading) return;
   mapLoading = true;
   try {
-    const txt = await req('/map.svg', { cache: 'no-cache' }, 'text', 15000);
+    const txt = await req('/map.svg', { cache: 'no-cache' }, 'text', 8000);
     const doc = new DOMParser().parseFromString(txt, 'image/svg+xml');
     const world = $('mapWorld');
     // Three copies side by side so the map can be panned across the date line
@@ -1483,7 +1534,9 @@ async function showMap() {
     resetView();
     renderMap();
   } catch (e) {
-    T('mapNote', 'Could not load the map from the radio');
+    // Right after a reboot the radio is short of heap and the 36 KB map can stall: try again a few times
+    if (++mapTries < 6) { T('mapNote', 'Radio busy, retrying the map…'); setTimeout(showMap, 4000 * mapTries); }
+    else T('mapNote', 'Could not load the map from the radio');
   }
   mapLoading = false;
 }
@@ -1513,6 +1566,7 @@ function applyView() {
   // Dots keep their size on screen
   const k = view.w / bw;
   $('mapDots').querySelectorAll('circle').forEach(c => c.setAttribute('r', (c.classList.contains('home') ? 6 : 5) * k));
+  $('mapHeard').querySelectorAll('circle').forEach(c => { c.setAttribute('r', 8 * k); c.setAttribute('stroke-width', 2); });
   $('mapGridG').style.display = k < 0.45 ? '' : 'none';   // locator grid once zoomed in
   $('mapGridG').querySelectorAll('text').forEach(t => t.style.fontSize = (8 * k) + 'px');
 }
@@ -1636,8 +1690,16 @@ function renderMap() {
   const [hx, hy] = toXY(home);
   const hc = svgEl('circle', { class: 'home', cx: hx, cy: hy, 'data-call': 'home' }, g);
   hc.dataset.info = `<b>Home</b> ${esc(homeGrid)}`;
+  renderHeardMap();
   applyView();
 }
+
+// Tools menu: close on a click outside it or on one of its buttons
+document.addEventListener('click', e => {
+  document.querySelectorAll('details.menu[open]').forEach(d => {
+    if (!d.contains(e.target) || e.target.closest('.menu-pop button')) d.open = false;
+  });
+});
 
 let pollTimer = 0, polling = false, pollAgain = false, tick = 0;
 function kick(ms = 0) {
@@ -1719,6 +1781,112 @@ async function txSave() {
   setTimeout(() => T('txSaveMsg', ''), 2500);
 }
 
+// ---- PSKReporter: upload switch on the ESP32 (/api/pskr) and "who heard me" query from the browser ----
+let pskrState = {}, pskrBusy = false;
+function renderPskr(st) {
+  pskrState = st;
+  if (document.activeElement !== $('pskrEnable')) $('pskrEnable').checked = !!st.enabled;
+  let t = '';
+  if (st.enabled) {
+    t = `queued ${st.queued} · sent ${st.sent_records}`;
+    if (st.last_send) t += ' · last ' + new Date(st.last_send * 1000).toISOString().substr(11, 5) + 'Z';
+    else if (st.next_send_in) t += ' · next in ' + Math.ceil(st.next_send_in / 60) + ' min';
+    if (st.last_error) t += ' · ⚠️ ' + st.last_error;
+  }
+  T('pskrInfo', t);
+}
+async function pskrFetch(opts) {
+  if (pskrBusy) return;
+  pskrBusy = true;
+  try { renderPskr(await req('/api/pskr', opts || {})); } catch (e) {} finally { pskrBusy = false; }
+}
+function pskrSet(on) {
+  pskrFetch({ method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=enable&on=' + (on ? 1 : 0) });
+  setTimeout(pskrFetch, 800);
+}
+
+const HEARD_KEY = 'pskrLastQuery', HEARD_GAP = 300e3;
+let heard = [], heardChecked = false, heardAutoAt = 0, heardLastCq = null, heardCb = 0, heardBusy = false;
+const heardLast = () => { try { return +localStorage.getItem(HEARD_KEY) || 0; } catch (e) { return 0; } };
+function heardWait() { return Math.max(0, heardLast() + HEARD_GAP - Date.now()); }
+function heardCheck(manual) {
+  const call = (txState.call || '').toUpperCase();
+  if (!call) { T('heardBadge', 'set callsign'); return; }
+  if (heardBusy || heardWait() > 0) return;
+  heardBusy = true;
+  try { localStorage.setItem(HEARD_KEY, String(Date.now())); } catch (e) {}
+  heardAutoAt = 0;
+  T('heardBadge', 'checking…'); C('heardBadge', 'badge warn');
+  const cb = 'pskrCb' + (++heardCb);
+  const sc = document.createElement('script');
+  const done = () => { heardBusy = false; delete window[cb]; sc.remove(); clearTimeout(to); };
+  const to = setTimeout(() => { done(); T('heardBadge', 'no answer'); C('heardBadge', 'badge err'); }, 20000);
+  window[cb] = data => { done(); heardParse(data, call); };
+  sc.onerror = () => { done(); T('heardBadge', 'failed'); C('heardBadge', 'badge err'); };
+  sc.src = 'https://retrieve.pskreporter.info/query?senderCallsign=' + encodeURIComponent(call) + '&flowStartSeconds=-3600&rronly=1&callback=' + cb;
+  document.head.appendChild(sc);
+}
+// The reply shape is not documented well: take an array, or an object holding receptionReport (array or single item)
+function heardParse(data, call) {
+  let a = [];
+  try {
+    if (Array.isArray(data)) a = data;
+    else if (data && data.receptionReport) a = Array.isArray(data.receptionReport) ? data.receptionReport : [data.receptionReport];
+    else if (data && typeof data === 'object') { const k = Object.keys(data).find(k => Array.isArray(data[k])); if (k) a = data[k]; }
+  } catch (e) {}
+  const now = Date.now() / 1000, best = new Map();
+  a.forEach(r => {
+    if (!r || !r.receiverCallsign) return;
+    const t = +r.flowStartSeconds || 0, mhz = (+r.frequency || 0) / 1e6;
+    if (!t || now - t > 3600 || now - t < -300) return;
+    const key = r.receiverCallsign + '|' + Math.round(mhz);
+    if (!best.has(key) || best.get(key).t < t) best.set(key, { call: r.receiverCallsign, grid: String(r.receiverLocator || '').toUpperCase(), mhz, snr: r.sNR === undefined ? null : +r.sNR, t, mode: r.mode || '' });
+  });
+  heard = [...best.values()].sort((x, y) => y.t - x.t);
+  heardChecked = true;
+  T('heardBadge', heard.length + ' heard'); C('heardBadge', heard.length ? 'badge ok' : 'badge info');
+  renderHeard();
+  renderMap();
+}
+function renderHeard() {
+  // distance from the station's own grid (transmitter settings), else the map's home grid
+  const home = gridToLatLon(txState.grid || homeGrid), now = Date.now() / 1000;
+  const rows = heard.map(h => {
+    const ll = gridToLatLon(h.grid), km = ll && home ? distBearing(home, ll)[0].toLocaleString() : '--';
+    const m = Math.max(0, Math.round((now - h.t) / 60));
+    return `<tr><td class="mono">${esc(h.call)}</td><td class="mono">${esc(h.grid) || '--'}</td><td class="mono">${km}</td><td class="mono">${h.snr === null ? '--' : (h.snr > 0 ? '+' : '') + h.snr}</td><td class="mono">${h.mhz.toFixed(3)}</td><td class="mono">${m}m</td></tr>`;
+  }).join('');
+  const empty = !heardChecked ? 'Not checked yet: press Check now, or call CQ and it checks 5 minutes later'
+    : 'Nobody reported hearing you in the last hour';
+  const html = rows || `<tr><td colspan="6" class="lbl">${empty}</td></tr>`;
+  if ($('heardBody').innerHTML !== html) $('heardBody').innerHTML = html;
+}
+function renderHeardMap() {
+  const g = $('mapHeard');
+  g.textContent = '';
+  if (!mapLoaded) return;
+  heard.forEach(h => {
+    const ll = gridToLatLon(h.grid);
+    if (!ll) return;
+    const [x, y] = toXY(ll);
+    const c = svgEl('circle', { cx: wrapX(x), cy: y, r: 8, fill: 'none', stroke: '#ff9800', 'stroke-width': 2, 'vector-effect': 'non-scaling-stroke' }, g);
+    svgEl('title', {}, c).textContent = `${h.call} ${h.grid} · ${h.snr === null ? '' : h.snr + ' dB · '}${h.mhz.toFixed(3)} MHz`;
+  });
+}
+setInterval(() => {
+  if (!ft8Visible || document.hidden) return;
+  // 5 minutes after the ESP32 sent a CQ, ask who heard it
+  const cq = (txState.events || []).find(e => /TX CQ/.test(e));
+  if (heardLastCq === null) heardLastCq = cq || '';
+  else if (cq && cq !== heardLastCq) { heardLastCq = cq; heardAutoAt = Date.now() + HEARD_GAP; }
+  const w = heardWait();
+  if (heardAutoAt && Date.now() >= heardAutoAt && !w) heardCheck(false);
+  const sec = Math.ceil(Math.max(w, heardAutoAt ? heardAutoAt - Date.now() : 0) / 1000);
+  T('heardNext', w > 0 ? `next check in ${Math.floor(w / 60000)}:${String(Math.floor(w / 1000) % 60).padStart(2, '0')}` : heardAutoAt ? `auto check in ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : '');
+  $('heardBtn').disabled = w > 0 || heardBusy;
+}, 1000);
+setInterval(() => { if (ft8Visible && !document.hidden) { pskrFetch(); renderHeard(); } }, 10000);
+
 async function poll() {
   if (document.hidden) return;
   polling = true;
@@ -1744,6 +1912,7 @@ loadBookmarks();
 kick(0);
 wsConnect();
 fetchTx();
+pskrFetch();
 </script>
 </body>
 </html>
