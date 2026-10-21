@@ -84,6 +84,9 @@ static void wsTick();
 // build one when it leaves this much byte-addressable heap for WiFi/lwIP. Skipped frames come later.
 // (ESP.getFreeHeap() also counts ~30 KB of 32-bit-only IRAM that new/malloc cannot use.)
 #define WS_HEAP_RESERVE 9000
+// A request that arrives with less than this in one free block gets a bare 503: building a JSON or
+// streaming a page then could fail inside operator new, and a failed new aborts the radio
+#define HTTP_MIN_BLOCK  3072
 #define WS_AUDIO_MAX    2400   // 400 ms per frame at most; a page further behind skips ahead
 #define WS_WF_ROWS_MAX  12     // waterfall rows per frame (1.4 KB); a new page catches up over a few ticks
 static bool wsHeapOk(size_t bytes)
@@ -1212,7 +1215,7 @@ static void wsTick()
     for (int i = 0; i < WS_MAX_PAGES; i++) {
       if (!pages[i].id) continue;
       AsyncWebSocketClient *c = ws.client(pages[i].id);
-      if (!c || !c->canSend() || c->queueLen() >= 4) continue;   // busy page: it gets the next one
+      if (!c || !c->canSend() || c->queueLen() > 0) continue;   // still sending the last tick: it gets the next one
       c->text(status);
       uint32_t behind = wfHead - pages[i].wfSeq;
       if (behind > 36) behind = 36;
@@ -1260,7 +1263,7 @@ static void wsTick()
       if (!c) continue;
       uint32_t seq = pages[i].logSeq;
       if (head - seq > WEBLOG_LINES) seq = head - WEBLOG_LINES;   // fell behind: skip the lost lines
-      for (int n = 0; n < 4 && seq != head && c->canSend() && c->queueLen() < 6; n++, seq++)
+      for (int n = 0; n < 4 && seq != head && c->canSend() && c->queueLen() < 2; n++, seq++)
         if (wsHeapOk(WEBLOG_LINE_LEN) && webLogGet(seq, line, sizeof(line))) c->text(line);
       portENTER_CRITICAL(&wsMux);
       if (wsPages[i].id == pages[i].id) wsPages[i].logSeq = seq;
@@ -1277,6 +1280,15 @@ static void webInit()
   if (webServerStarted) return;
   webServerStarted = true;
   if (!controlMutex) controlMutex = xSemaphoreCreateMutex();
+
+  // Low on heap: refuse at once (the page retries) rather than crash half-way through a response
+  server.addMiddleware([] (AsyncWebServerRequest *request, ArMiddlewareNext next) {
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTP_MIN_BLOCK) {
+      request->send(503);
+      return;
+    }
+    next();
+  });
 
   // Main Web UI page - pre-gzipped in flash (zero heap copy), revalidated by ETag
   server.on("/", HTTP_GET, [] (AsyncWebServerRequest *request) {
