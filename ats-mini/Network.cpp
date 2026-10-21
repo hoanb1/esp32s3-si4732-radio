@@ -6,6 +6,7 @@
 #include "Draw.h"
 #include "Layout-FT8.h"
 #include "Ft8Tx.h"
+#include "PskReporter.h"
 #include "WebUI.h"
 #include "WorldMap.h"
 
@@ -1401,6 +1402,7 @@ static void webInit()
 
   // /api/timesync - Set UTC time from browser epoch
   ft8TxRegisterWeb(server);
+  pskrRegisterWeb(server);
 
   server.on("/api/timesync", HTTP_GET, [] (AsyncWebServerRequest *request) {
     if (request->hasParam("epoch")) {

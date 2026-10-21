@@ -672,6 +672,9 @@ static void txWebPush(const char *line) {
   portEXIT_CRITICAL(&txWebMux);
 }
 
+const char *ft8TxCallsign() { txLoad(); return myCall; }
+const char *ft8TxGrid() { txLoad(); return myGrid; }
+
 void ft8TxPoll() {
   txLoad();
   // Keep the plan in step with the dial so the web page shows whether this frequency can be sent

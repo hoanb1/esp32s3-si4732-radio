@@ -6,6 +6,7 @@
 #include "Draw.h"
 #include "Storage.h"
 #include "Ft8Tx.h"
+#include "PskReporter.h"
 
 #include <WiFi.h>
 #include <esp_timer.h>
@@ -805,6 +806,7 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
                   timeStr, snrDb, entry->dt, freqHz, senderCall, text);
     ft8AddLog("[%s] %s | %+ddB | %uHz | %s", isTest ? "TEST" : "FT8", senderCall, snrDb, freqHz, text);
     if (!isTest) ft8TxOnDecode(text, snrDb);
+    if (!isTest) pskrOnDecode(text, snrDb, freqHz);
   }
 
   ft8LastDurationMs = millis() - t0;

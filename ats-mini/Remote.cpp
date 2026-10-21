@@ -6,6 +6,7 @@
 #include "Draw.h"
 #include "Layout-FT8.h"
 #include "Ft8Tx.h"
+#include "PskReporter.h"
 
 static uint32_t remoteTimer = millis();
 static uint8_t remoteSeqnum = 0;
@@ -498,6 +499,14 @@ int remoteDoCommand(char key)
       }
       line[n] = 0;
       ft8TxCommand(line);
+      break;
+    }
+    case 'E': // PSKReporter: E prints status, E1 / E0 enable / disable, Ed hex-dumps a datagram (not sent)
+    {
+      delay(15);
+      char a[2] = {0, 0};
+      if (Serial.available() > 0 && (Serial.peek() == '0' || Serial.peek() == '1' || Serial.peek() == 'd')) a[0] = Serial.read();
+      pskrSerialCommand(a);
       break;
     }
     case 'P': // Debug: P<Hz> sets SI4732 REFCLK_FREQ and re-tunes (no argument: re-tune only)

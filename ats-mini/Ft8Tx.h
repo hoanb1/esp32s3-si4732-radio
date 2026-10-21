@@ -18,6 +18,8 @@ void ft8TxOnDecode(const char *text, int snr);
 void ft8TxSlotDone();
 
 void ft8TxPoll();   // from loop(): loads the saved settings and runs commands queued by the web page
+const char *ft8TxCallsign();   // station call / 4-char grid from the transmitter settings ("" if unset)
+const char *ft8TxGrid();
 class AsyncWebServer;
 void ft8TxRegisterWeb(AsyncWebServer &server);   // GET/POST /api/ft8tx
 
