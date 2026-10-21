@@ -472,10 +472,19 @@ static void autoStop(const char *why) {
 }
 
 // Called at the end of a slot while idle: start the next CQ or listen for one
+// Auto mode 2 answers CQs; when nobody has called CQ for AUTO_CQ_IDLE_MS it calls CQ itself once
+#define AUTO_CQ_IDLE_MS (2UL * 60UL * 1000UL)
+static uint32_t lastCqHeardMs = 0;   // last CQ decoded from anyone, or our own CQ call
+
 static void autoNext() {
   if (autoQsos >= AUTO_MAX_QSO) return autoStop("QSO limit");
   if (millis() - autoStartMs > AUTO_MAX_MS) return autoStop("time limit");
-  qsoStart(autoMode == 1 ? Q_CQ : Q_ANS_WAIT, NULL);
+  if (autoMode == 1 || (millis() - lastCqHeardMs > AUTO_CQ_IDLE_MS)) {
+    lastCqHeardMs = millis();
+    qsoStart(Q_CQ, NULL);
+  } else {
+    qsoStart(Q_ANS_WAIT, NULL);
+  }
 }
 
 static bool isReport(const char *s) {
@@ -487,6 +496,7 @@ static bool isGrid(const char *s) {
 }
 
 void ft8TxOnDecode(const char *text, int snr) {
+  if (!strncmp(text, "CQ ", 3)) lastCqHeardMs = millis();
   if (qso == Q_IDLE) return;
   char t[3][12] = { "", "", "" };
   int n = sscanf(text, "%11s %11s %11s", t[0], t[1], t[2]);
@@ -708,6 +718,7 @@ void ft8TxCommand(const char *args) {
       }
       autoQsos = 0;
       autoStartMs = millis();
+      lastCqHeardMs = millis();   // listen for two minutes before calling CQ ourselves
       Serial.printf("[AUTO] mode %u\r\n", autoMode);
       if (autoMode && qso == Q_IDLE) autoNext();
       break;
