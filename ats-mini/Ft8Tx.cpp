@@ -2,6 +2,7 @@
 #include "Common.h"
 #include "Utils.h"
 #include "Layout-FT8.h"
+#include "Menu.h"
 #include "Storage.h"
 
 #include <Preferences.h>
@@ -152,8 +153,35 @@ static inline void txSetTone(uint8_t tone) {
   }
 }
 
+// Receive is off while transmitting: the SI4732 is held in reset for the whole TX
+// and brought back by txRadioOn() from ft8TxPoll() (loop context), never from the TX task
+static bool radioDown = false;
+
+static void txRadioOff() {
+  if (radioDown) return;
+  digitalWrite(RESET_PIN, LOW);
+  radioDown = true;
+}
+
+static void txRadioOn() {
+  Serial.println("[RX] restart: reset high");
+  digitalWrite(RESET_PIN, HIGH);
+  Serial.println("[RX] restart: rx.setup");
+  rx.setup(RESET_PIN, MW_BAND_TYPE);
+  Serial.println("[RX] restart: unloadSSB/ssbPpmLoad");
+  unloadSSB();
+  ssbPpmLoad();
+  Serial.println("[RX] restart: selectBand");
+  selectBand(bandIdx, false);
+  Serial.println("[RX] restart: ft8ApplyAudio");
+  ft8ApplyAudio();
+  radioDown = false;
+  Serial.println("[TX] SI4732 restarted after TX");
+}
+
 static void txStart() {
   if (txOn) return;
+  txRadioOff();
   periph_module_enable(PERIPH_I2S0_MODULE);
   rtc_clk_apll_enable(true);
   rtc_clk_apll_coeff_set(plan.odiv, plan.sdm & 0xFF, (plan.sdm >> 8) & 0xFF, (plan.sdm >> 16) - 4);
@@ -604,6 +632,11 @@ void ft8TxCommand(const char *args) {
       txWifiOff = atoi(args) != 0;
       Serial.printf("[TX] WiFi off during TX: %s\r\n", txWifiOff ? "yes" : "no");
       break;
+    case 'R':   // KR: test the SI4732 off/on cycle used around TX, without transmitting
+      txRadioOff();
+      delay(2000);
+      txRadioOn();
+      break;
     case 'c':   // Kc[tone]: steady carrier on a tone (0..7)
     {
       if (!txAllowed() || !txPlanReady()) break;
@@ -675,8 +708,11 @@ static void txWebPush(const char *line) {
 const char *ft8TxCallsign() { txLoad(); return myCall; }
 const char *ft8TxGrid() { txLoad(); return myGrid; }
 
+bool ft8TxRadioDown() { return radioDown; }
+
 void ft8TxPoll() {
   txLoad();
+  if (radioDown && !txOn) txRadioOn();
   // Keep the plan in step with the dial so the web page shows whether this frequency can be sent
   static uint32_t lastCheck = 0;
   if (!txTask && millis() - lastCheck > 1000) {

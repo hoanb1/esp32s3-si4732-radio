@@ -18,6 +18,7 @@ void ft8TxOnDecode(const char *text, int snr);
 void ft8TxSlotDone();
 
 void ft8TxPoll();   // from loop(): loads the saved settings and runs commands queued by the web page
+bool ft8TxRadioDown();   // true while the SI4732 is held in reset for TX: loop() must not touch it
 const char *ft8TxCallsign();   // station call / 4-char grid from the transmitter settings ("" if unset)
 const char *ft8TxGrid();
 class AsyncWebServer;

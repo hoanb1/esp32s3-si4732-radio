@@ -823,6 +823,7 @@ void loop()
   // Periodically print status to serial
   remoteTickTime();
   ft8TxPoll();
+  if(ft8TxRadioDown()) return;   // SI4732 is in reset for TX: no I2C access until it is restarted
   pskrPoll();
 
   // if(encCount && getCpuFrequencyMhz()!=240) setCpuFrequencyMhz(240);
