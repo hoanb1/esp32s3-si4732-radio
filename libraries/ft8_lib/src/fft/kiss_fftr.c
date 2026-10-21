@@ -8,11 +8,12 @@
 
 #include "kiss_fftr.h"
 #include "_kiss_fft_guts.h"
+#include "kiss_fft960_tables.h"
 
 struct kiss_fftr_state{
     kiss_fft_cfg substate;
     kiss_fft_cpx * tmpbuf;
-    kiss_fft_cpx * super_twiddles;
+    const kiss_fft_cpx * super_twiddles;   /* in tmpbuf's block, or a constant table in flash */
 #ifdef USE_SIMD
     void * pad;
 #endif
@@ -29,9 +30,11 @@ kiss_fftr_cfg kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenme
         return NULL;
     }
     nfft >>= 1;
+    /* Forward 960-point real FFT (FT8 at 6 kHz): super twiddles from flash, 1.9 KB less RAM */
+    int use_table = (nfft == KFFT_TABLE_N && !inverse_fft);
 
     kiss_fft_alloc (nfft, inverse_fft, NULL, &subsize);
-    memneeded = sizeof(struct kiss_fftr_state) + subsize + sizeof(kiss_fft_cpx) * ( nfft * 3 / 2);
+    memneeded = sizeof(struct kiss_fftr_state) + subsize + sizeof(kiss_fft_cpx) * ( use_table ? nfft : nfft * 3 / 2);
 
     if (lenmem == NULL) {
         st = (kiss_fftr_cfg) KISS_FFT_MALLOC (memneeded);
@@ -45,15 +48,20 @@ kiss_fftr_cfg kiss_fftr_alloc(int nfft,int inverse_fft,void * mem,size_t * lenme
 
     st->substate = (kiss_fft_cfg) (st + 1); /*just beyond kiss_fftr_state struct */
     st->tmpbuf = (kiss_fft_cpx *) (((char *) st->substate) + subsize);
-    st->super_twiddles = st->tmpbuf + nfft;
     kiss_fft_alloc(nfft, inverse_fft, st->substate, &subsize);
 
-    for (i = 0; i < nfft/2; ++i) {
-        double phase =
-            -3.14159265358979323846264338327 * ((double) (i+1) / nfft + .5);
-        if (inverse_fft)
-            phase *= -1;
-        kf_cexp (st->super_twiddles+i,phase);
+    if (use_table) {
+        st->super_twiddles = kfftr960_super_twiddles;
+    } else {
+        kiss_fft_cpx * super = st->tmpbuf + nfft;
+        for (i = 0; i < nfft/2; ++i) {
+            double phase =
+                -3.14159265358979323846264338327 * ((double) (i+1) / nfft + .5);
+            if (inverse_fft)
+                phase *= -1;
+            kf_cexp (super+i,phase);
+        }
+        st->super_twiddles = super;
     }
     return st;
 }

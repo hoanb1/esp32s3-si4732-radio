@@ -385,10 +385,19 @@ static bool eibiParseLine(const char *line, StationSchedule &entry)
   return(true);
 }
 
+// LittleFS holds only the EiBi schedule. Without one the mount's buffers (a few KB of the
+// scarce 8-bit heap) are given back; eibiLoadSchedule() mounts it again before downloading.
+void eibiReleaseFsIfUnused()
+{
+  if(!LittleFS.exists(EIBI_PATH)) LittleFS.end();
+}
+
 bool eibiLoadSchedule()
 {
   static const char *eibiMessage = "Loading EiBi Schedule";
   HTTPClient http;
+
+  if(!LittleFS.begin(false, "/littlefs", 2, "littlefs")) return(false);
 
   // Need to be connected to the network
   if(getWiFiStatus() < 2) return(false);

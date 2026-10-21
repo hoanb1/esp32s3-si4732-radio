@@ -51,9 +51,22 @@ static void *iramAlloc(size_t bytes) {
   return p;
 }
 
-// Lock-free 4-block ADC capture ring buffer (4 * 960 * 4 bytes in IRAM)
+// Lock-free 4-block ADC capture ring buffer in IRAM: two int16 samples per 32-bit word
+// (4 * 960 * 2 bytes). Only blkGet()/blkSet() touch it, with whole-word loads and stores.
 // volatile: keeps the compiler from narrowing reads to 16-bit loads, which IRAM rejects
-static volatile int32_t (*adcBuf)[FT8_BLOCK_SAMPLES] = NULL;
+static volatile uint32_t *adcBuf = NULL;
+static inline int32_t blkGet(uint8_t b, int i) {
+  uint32_t w = adcBuf[b * (FT8_BLOCK_SAMPLES / 2) + (i >> 1)];
+  return (int16_t)((i & 1) ? (w >> 16) : (w & 0xFFFF));
+}
+static inline void blkSet(uint8_t b, int i, int32_t v) {
+  if (v > 32767) v = 32767;
+  if (v < -32768) v = -32768;
+  volatile uint32_t *p = &adcBuf[b * (FT8_BLOCK_SAMPLES / 2) + (i >> 1)];
+  uint32_t w = *p;
+  w = (i & 1) ? ((w & 0x0000FFFFu) | ((uint32_t)(uint16_t)v << 16)) : ((w & 0xFFFF0000u) | (uint16_t)v);
+  *p = w;
+}
 static volatile uint8_t adcWriteBlock = 0;
 static volatile uint8_t adcReadBlock = 0;
 static volatile uint8_t readyBufIdx = 0;
@@ -64,7 +77,7 @@ static volatile uint16_t adcBlockIndex[FT8_RING_BLOCKS];  // block number within
 static volatile uint32_t adcTotalBlocks = 0;
 static hw_timer_t *adcTimer = NULL;
 static volatile bool adcRunning = false;
-static volatile uint32_t *adcRaw = NULL;                   // FT8_RAW_RING words in IRAM
+static volatile uint32_t *adcRaw = NULL;                   // FT8_RAW_RING 12-bit samples, two per IRAM word
 static volatile uint32_t adcRawHead = 0;                   // total raw samples written by the timer ISR
 static volatile uint32_t adcClkSlot = 0xFFFFFFFF;          // last slot boundary the capture aligned to,
 static volatile uint32_t adcClkRaw = 0;                    // the raw sample index taken at that boundary,
@@ -348,7 +361,9 @@ static void IRAM_ATTR adcTimerIsr() {
   SENS.sar_meas_start1.meas1_start_sar = 0;
   SENS.sar_meas_start1.meas1_start_sar = 1;
   uint32_t h = adcRawHead;
-  adcRaw[h & (FT8_RAW_RING - 1)] = v;
+  // Two samples per word; the reader only reads words, so this read-modify-write cannot lose one
+  volatile uint32_t *p = &adcRaw[(h & (FT8_RAW_RING - 1)) >> 1];
+  *p = (h & 1) ? ((*p & 0x0000FFFFu) | ((uint32_t)v << 16)) : ((*p & 0xFFFF0000u) | v);
   adcRawHead = h + 1;
 }
 
@@ -391,7 +406,8 @@ static void adcTask(void *arg) {
     if (head - tail > FT8_RAW_RING - 64) tail = head - (FT8_RAW_RING - 64);   // overrun: skip ahead
 
     while (tail != head) {
-      rsHist[histPos] = (float)adcRaw[tail & (FT8_RAW_RING - 1)];
+      uint32_t rw = adcRaw[(tail & (FT8_RAW_RING - 1)) >> 1];
+      rsHist[histPos] = (float)((tail & 1) ? (rw >> 16) : (rw & 0xFFFF));
       histPos = (histPos + 1) % FT8_RS_TAPS;
       if (histCount < FT8_RS_TAPS) histCount++;
       uint32_t newest = tail;
@@ -424,7 +440,7 @@ static void adcTask(void *arg) {
         }
 
         uint8_t wBuf = adcWriteBlock;
-        adcBuf[wBuf][sampleIdx] = (int32_t)lroundf(acc);
+        blkSet(wBuf, sampleIdx, (int32_t)lroundf(acc));
         uint8_t *ring = webAudRing;
         if (ring) {
           webAudDc += (acc - webAudDc) * (1.0f / 2048.0f);
@@ -475,8 +491,8 @@ void ft8Init() {
   callHashIf.save_hash = hashSave;
 
   // ADC buffers first, so they get the IRAM before the monitor's time-OSR halves (5.8 KB) do
-  adcBuf = (volatile int32_t (*)[FT8_BLOCK_SAMPLES])iramAlloc(sizeof(int32_t) * FT8_RING_BLOCKS * FT8_BLOCK_SAMPLES);
-  adcRaw = (volatile uint32_t *)iramAlloc(sizeof(uint32_t) * FT8_RAW_RING);
+  adcBuf = (volatile uint32_t *)iramAlloc(sizeof(uint32_t) * FT8_RING_BLOCKS * FT8_BLOCK_SAMPLES / 2);
+  adcRaw = (volatile uint32_t *)iramAlloc(sizeof(uint32_t) * FT8_RAW_RING / 2);
 
   // Initialize FT8 DSP monitor: 200..2900 Hz @ 6000 Hz, time_osr=2, freq_osr=1. The local ft8_lib
   // (WF_NIBBLE) packs both half-symbol time offsets as 4-bit levels into one 85 x 433 byte plane,
@@ -514,7 +530,7 @@ void ft8Init() {
   if (!adcBuf || !adcRaw) Serial.println("[FT8] ADC buffer allocation failed");
   rsDesign();
   bool adcOk = adcBuf && adcRaw && adcStart();
-  xTaskCreatePinnedToCore(adcTask, "ft8_adc", 4096, NULL, 5, NULL, 1);
+  xTaskCreatePinnedToCore(adcTask, "ft8_adc", 2560, NULL, 5, NULL, 1);   // peak use ~1 KB (serial Z)
   Serial.printf("[FT8] ADC capture %s (%d Hz timer, resample %d/%d -> %d Hz)\r\n",
                 adcOk ? "running" : "FAILED", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
 
@@ -901,7 +917,6 @@ bool ft8TickWaterfall() {
   // Drain any pending 160ms ADC blocks from the lock-free ring buffer
   while (adcReadBlock != adcWriteBlock) {
     uint8_t rBuf = adcReadBlock;
-    volatile int32_t *raw = adcBuf[rBuf];
 
     // A block from a new slot starts a new FT8 collection; block 0 begins exactly at the slot start
     uint32_t blkSlot = adcBlockSlot[rBuf];
@@ -923,11 +938,11 @@ bool ft8TickWaterfall() {
     }
     if (spikeThr > 0) {
       for (int i = 1; i < FT8_BLOCK_SAMPLES - 1; i++) {
-        int32_t prev = raw[i - 1];
-        int32_t cur  = raw[i];
-        int32_t next = raw[i + 1];
+        int32_t prev = blkGet(rBuf, i - 1);
+        int32_t cur  = blkGet(rBuf, i);
+        int32_t next = blkGet(rBuf, i + 1);
         if (abs(cur - prev) > spikeThr && abs(cur - next) > spikeThr) {
-          raw[i] = (prev + next) >> 1;
+          blkSet(rBuf, i, (prev + next) >> 1);
           spikeFixes++;
         }
       }
@@ -940,7 +955,7 @@ bool ft8TickWaterfall() {
       Serial.write((const uint8_t *)&ft8AudioStreamSeq, 4);
       int16_t pcm[96];
       for (int i = 0; i < FT8_BLOCK_SAMPLES; i += 96) {
-        for (int j = 0; j < 96; j++) pcm[j] = (int16_t)raw[i + j];
+        for (int j = 0; j < 96; j++) pcm[j] = (int16_t)blkGet(rBuf, i + j);
         Serial.write((const uint8_t *)pcm, sizeof(pcm));
       }
     }
@@ -949,7 +964,7 @@ bool ft8TickWaterfall() {
     int16_t minV = 4095;
     int16_t maxV = 0;
     for (int i = 0; i < FT8_BLOCK_SAMPLES; i++) {
-      int16_t v = (int16_t)raw[i];
+      int16_t v = (int16_t)blkGet(rBuf, i);
       sum += v;
       if (v < minV) minV = v;
       if (v > maxV) maxV = v;
@@ -964,7 +979,7 @@ bool ft8TickWaterfall() {
     const float normScale = 1.0f / 256.0f;
     float sumSq = 0.0f;
     for (int i = 0; i < FT8_BLOCK_SAMPLES; i++) {
-      float diff = (float)raw[i] - mean;
+      float diff = (float)blkGet(rBuf, i) - mean;
       sumSq += diff * diff;
       dspFrame[i] = diff * normScale;
     }
@@ -1314,7 +1329,7 @@ size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index) {
   int16_t mean = (int16_t)lastAdcMean;
   while (written + 2 <= maxLen && index < totalSize) {
     uint32_t sampleIdx = (index - 44) / 2;
-    int32_t s = ((int32_t)adcBuf[rBuf][sampleIdx] - mean) * 32;
+    int32_t s = (blkGet(rBuf, sampleIdx) - mean) * 32;
     if (s < -32767) s = -32767;
     if (s > 32767) s = 32767;
     int16_t pcm = (int16_t)s;

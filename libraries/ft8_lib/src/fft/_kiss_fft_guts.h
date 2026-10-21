@@ -23,7 +23,8 @@ struct kiss_fft_state{
     int nfft;
     int inverse;
     int factors[2*MAXFACTORS];
-    kiss_fft_cpx twiddles[1];
+    const kiss_fft_cpx * twiddles;   /* tw_store, or a constant table in flash (kiss_fft960_tables.h) */
+    kiss_fft_cpx tw_store[1];
 };
 
 /*

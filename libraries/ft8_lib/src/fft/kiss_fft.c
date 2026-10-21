@@ -8,6 +8,7 @@
 
 
 #include "_kiss_fft_guts.h"
+#include "kiss_fft960_tables.h"
 /* The guts header contains all the multiplication and addition macros that are defined for
  fixed or floating point complex numbers.  It also delares the kf_ internal functions.
  */
@@ -20,7 +21,7 @@ static void kf_bfly2(
         )
 {
     kiss_fft_cpx * Fout2;
-    kiss_fft_cpx * tw1 = st->twiddles;
+    const kiss_fft_cpx * tw1 = st->twiddles;
     kiss_fft_cpx t;
     Fout2 = Fout + m;
     do{
@@ -42,7 +43,7 @@ static void kf_bfly4(
         const size_t m
         )
 {
-    kiss_fft_cpx *tw1,*tw2,*tw3;
+    const kiss_fft_cpx *tw1,*tw2,*tw3;
     kiss_fft_cpx scratch[6];
     size_t k=m;
     const size_t m2=2*m;
@@ -92,7 +93,7 @@ static void kf_bfly3(
 {
      size_t k=m;
      const size_t m2 = 2*m;
-     kiss_fft_cpx *tw1,*tw2;
+     const kiss_fft_cpx *tw1,*tw2;
      kiss_fft_cpx scratch[5];
      kiss_fft_cpx epi3;
      epi3 = st->twiddles[fstride*m];
@@ -137,8 +138,8 @@ static void kf_bfly5(
     kiss_fft_cpx *Fout0,*Fout1,*Fout2,*Fout3,*Fout4;
     int u;
     kiss_fft_cpx scratch[13];
-    kiss_fft_cpx * twiddles = st->twiddles;
-    kiss_fft_cpx *tw;
+    const kiss_fft_cpx * twiddles = st->twiddles;
+    const kiss_fft_cpx *tw;
     kiss_fft_cpx ya,yb;
     ya = twiddles[fstride*m];
     yb = twiddles[fstride*2*m];
@@ -198,7 +199,7 @@ static void kf_bfly_generic(
         )
 {
     int u,k,q1,q;
-    kiss_fft_cpx * twiddles = st->twiddles;
+    const kiss_fft_cpx * twiddles = st->twiddles;
     kiss_fft_cpx t;
     int Norig = st->nfft;
 
@@ -333,8 +334,10 @@ void kf_factor(int n,int * facbuf)
 kiss_fft_cfg kiss_fft_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem )
 {
     kiss_fft_cfg st=NULL;
+    /* The forward 480-point FFT (FT8 at 6 kHz) takes its twiddles from flash: 3.8 KB less RAM */
+    int use_table = (nfft == KFFT_TABLE_N && !inverse_fft);
     size_t memneeded = sizeof(struct kiss_fft_state)
-        + sizeof(kiss_fft_cpx)*(nfft-1); /* twiddle factors*/
+        + (use_table ? 0 : sizeof(kiss_fft_cpx)*(nfft-1)); /* twiddle factors*/
 
     if ( lenmem==NULL ) {
         st = ( kiss_fft_cfg)KISS_FFT_MALLOC( memneeded );
@@ -348,12 +351,17 @@ kiss_fft_cfg kiss_fft_alloc(int nfft,int inverse_fft,void * mem,size_t * lenmem 
         st->nfft=nfft;
         st->inverse = inverse_fft;
 
-        for (i=0;i<nfft;++i) {
-            const double pi=3.141592653589793238462643383279502884197169399375105820974944;
-            double phase = -2*pi*i / nfft;
-            if (st->inverse)
-                phase *= -1;
-            kf_cexp(st->twiddles+i, phase );
+        if (use_table) {
+            st->twiddles = kfft480_twiddles;
+        } else {
+            for (i=0;i<nfft;++i) {
+                const double pi=3.141592653589793238462643383279502884197169399375105820974944;
+                double phase = -2*pi*i / nfft;
+                if (st->inverse)
+                    phase *= -1;
+                kf_cexp(st->tw_store+i, phase );
+            }
+            st->twiddles = st->tw_store;
         }
 
         kf_factor(nfft,st->factors);

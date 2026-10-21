@@ -186,6 +186,7 @@ void setup()
 
   // Initialize flash file system
   diskInit();
+  eibiReleaseFsIfUnused();
 
   // Check for SI4732 connected on I2C interface
   // If the SI4732 is not detected, then halt with no further processing

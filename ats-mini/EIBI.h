@@ -19,6 +19,7 @@ struct StationSchedule
 };
 
 bool eibiAvailable();
+void eibiReleaseFsIfUnused();
 bool eibiLoadSchedule();
 const StationSchedule *eibiLookup(uint16_t freq, uint8_t hour, uint8_t minute, size_t *offset=NULL);
 const StationSchedule *eibiPrev(uint16_t freq, uint8_t hour, uint8_t minute, size_t *offset);

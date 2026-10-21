@@ -570,6 +570,18 @@ int remoteDoCommand(char key)
     case 'x': // Toggle raw ADC audio streaming over Serial at 921600 baud
       ft8ToggleAudioStream();
       break;
+    case 'Z': // Stack headroom (bytes never used) of the main tasks, to size their stacks
+    {
+      static const char *const names[] = { "loopTask", "async_tcp", "arduino_events", "ft8_adc", "ft8tx",
+                                           "tiT", "wifi", "sys_evt", "esp_timer", "ipc0", "ipc1" };
+      for (const char *n : names) {
+        TaskHandle_t t = xTaskGetHandle(n);
+        if (t) Serial.printf("[STACK] %-15s free %u B\r\n", n, (unsigned)uxTaskGetStackHighWaterMark(t));
+      }
+      Serial.printf("[STACK] heap 8bit=%u largest=%u min=%u\r\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+      break;
+    }
     case 'd': // Print hardware & FT8 signal diagnostics
       ft8PrintDiag();
       break;
