@@ -457,6 +457,27 @@ static void qsoStart(QsoState st, const char *want) {
   }
 }
 
+// Auto mode (Kz): restart the sequencer by itself when it returns to idle. Runtime only, so a
+// reboot never starts transmitting. Stops after AUTO_MAX_QSO completed QSOs or AUTO_MAX_MS.
+#define AUTO_MAX_QSO 10
+#define AUTO_MAX_MS (30UL * 60UL * 1000UL)
+static uint8_t autoMode = 0;        // 0 off, 1 repeat CQ, 2 answer CQs
+static uint8_t autoQsos = 0;
+static uint32_t autoStartMs = 0;
+
+static void autoStop(const char *why) {
+  autoMode = 0;
+  Serial.printf("[AUTO] stopped: %s\r\n", why);
+  txEvent("auto stopped: %s", why);
+}
+
+// Called at the end of a slot while idle: start the next CQ or listen for one
+static void autoNext() {
+  if (autoQsos >= AUTO_MAX_QSO) return autoStop("QSO limit");
+  if (millis() - autoStartMs > AUTO_MAX_MS) return autoStop("time limit");
+  qsoStart(autoMode == 1 ? Q_CQ : Q_ANS_WAIT, NULL);
+}
+
 static bool isReport(const char *s) {
   return (s[0] == '+' || s[0] == '-') && isdigit((unsigned char)s[1]) && isdigit((unsigned char)s[2]) && !s[3];
 }
@@ -491,6 +512,10 @@ void ft8TxSlotDone() {
   uint32_t slot = txSlotNow(NULL);
   bool heard = heardAny;
   heardAny = false;
+  if (qso == Q_IDLE && autoMode && slot != txSlotNo) {
+    autoNext();
+    return;
+  }
   if (qso == Q_IDLE || slot == txSlotNo) return;   // our own transmit slot: nothing to answer
 
   char m[40] = "";
@@ -520,12 +545,14 @@ void ft8TxSlotDone() {
         Serial.printf("[QSO] COMPLETE with %s: sent %s, received %s\r\n", dxCall, rptSent, rptRcvd);
         ft8AddLog("[QSO] complete with %s (sent %s, rcvd %s)", dxCall, rptSent, rptRcvd);
         txEvent("QSO with %s complete (sent %s, rcvd %s)", dxCall, rptSent, rptRcvd);
+        autoQsos++;
         qsoSet(Q_IDLE, "73 received");
       } else if (heard && x[0] == 'R' && ++qsoTries < QSO_MAX_TRIES) {
         snprintf(m, sizeof(m), "%s %s RR73", dxCall, myCall);   // they missed our RR73
       } else {
         Serial.printf("[QSO] COMPLETE with %s (no 73): sent %s, received %s\r\n", dxCall, rptSent, rptRcvd);
         txEvent("QSO with %s complete, no 73 (sent %s, rcvd %s)", dxCall, rptSent, rptRcvd);
+        autoQsos++;
         qsoSet(Q_IDLE, NULL);
       }
       break;
@@ -552,6 +579,7 @@ void ft8TxSlotDone() {
         Serial.printf("[QSO] COMPLETE with %s: sent %s, received %s\r\n", dxCall, rptSent, rptRcvd);
         ft8AddLog("[QSO] complete with %s (sent %s, rcvd %s)", dxCall, rptSent, rptRcvd);
         txEvent("QSO with %s complete (sent %s, rcvd %s)", dxCall, rptSent, rptRcvd);
+        autoQsos++;
         qsoSet(Q_SENT_73, NULL);
       } else if (++qsoTries < QSO_MAX_TRIES) {
         snprintf(m, sizeof(m), "%s %s R%s", dxCall, myCall, rptSent);
@@ -588,12 +616,14 @@ void ft8TxCommand(const char *args) {
   }
   switch (op) {
     case '0':   // stop everything
+      autoMode = 0;
       txHalt();
       Serial.println("[TX] OFF");
       break;
     case 'e':   // Ke1 / Ke0: enable or disable transmitting; disabling stops the QSO and any TX at once
       txEnabled = atoi(args) != 0;
       if (!txEnabled) {
+        autoMode = 0;
         if (qso != Q_IDLE) qsoSet(Q_IDLE, "TX disabled");
         txHalt();
       }
@@ -662,12 +692,27 @@ void ft8TxCommand(const char *args) {
       break;
     }
     case 'q':   // Kq: call CQ until someone answers, then run the QSO
+      autoMode = 0;
       qsoStart(Q_CQ, NULL);
       break;
     case 'a':   // Ka[call]: wait for a CQ (from call, or anyone) and answer it
+      autoMode = 0;
       qsoStart(Q_ANS_WAIT, *args ? args : NULL);
       break;
+    case 'z':   // Kz<0|1|2>: auto mode, 1 = repeat CQ, 2 = answer CQs; each QSO ends in the next one
+      autoMode = constrain(atoi(args), 0, 2);
+      if (autoMode && !txEnabled) {
+        autoMode = 0;
+        Serial.println("[AUTO] enable TX first (Ke1)");
+        break;
+      }
+      autoQsos = 0;
+      autoStartMs = millis();
+      Serial.printf("[AUTO] mode %u\r\n", autoMode);
+      if (autoMode && qso == Q_IDLE) autoNext();
+      break;
     case 'x':   // Kx: stop the QSO sequencer (a message already on air finishes)
+      autoMode = 0;
       qsoSet(Q_IDLE, "stopped");
       break;
     default:
@@ -750,8 +795,8 @@ static String txStatusJson() {
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;
-  snprintf(b, sizeof(b), "\"qso\":\"%s\",\"dx\":\"%s\",\"rpt_sent\":\"%s\",\"rpt_rcvd\":\"%s\",\"seq\":%lu,\"events\":[",
-           qsoNames[qso], dxCall, rptSent, rptRcvd, (unsigned long)txEventSeq);
+  snprintf(b, sizeof(b), "\"qso\":\"%s\",\"dx\":\"%s\",\"rpt_sent\":\"%s\",\"rpt_rcvd\":\"%s\",\"auto\":%u,\"auto_qsos\":%u,\"seq\":%lu,\"events\":[",
+           qsoNames[qso], dxCall, rptSent, rptRcvd, autoMode, autoQsos, (unsigned long)txEventSeq);
   out += b;
   for (uint8_t i = 0; i < txEventCount; i++) {
     uint8_t k = (txEventHead + TX_EVENTS - 1 - i) % TX_EVENTS;   // newest first
@@ -790,6 +835,9 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
       txWebPush(line);
     } else if (action == "enable") {
       txWebPush(param("on") == "1" ? "e1" : "e0");
+    } else if (action == "auto") {
+      snprintf(line, sizeof(line), "z%u", (unsigned)constrain(param("mode").toInt(), 0, 2));
+      txWebPush(line);
     } else if (action == "stop") {
       txWebPush("x");
       txWebPush("0");

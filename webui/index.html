@@ -576,6 +576,9 @@ details#txCard:not([open])>summary{border-bottom:0;padding-bottom:0}
         <input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span>
       </label>
       <button class="primary" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">📣 Call CQ</button>
+      <button class="sm" id="txAutoCqBtn" disabled onclick="txAction('auto',{mode:1})" title="Call CQ again by itself after each QSO or when nobody answers. Stops after 10 QSOs or 30 minutes">🔁 Auto CQ</button>
+      <button class="sm" id="txAutoAnsBtn" disabled onclick="txAction('auto',{mode:2})" title="Answer CQs by itself and run each QSO. Stops after 10 QSOs or 30 minutes">🤖 Auto answer</button>
+      <span class="lbl" id="txAutoInfo"></span>
     </div>
 
     <div class="tx-plan" id="txPlan">Loading transmitter status…</div>
@@ -1836,6 +1839,10 @@ function renderTx(st) {
   const canSend = ok && st.enabled;
   $('txCqBtn').disabled = !canSend || busy;
   $('txSendBtn').disabled = !canSend || !!st.busy;
+  const auto = st.auto || 0;
+  $('txAutoCqBtn').disabled = !canSend || auto === 1;
+  $('txAutoAnsBtn').disabled = !canSend || auto === 2;
+  T('txAutoInfo', auto ? `auto ${auto === 1 ? 'CQ' : 'answer'} · ${st.auto_qsos}/10 QSO · press Stop to end` : '');
   const ev = (st.events || []).join('\n') || 'No transmissions yet';
   if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
 }
@@ -1847,7 +1854,7 @@ async function fetchTx() {
   txTimer = setTimeout(fetchTx, txState.on || (txState.qso && txState.qso !== 'idle') ? 1000 : 3000);
 }
 async function txAction(action, params = {}) {
-  if (['cq', 'answer', 'send'].includes(action) && !txState.enabled) {
+  if (['cq', 'answer', 'send', 'auto'].includes(action) && !txState.enabled) {
     T('txSaveMsg', 'Turn TX on first');
     setTimeout(() => T('txSaveMsg', ''), 2500);
     return;
