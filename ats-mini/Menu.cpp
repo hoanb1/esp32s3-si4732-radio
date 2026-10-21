@@ -549,9 +549,14 @@ void doSelectDigit(int16_t enc)
 
 void doVolume(int16_t enc)
 {
+  // In FT8/FT4 the knob sets the decoder level on GPIO34 (the same value the web slider shows);
+  // turning it up also switches the speaker on, the speaker is otherwise off by default
+  if(isDigitalMode()) {
+    ft8SetAdcManual(clamp_range(ft8GetAdcVolume(), enc, 36, 63));
+    if(enc > 0) ft8SetSpeakerMuted(false);
+    return;
+  }
   volume = clamp_range(volume, enc, 0, 63);
-  // The speaker is off by default in FT8/FT4: turning the volume up switches it on, down to 0 off
-  if(isDigitalMode() && (enc > 0 || !volume)) ft8SetSpeakerMuted(!volume);
   ft8ApplyAudio();
 }
 

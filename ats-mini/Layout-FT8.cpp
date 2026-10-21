@@ -36,6 +36,8 @@
 #define FT8_AP_MAX_ERRORS   12    // try AP when normal BP ends with 1..12 parity errors
 #define FT8_AP_MIN_SCORE    8     // and the candidate's sync score is at least this
 #define FT8_ADC_VOLUME      48    // SI4732 volume for GPIO34 capture; the line out sits only ~0.1 V above the ADC floor, so louder clips
+#define FT8_ADC_VPP_LO      300   // auto level: raise the SI4732 volume while the slot's mean block Vpp is below this
+#define FT8_ADC_VPP_HI      600   // auto level: lower it while the mean block Vpp is above this
 
 // Battery ADC reading (GPIO35), taken at boot before ADC1 switches to DMA mode
 volatile uint16_t g_latestVbatRaw = 2400;
@@ -84,6 +86,7 @@ static volatile uint32_t adcClkRaw = 0;                    // the raw sample ind
 static volatile uint16_t adcClkTail = 0;                   // and the partial block it cut (720 at 6000 Hz)
 static uint32_t monSlotId = 0xFFFFFFFF;                     // slot currently being collected into liveMon
 static bool monSlotUsable = false;                           // false if the slot start was missed
+static uint32_t lastBiasRecoverSlot = 0;                    // slot of the last SSB patch / bias recovery
 
 // Web audio: continuous 6 kHz mu-law ring read by absolute sample number, so consecutive
 // /api/audio requests join without gaps or repeats. This board has no spare heap for it (WiFi
@@ -181,6 +184,8 @@ static uint8_t ft8ViewMode = FT8_VIEW_LOG;   // FT8/FT4 open on the decoded mess
 static uint8_t ft8DigitalMode = FT8_DIG_OFF;
 static bool ft8SpeakerMuted = false;  // Speaker amplifier off (SI4732 keeps feeding GPIO34); set automatically in FT8/FT4
 static uint8_t ft8AdcVolume = FT8_ADC_VOLUME;   // Speaker off by default in FT8/FT4 (the SI4732 runs loud for the ADC)
+static bool ft8AdcAuto = true;                   // steer ft8AdcVolume from the measured GPIO34 level each slot
+static uint32_t ft8VppSum = 0, ft8VppCnt = 0;    // block Vpp accumulated over the current slot
 static bool ft8AudioStreamOn = false;
 static uint32_t ft8AudioStreamSeq = 0;
 
@@ -915,12 +920,25 @@ bool ft8TickWaterfall() {
     // A block from a new slot starts a new FT8 collection; block 0 begins exactly at the slot start
     uint32_t blkSlot = adcBlockSlot[rBuf];
     if (blkSlot != monSlotId) {
-      if (!sleepOn() && isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0)) {
+      // Reload at most once per 4 slots: a reload resets the SI4732 volume, so reloading every slot kept the ADC level low
+      if (!sleepOn() && isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0) && blkSlot - lastBiasRecoverSlot >= 4) {
         Serial.printf("[FT8] Recovering SI4732 SSB patch / GPIO34 bias (mean=%.0f, patch=0x%04X)...\r\n",
                       lastAdcMean, rx.getPatchId());
+        lastBiasRecoverSlot = blkSlot;
         unloadSSB();
         selectBand(bandIdx, false);
+        ft8ApplyAudio();   // restore the fixed FT8 ADC volume that the reload reset
       }
+      // Auto level: one step per slot toward the window [FT8_ADC_VPP_LO, FT8_ADC_VPP_HI] (mean block Vpp of the slot just ended)
+      if (ft8AdcAuto && digActive && ft8VppCnt > 0) {
+        uint32_t avgVpp = ft8VppSum / ft8VppCnt;
+        int nv = ft8AdcVolume;
+        if (avgVpp < FT8_ADC_VPP_LO && nv < 63) nv++;
+        else if (avgVpp > FT8_ADC_VPP_HI && nv > 36) nv--;
+        if (nv != ft8AdcVolume) ft8SetAdcVolume((uint8_t)nv);
+      }
+      ft8VppSum = 0;
+      ft8VppCnt = 0;
       monSlotId = blkSlot;
       monSlotUsable = (adcBlockIndex[rBuf] == 0);
       adcDroppedBlocks = 0;
@@ -968,6 +986,8 @@ bool ft8TickWaterfall() {
     lastAdcMin = minV;
     lastAdcMax = maxV;
     lastAdcVpp = maxV - minV;
+    ft8VppSum += lastAdcVpp;
+    ft8VppCnt++;
 
     // Fixed linear scaling (+6dB digital boost for quiet speaker volume) preserves exact log-dB differences across all 79 symbols
     const float normScale = 1.0f / 256.0f;
@@ -983,7 +1003,7 @@ bool ft8TickWaterfall() {
     adcReadBlock = (rBuf + 1) % FT8_RING_BLOCKS;
 
     // Compute VU meter percentage (0..100%)
-    int vu = (int)((lastAdcVpp * 100) / 350);
+    int vu = (int)((lastAdcVpp * 100) / 1000);   // full scale ~1000 counts: ~30% at the FT8 level, not pegged
     if (vu < 0) vu = 0;
     if (vu > 100) vu = 100;
     ft8AudioLevel = (uint8_t)vu;
@@ -1201,6 +1221,19 @@ void ft8SetAdcVolume(uint8_t v) {
   ft8AdcVolume = v > 63 ? 63 : v;
   ft8ApplyAudio();
 }
+
+// Manual level (web slider, LCD knob) turns auto level off, so the chosen value stays put
+void ft8SetAdcManual(uint8_t v) {
+  ft8AdcAuto = false;
+  ft8SetAdcVolume(v < 36 ? 36 : v);
+}
+
+void ft8SetAdcAuto(bool on) {
+  ft8AdcAuto = on;
+}
+
+uint8_t ft8GetAdcVolume() { return ft8AdcVolume; }
+bool ft8GetAdcAuto() { return ft8AdcAuto; }
 
 bool ft8IsSpeakerMuted() {
   return ft8SpeakerMuted;

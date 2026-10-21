@@ -226,6 +226,7 @@ void setup()
   // Ensure optimal SI4732 SSB AGC=ON (0), AVC=84 dB (clean non-saturating FT8 gain), and SoftMute=0
   volume = 36;
   if(currentBrt < 130) currentBrt = 200;
+  if(wifiModeIdx == NET_OFF || wifiModeIdx == NET_SYNC) wifiModeIdx = NET_AP_CONNECT;
   SsbSoftMuteIdx = 0;
   SsbAvcIdx = 84;
   SsbAgcIdx = 0;

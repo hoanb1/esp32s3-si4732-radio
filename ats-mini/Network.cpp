@@ -163,6 +163,7 @@ static void ensureDefaultWifiPrefs()
 
 static void performWifiScan()
 {
+  bool wasApActive = (WiFi.getMode() & WIFI_AP) != 0;
   int n = WiFi.scanNetworks(false, false, false, 120);
   lastScannedCount = 0;
   Serial.printf("[WiFi] Scanned %d 2.4GHz networks:\r\n", n);
@@ -192,6 +193,10 @@ static void performWifiScan()
     }
   }
   WiFi.scanDelete();
+  if (wasApActive && WiFi.status() != WL_CONNECTED) {
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, true);
+  }
 }
 
 //
@@ -269,7 +274,7 @@ void netTickTime()
     return;
   }
 
-  // Auto-reconnect watchdog if STA drops connection temporarily (never block or drop into AP)
+  // Auto-reconnect watchdog if STA drops connection, with automatic fallback to Open Hotspot AP
   gatewayWatchdog();
   static uint32_t lastWifiCheckMs = 0;
   static uint8_t disconnectTicks = 0;
@@ -284,21 +289,25 @@ void netTickTime()
     }
     if (wifiModeIdx > NET_AP_ONLY) {
       if (WiFi.status() != WL_CONNECTED) {
+        // If already broadcasting fallback Hotspot AP, keep AP locked on channel without STA channel-hopping
+        if ((WiFi.getMode() & WIFI_AP) != 0) {
+          return;
+        }
         disconnectTicks++;
+        if (disconnectTicks >= 3) {
+          Serial.printf("[WiFi] STA lost for %u ticks, switching to Open Hotspot '%s' (no password)\r\n",
+                        disconnectTicks, apSSID);
+          ft8AddLog("[WARN] Wi-Fi lost, broadcasting Open Hotspot: %s (10.1.1.1)", apSSID);
+          wifiInitAP();
+          disconnectTicks = 0;
+          return;
+        }
         Serial.printf("[WiFi] STA disconnected (tick %u), non-blocking reconnect...\r\n", disconnectTicks);
         if ((WiFi.getMode() & WIFI_STA) == 0) {
           WiFi.mode(WIFI_STA);
         }
         WiFi.setSleep(false);
-        if (disconnectTicks % 3 == 0) {
-          prefs.begin("network", true, STORAGE_PARTITION);
-          String s1 = prefs.getString("wifissid1", "HH-1301");
-          String p1 = prefs.getString("wifipass1", "tutulala");
-          prefs.end();
-          WiFi.begin(s1.c_str(), p1.c_str());
-        } else {
-          WiFi.reconnect();
-        }
+        WiFi.reconnect();
       } else {
         if (disconnectTicks > 0) {
           Serial.printf("[WiFi] Reconnected! IP: %s | RSSI: %d dBm\r\n",
@@ -337,7 +346,11 @@ int8_t getWiFiStatus()
 char *getWiFiIPAddress()
 {
   static char ip[16];
-  return strcpy(ip, WiFi.status()==WL_CONNECTED ? WiFi.localIP().toString().c_str() : "");
+  if (WiFi.status() == WL_CONNECTED)
+    return strcpy(ip, WiFi.localIP().toString().c_str());
+  if (WiFi.getMode() & WIFI_AP)
+    return strcpy(ip, WiFi.softAPIP().toString().c_str());
+  return strcpy(ip, "");
 }
 
 //
@@ -369,13 +382,12 @@ void netInit(uint8_t netMode, bool showStatus)
     case NET_OFF:
       return;
     case NET_AP_ONLY:
-      WiFi.mode(WIFI_AP);
       if(wifiInitAP() && showStatus) delay(800);
       break;
     case NET_AP_CONNECT:
     default:
       // Connect in pure WIFI_STA first (saves ~16KB RAM and avoids AP/STA channel conflict);
-      // if STA fails in NET_AP_CONNECT mode, wifiConnect() automatically falls back to Hotspot AP!
+      // if STA fails, wifiConnect() automatically falls back to Open Hotspot AP (no password)!
       WiFi.mode(WIFI_STA);
       break;
   }
@@ -432,16 +444,23 @@ bool ntpSyncTime()
 
 static bool wifiInitAP()
 {
+  // Stop STA auto-reconnect and channel scanning so the single ESP32 radio stays locked on AP channel
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);
+  WiFi.mode(WIFI_AP);
+
   IPAddress ip(10, 1, 1, 1);
   IPAddress gateway(10, 1, 1, 1);
   IPAddress subnet(255, 255, 255, 0);
 
   WiFi.softAPConfig(ip, gateway, subnet);
-  WiFi.softAP(apSSID, apPWD, apChannel, apHideMe, apClients);
+  WiFi.softAP(apSSID, NULL, apChannel, apHideMe, apClients);
+  WiFi.setSleep(false);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
   drawScreen(
-    ("Hotspot AP: " + String(apSSID)).c_str(),
-    ("IP: " + WiFi.softAPIP().toString()).c_str()
+    ("Hotspot: " + String(apSSID)).c_str(),
+    ("Open (No Pass) | " + WiFi.softAPIP().toString()).c_str()
   );
 
   ajaxInterval = 1500;
@@ -479,7 +498,7 @@ static bool wifiConnect()
     ft8AddLog("[INFO] Connecting to primary Wi-Fi '%s'...", savedSsid[0].c_str());
     drawScreen(("Connecting: " + savedSsid[0]).c_str(), "Press encoder to skip");
     WiFi.begin(savedSsid[0].c_str(), savedPass[0].c_str());
-    for (int t = 0; t < 16 && WiFi.status() != WL_CONNECTED; t++) {
+    for (int t = 0; t < 10 && WiFi.status() != WL_CONNECTED; t++) {
       delay(500);
       if (digitalRead(ENCODER_PUSH_BUTTON) == LOW) {
         WiFi.disconnect();
@@ -506,7 +525,7 @@ static bool wifiConnect()
           WiFi.setSleep(false);
           WiFi.begin(savedSsid[i].c_str(), savedPass[i].c_str());
 
-          for (int t = 0; t < 14 && WiFi.status() != WL_CONNECTED; t++) {
+          for (int t = 0; t < 12 && WiFi.status() != WL_CONNECTED; t++) {
             delay(500);
             if (digitalRead(ENCODER_PUSH_BUTTON) == LOW) {
               WiFi.disconnect();
@@ -521,16 +540,11 @@ static bool wifiConnect()
 
   if(WiFi.status() != WL_CONNECTED)
   {
-    WiFi.mode(WIFI_AP_STA);
     wifiInitAP();
-    if (savedSsid[0] != "") {
-      WiFi.begin(savedSsid[0].c_str(), savedPass[0].c_str());
-    }
-    Serial.printf("[WiFi] Could not connect to STA yet. Running AP+STA '%s' at %s\r\n",
+    Serial.printf("[WiFi] No WiFi available. Broadcasting Open Hotspot AP '%s' (no password) at %s\r\n",
                   apSSID, WiFi.softAPIP().toString().c_str());
-    ft8AddLog("[WARN] Wi-Fi not connected, running AP+STA: %s (%s)",
+    ft8AddLog("[WARN] No Wi-Fi found, Open Hotspot AP: %s (%s)",
               apSSID, WiFi.softAPIP().toString().c_str());
-    drawScreen(("AP: " + String(apSSID)).c_str(), ("Web UI: " + WiFi.softAPIP().toString()).c_str());
     return(false);
   }
   else
@@ -602,9 +616,25 @@ static void runControlAction(const ControlRequest &cr)
       int v = getParamStr("val").toInt();
       if (v < 0) v = 0;
       if (v > 63) v = 63;
-      volume = (uint8_t)v;
-      ft8ApplyAudio();
-      prefsRequestSave(SAVE_SETTINGS);
+      if (ft8GetDigitalMode() != FT8_DIG_OFF) {
+        // FT8/FT4: the slider is the decoder level on GPIO34 (manual, auto level off)
+        ft8SetAdcManual((uint8_t)v);
+      } else {
+        volume = (uint8_t)v;
+        ft8ApplyAudio();
+        prefsRequestSave(SAVE_SETTINGS);
+      }
+    } else if (action == "rx_ppm") {
+      // Same as serial J: SI4732 crystal correction in 0.1 ppm, saved to NVS, then the tune is recomputed
+      float ppm = getParamStr("val").toFloat();
+      if (ppm < -1500.0f) ppm = -1500.0f;   // the board's own SI4732 error is ~+893 ppm
+      if (ppm > 1500.0f) ppm = 1500.0f;
+      ssbPpmCal10 = (int16_t)lroundf(ppm * 10.0f);
+      ssbPpmSave();
+      rxSetFrequency(currentFrequency);
+      if (isSSB()) applySSBBfo();
+    } else if (action == "adc_auto") {
+      ft8SetAdcAuto(getParamStr("val").toInt() != 0);
     } else if (action == "mode") {
       int m = getParamStr("mode").toInt();
       if (m >= 0 && m <= 4) {
@@ -1100,7 +1130,7 @@ static int buildStatusJson(char *json, size_t cap)
     "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
-    "\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu,"
+    "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu,"
     "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
@@ -1113,9 +1143,10 @@ static int buildStatusJson(char *json, size_t cap)
     (unsigned int)uiLayoutIdx, ft8GetViewMode(), isAp ? "true" : "false", ip.c_str(), cleanSsid,
     clockAvailable() ? "true" : "false", ntpIsAvailable() ? "NTP" : "Manual",
     ft8GetCurrentSlotSecond(), ft8IsDecodingNow() ? "true" : "false",
-    (unsigned long)ft8GetLastDurationMs(), volume,
+    (unsigned long)ft8GetLastDurationMs(), ft8GetDigitalMode() != FT8_DIG_OFF ? ft8GetAdcVolume() : volume,
     ft8IsSpeakerMuted() ? "true" : "false",
     ft8WebAudioActive() ? "true" : "false",
+    ft8GetAdcAuto() ? "true" : "false", ssbPpmCal10 / 10.0f,
     ft8GetAudioLevel(), (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
     (unsigned long)ft8GetTotalDecoded(),
     (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail

@@ -74,6 +74,10 @@ int ft8NearestBand(uint32_t khz);
 // Apply SI4732 volume + speaker amplifier state for the current mode/mute/sleep state
 void ft8ApplyAudio();
 void ft8SetAdcVolume(uint8_t v);
+void ft8SetAdcManual(uint8_t v);
+void ft8SetAdcAuto(bool on);
+uint8_t ft8GetAdcVolume();
+bool ft8GetAdcAuto();
 
 // Clear decoded traffic list
 void ft8ClearTraffic();
