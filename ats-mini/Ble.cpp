@@ -6,10 +6,6 @@ int8_t getBleStatus()
   return 0;
 }
 
-void bleStop()
-{
-}
-
 void bleInit(uint8_t bleMode)
 {
   (void)bleMode;

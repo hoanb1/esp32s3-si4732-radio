@@ -72,12 +72,10 @@
 #define NET_OFF        0 // Do not connect to the network
 #define NET_AP_ONLY    1 // Create access point, do not connect to network
 #define NET_AP_CONNECT 2 // Create access point, connect to a network normally, if possible
-#define NET_CONNECT    3 // Connect to a network normally, if possible
 #define NET_SYNC       4 // Connect to sync time, then disconnect
 
 // Bluetooth modes
 #define BLE_OFF        0 // Bluetooth is disabled
-#define BLE_BLUEFRUIT  1 // Bluefruit Connect app mode
 
 //
 // Data Types
@@ -173,7 +171,6 @@ extern int8_t agcNdx;
 extern int8_t softMuteMaxAttIdx;
 extern uint8_t disableAgc;
 
-extern const int CALMax;
 
 static inline bool isSSB() { return(currentMode>FM && currentMode<AM); }
 
@@ -223,7 +220,6 @@ void netTickTime();
 // Ble.cpp
 int bleDoCommand(uint8_t bleModeIdx);
 void bleInit(uint8_t bleMode);
-void bleStop();
 int8_t getBleStatus();
 
 // Remote.c

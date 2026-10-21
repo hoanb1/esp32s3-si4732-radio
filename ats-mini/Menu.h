@@ -41,7 +41,6 @@
 #define CMD_SCROLL    0x2900 // |
 #define CMD_SLEEP     0x2A00 // |
 #define CMD_SLEEPMODE 0x2B00 // |
-#define CMD_LOADEIBI  0x2C00 // |
 #define CMD_BLEMODE   0x2D00 // |
 #define CMD_WIFIMODE  0x2E00 // |
 #define CMD_ABOUT     0x2F00 //-+
@@ -92,17 +91,7 @@ extern const FMRegion fmRegions[];
 extern int bandIdx;
 
 // These are menu commands
-static inline bool isMenuMode(uint16_t cmd)
-{
-  return((cmd>=CMD_BAND) && (cmd<CMD_SETTINGS));
-}
-
 // These are settings
-static inline bool isSettingsMode(uint16_t cmd)
-{
-  return((cmd>=CMD_SETTINGS) && (cmd<CMD_ABOUT));
-}
-
 uint8_t seekMode(bool toggle = false);
 void drawSideBar(uint16_t cmd, int x, int y, int sx);
 bool doSideBar(uint16_t cmd, int16_t enc, int16_t enca);

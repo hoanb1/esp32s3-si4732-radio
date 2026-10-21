@@ -36,7 +36,6 @@ extern LogSerialClass LogSerial;
 // The line ring (WEBLOG_LINES x WEBLOG_LINE_LEN bytes of heap) exists only while the log is on;
 // off frees it, and Serial output then goes to the UART only. Call from one task at a time.
 void webLogSetEnabled(bool on);
-bool webLogEnabled();
 
 // Absolute number of the next line to be written (lines head-WEBLOG_LINES .. head-1 are kept)
 uint32_t webLogHead();

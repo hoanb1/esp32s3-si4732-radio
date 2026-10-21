@@ -50,11 +50,6 @@ void webLogSetEnabled(bool on)
   free(old);
 }
 
-bool webLogEnabled()
-{
-  return logLines != NULL;
-}
-
 uint32_t webLogHead()
 {
   return logHead;

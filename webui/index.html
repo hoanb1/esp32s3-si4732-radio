@@ -59,8 +59,6 @@ h1 small{font-size:.75rem;color:var(--muted);font-weight:500;margin-left:6px}
 .vfo{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:2px 4px}
 .bandmode{display:flex;flex-direction:column;gap:5px;min-width:88px}
 .band{font-size:1.2rem;font-weight:900;color:var(--text);line-height:1}
-.modebox{display:inline-block;padding:2px 10px;border:2px solid var(--border);border-radius:6px;color:var(--text);font-weight:900;font-size:.95rem;text-align:center;letter-spacing:1px}
-.modebox.dig{border-color:var(--cyan);color:var(--cyan)}
 .freq{display:flex;align-items:baseline;gap:8px;margin:0 auto}
 .freq b{font-size:3rem;font-weight:900;color:#fff;letter-spacing:1px;line-height:1}
 .freq>span{font-size:1rem;color:var(--cyan);font-weight:800}
@@ -95,16 +93,13 @@ details.more[open]>summary{margin-bottom:6px}
 #scaleCanvas{width:100%;height:38px;display:block;background:#040811;border:1px solid #1d3254;border-radius:6px;cursor:pointer}
 
 .side-r{display:flex;flex-direction:column;justify-content:flex-start;gap:7px;background:#081120;border:1px solid #22385c;border-radius:8px;padding:8px}
-.hdr-sm{display:flex;justify-content:space-between;align-items:center;font-size:.76rem;font-weight:700;color:var(--muted)}
 .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
 .g5{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
 .g3 button,.g5 button{padding:5px 3px;font-size:.73rem}
 
 /* Cards */
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.grid-3{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:10px}
-@media(max-width:1080px){.grid-3{grid-template-columns:1fr 1fr}}
-@media(max-width:780px){.grid-2,.grid-3{grid-template-columns:1fr}}
+@media(max-width:780px){.grid-2{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;min-width:0}
 .card-hdr{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:7px;gap:8px;flex-wrap:wrap}
 .card-title{font-size:.86rem;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.4px}
@@ -141,7 +136,6 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 .tune{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
 @media(max-width:420px){.tune{grid-template-columns:repeat(4,1fr)}}
 .tune button{font-size:.76rem;padding:6px 3px}
-.g7{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
 .sl{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .sl div{display:flex;align-items:center;gap:4px}
 .sl .lbl{width:34px}
@@ -966,7 +960,6 @@ function applyStatus(d) {
   const isFt8 = mode === 'FT8', isFt4 = mode === 'FT4', dig = isFt8 || isFt4;
 
   // Left column (LCD drawLeftSideBar)
-  const agcOn = d.agc === 0 && d.att_db === 0;
   T('boxLocalTime', d.local_time || '--:--');
 
   // Frequency, band, mode (LCD ft8GetDisplayModeDesc())
@@ -1106,6 +1099,7 @@ const WF_ROWS = 200, WF_RADIO_ROWS = 36;
 const wfCanvas = $('wfCanvas');
 const wfCtx = wfCanvas.getContext('2d');
 const wfImg = wfCtx.createImageData(120, WF_ROWS);
+const wfPix32 = new Uint32Array(wfImg.data.buffer);   // pixel view of wfImg
 let wfLast = null;
 
 function colorMap(v, pal) {
@@ -1121,6 +1115,12 @@ const LUT = [0, 1, 2].map(p => {
   const t = new Uint8ClampedArray(768);
   for (let v = 0; v < 256; v++) t.set(colorMap(v, p).map(Math.round), v * 3);
   return t;
+});
+// The same LUTs as little-endian 32-bit RGBA pixels: one store per pixel instead of four
+const LUT32 = LUT.map(t => {
+  const u = new Uint32Array(256);
+  for (let v = 0; v < 256; v++) u[v] = (255 << 24) | (t[v * 3 + 2] << 16) | (t[v * 3 + 1] << 8) | t[v * 3];
+  return u;
 });
 let wfPal = 0, wfOn = true;
 try { wfPal = parseInt(localStorage.getItem('wfPal') || '0', 10) || 0; } catch (e) {}
@@ -1147,11 +1147,8 @@ $('wfPalette').addEventListener('change', e => {
 
 function drawWaterfall(buf) {
   if (hrW) return drawHiRes();   // full-resolution rows own the canvas; 120-column data would shrink it
-  const lut = LUT[wfPal] || LUT[0], px = wfImg.data;
-  for (let i = 0, j = 0; i < WF_ROWS * 120; i++, j += 4) {
-    const k = buf[i] * 3;
-    px[j] = lut[k]; px[j + 1] = lut[k + 1]; px[j + 2] = lut[k + 2]; px[j + 3] = 255;
-  }
+  const lut = LUT32[wfPal] || LUT32[0], px = wfPix32;
+  for (let i = 0; i < WF_ROWS * 120; i++) px[i] = lut[buf[i]];
   wfCtx.putImageData(wfImg, 0, 0);
 }
 
@@ -1284,7 +1281,7 @@ function addWaterfallRows(b) {
 // = level above the row median in 1.5 dB steps. The canvas switches to one pixel per bin.
 // Each row also carries its block index in the FT8 slot (0 = :00/:15/:30/:45, 255 = not slot aligned)
 // and the slot of the hour; FT8/FT4 slot starts are drawn as labelled lines on an overlay canvas.
-let hrW = 0, hrBuf = null, hrImg = null;
+let hrW = 0, hrBuf = null, hrImg = null, hrPix32 = null;
 const hrBlk = new Uint8Array(WF_ROWS).fill(255), hrSlot = new Uint8Array(WF_ROWS);
 function addHiResRows(b) {
   const bins = b[1] | (b[2] << 8), n = b[3], rb = 2 + ((bins + 1) >> 1);
@@ -1294,6 +1291,7 @@ function addHiResRows(b) {
     hrBuf = new Uint8Array(WF_ROWS * bins);
     wfCanvas.width = bins;
     hrImg = wfCtx.createImageData(bins, WF_ROWS);
+    hrPix32 = new Uint32Array(hrImg.data.buffer);
   }
   for (let r = 0; r < n; r++) {
     hrBuf.copyWithin(bins, 0, (WF_ROWS - 1) * bins);   // newest row on top
@@ -1309,11 +1307,8 @@ function addHiResRows(b) {
   if (wfOn && wfVisible) drawHiRes();
 }
 function drawHiRes() {
-  const lut = LUT[wfPal] || LUT[0], px = hrImg.data, n = hrW * WF_ROWS;
-  for (let i = 0, j = 0; i < n; i++, j += 4) {
-    const k = hrBuf[i] * 3;
-    px[j] = lut[k]; px[j + 1] = lut[k + 1]; px[j + 2] = lut[k + 2]; px[j + 3] = 255;
-  }
+  const lut = LUT32[wfPal] || LUT32[0], px = hrPix32, n = hrW * WF_ROWS;
+  for (let i = 0; i < n; i++) px[i] = lut[hrBuf[i]];
   wfCtx.putImageData(hrImg, 0, 0);
   drawSlotOverlay();
 }
@@ -1346,7 +1341,7 @@ function drawSlotOverlay() {
 function addLogLine(line) {
   logLines.push(line);
   if (logLines.length > 400) logLines.splice(0, logLines.length - 400);
-  if (!logPaused) renderLog();
+  if (!logPaused && !$('logCard').classList.contains('off')) renderLog();   // a hidden log is drawn when it is shown
 }
 
 let logRenderPending = false;
@@ -1753,6 +1748,7 @@ function renderOpts(o) {
   T('optHeap', `heap ${(o.heap / 1024).toFixed(1)} KB · largest ${(o.largest / 1024).toFixed(1)} · low ${(o.heap_min / 1024).toFixed(1)}`);
   C('optHeap', 'badge ' + (o.largest < 4096 ? 'err' : o.largest < 8192 ? 'warn' : 'ok'));
   $('logCard').classList.toggle('off', !o.log);
+  if (o.log) renderLog();   // catch up on the lines that arrived while it was hidden
   $('wfCard').classList.toggle('off', !o.webwf);
   if (!o.hires || !o.webwf) wfLowRes();
 }
@@ -1768,7 +1764,7 @@ function optSet(key, on) {
 // Back to the 120-column rows when the radio stops sending full-resolution ones
 function wfLowRes() {
   if (!hrW) return;
-  hrW = 0; hrBuf = null; hrImg = null;
+  hrW = 0; hrBuf = null; hrImg = null; hrPix32 = null;
   hrBlk.fill(255);
   wfCanvas.width = 120;
   wfLast = wfBuf;

@@ -19,53 +19,6 @@
 
 extern ButtonTracker pb1;
 
-const BandLabel bandLabels[] =
-{
-  {  472,   479,  "630m (CW)"     },
-  {  500,   518,  "NAVTEX"        },
-  {  525,  1705,  "MW Broadcast"  },
-  { 1600,  1800,  "Top Band"      },
-  { 2300,  2495,  "120m BC"       },
-  { 3200,  3400,  "90m BC"        },
-  { 3500,  3800,  "80m (Amateur)" },
-  { 3700,  3800,  "80m (SSB)"     },
-  { 3900,  4000,  "75m BC"        },
-  { 4720,  4750,  "60m (Amateur)" },
-  { 4750,  4995,  "60m BC"        },
-  { 5900,  6200,  "49m BC"        },
-  { 7000,  7040,  "40m (CW)"      },
-  { 7040,  7100,  "40m (DIGI)"    },
-  { 7100,  7200,  "40m (SSB)"     },
-  { 7200,  7600,  "41m BC"        },
-  { 9400,  9900,  "31m BC"        },
-  {10100, 10140,  "30m (CW)"      },
-  {10136, 10140,  "30m (FT8)"     },
-  {10140, 10150,  "30m (DIGI)"    },
-  {11600, 12100,  "25m BC"        },
-  {14000, 14070,  "20m (CW)"      },
-  {14070, 14100,  "20m (DIGI/FT8)"},
-  {14100, 14350,  "20m (SSB)"     },
-  {15100, 15800,  "19m BC"        },
-  {18068, 18110,  "17m (CW)"      },
-  {18100, 18110,  "17m (FT8)"     },
-  {18110, 18168,  "17m (SSB)"     },
-  {17480, 17900,  "16m BC"        },
-  {21000, 21070,  "15m (CW)"      },
-  {21070, 21100,  "15m (DIGI/FT8)"},
-  {21100, 21450,  "15m (SSB)"     },
-  {21450, 21850,  "13m BC"        },
-  {24890, 24915,  "12m (CW)"      },
-  {24915, 24925,  "12m (FT8)"     },
-  {24925, 24990,  "12m (SSB)"     },
-  {26960, 27410,  "11m (CB)"      },
-  {25670, 26100,  "11m BC"        },
-  {28000, 28120,  "10m (CW)"      },
-  {28120, 28190,  "10m (DIGI/FT8)"},
-  {28200, 29700,  "10m (SSB/FM)"  },
-  {26100, 26500,  "11m BC"        },
-  {29600, 30000,  "9m BC"         }
-};
-
 // FIXME: this might be slow
 bool eibiAvailable()
 {
@@ -155,53 +108,6 @@ const StationSchedule *eibiPrev(uint16_t freq, uint8_t hour, uint8_t minute, siz
     if((entry.freq<freq) && entryIsNow(&entry, now))
     {
       *offset = pos;
-      result = &entry;
-      break;
-    }
-  }
-
-  file.close();
-  return(result);
-}
-
-const StationSchedule *eibiAtSameFreq(uint8_t hour, uint8_t minute, size_t *offset, bool same)
-{
-  // Will return this static entry
-  static StationSchedule entry;
-
-  // Must have valid offset
-  if(!offset) return(NULL);
-
-  // Open file with EIBI data
-  fs::File file = LittleFS.open(EIBI_PATH, "rb");
-  if(!file) return(NULL);
-
-  // Read current entry to get frequency
-  StationSchedule e0;
-  if(!file.seek(*offset, fs::SeekSet) || file.read((uint8_t*)&e0, sizeof(e0)) != sizeof(e0))
-  {
-    file.close();
-    return(NULL);
-  }
-
-  StationSchedule *result = NULL;
-  int now = hour * 60 + minute;
-
-  if(same && entryIsNow(&e0, now))
-  {
-    entry = e0;
-    result = &entry;
-    file.close();
-    return(result);
-  }
-
-  while(file.read((uint8_t*)&entry, sizeof(entry)) == sizeof(entry))
-  {
-    if(entry.freq != e0.freq)
-      break;
-    else if(entryIsNow(&entry, now))
-    {
-      *offset = file.position() - sizeof(entry);
       result = &entry;
       break;
     }
@@ -502,4 +408,51 @@ bool eibiLoadSchedule()
   identifyFrequency(currentFrequency + currentBFO / 1000);
   drawScreen(eibiMessage, "DONE!");
   return(true);
+}
+
+const StationSchedule *eibiAtSameFreq(uint8_t hour, uint8_t minute, size_t *offset, bool same)
+{
+  // Will return this static entry
+  static StationSchedule entry;
+
+  // Must have valid offset
+  if(!offset) return(NULL);
+
+  // Open file with EIBI data
+  fs::File file = LittleFS.open(EIBI_PATH, "rb");
+  if(!file) return(NULL);
+
+  // Read current entry to get frequency
+  StationSchedule e0;
+  if(!file.seek(*offset, fs::SeekSet) || file.read((uint8_t*)&e0, sizeof(e0)) != sizeof(e0))
+  {
+    file.close();
+    return(NULL);
+  }
+
+  StationSchedule *result = NULL;
+  int now = hour * 60 + minute;
+
+  if(same && entryIsNow(&e0, now))
+  {
+    entry = e0;
+    result = &entry;
+    file.close();
+    return(result);
+  }
+
+  while(file.read((uint8_t*)&entry, sizeof(entry)) == sizeof(entry))
+  {
+    if(entry.freq != e0.freq)
+      break;
+    else if(entryIsNow(&entry, now))
+    {
+      *offset = file.position() - sizeof(entry);
+      result = &entry;
+      break;
+    }
+  }
+
+  file.close();
+  return(result);
 }

@@ -354,33 +354,9 @@ void drawScale(uint32_t freq)
 //
 // Draw S-meter
 //
-void drawSMeter(int strength, int x, int y)
-{
-  spr.drawTriangle(x + 1, y + 1, x + 11, y + 1, x + 6, y + 6, TH.smeter_icon);
-  spr.drawLine(x + 6, y + 1, x + 6, y + 14, TH.smeter_icon);
-
-  for(int i=0 ; i<strength ; i++)
-  {
-    if(i<10)
-      spr.fillRect(15+x + (i*4), 2+y, 2, 12, TH.smeter_bar);
-    else
-      spr.fillRect(15+x + (i*4), 2+y, 2, 12, TH.smeter_bar_plus);
-  }
-}
-
 //
 // Draw stereo indicator
 //
-void drawStereoIndicator(int x, int y, bool stereo)
-{
-  if(stereo)
-  {
-    // Split S-meter into two rows
-    spr.fillRect(15 + x, 7 + y, 4 * 17 - 2, 2, TH.bg);
-  }
-  // Add an "else" statement here to draw a mono indicator
-}
-
 //
 // Draw RDS station name (also CB channel, etc)
 //

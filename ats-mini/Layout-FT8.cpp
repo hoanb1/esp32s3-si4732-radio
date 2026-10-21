@@ -164,7 +164,6 @@ static uint32_t manualSlotSyncMs = 0;
 static uint32_t epochBaseSec = 0;
 static uint32_t epochBaseMs = 0;
 static bool hasManualEpoch = false;
-static uint8_t lastSlotSec = 255;
 static bool slotDecoded = false;
 
 // ADC spike filter: a sample more than spikeThr counts from both neighbours is replaced by their mean.
@@ -908,7 +907,6 @@ bool ft8TickWaterfall() {
   uint8_t slotSec = s % 15;
   bool digActive = (ft8DigitalMode != FT8_DIG_OFF) && (currentMode == USB || currentMode == LSB);
 
-  lastSlotSec = slotSec;
 
   // Drain any pending 160ms ADC blocks from the lock-free ring buffer
   while (adcReadBlock != adcWriteBlock) {
@@ -1065,10 +1063,6 @@ void ft8ForceLiveDecode() {
   if (liveMon.wf.num_blocks >= 20) {
     ft8DecodeFromMonitor(&liveMon, false);
   }
-}
-
-void ft8ToggleViewMode() {
-  ft8ViewMode = (ft8ViewMode + 1) % 3;
 }
 
 void ft8SetViewMode(uint8_t mode) {

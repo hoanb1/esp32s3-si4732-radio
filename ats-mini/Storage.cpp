@@ -44,20 +44,6 @@ bool prefsAreWritten()
 }
 
 // Invlaidate all currently saved preferences
-void prefsInvalidate()
-{
-  static const char *sections[] =
-  { "settings", "memories", "bands", "network", 0 };
-
-  // Clear all applicable sections
-  for(int j = 0 ; sections[j] ; ++j)
-  {
-    prefs.begin(sections[j], false, STORAGE_PARTITION);
-    prefs.clear();
-    prefs.end();
-  }
-}
-
 struct SavedBand
 {
   uint8_t bandMode;       // Band mode (FM, AM, LSB, or USB)

@@ -51,7 +51,6 @@ void ft8SyncSlotManual();
 void ft8SetEpochTime(uint32_t epoch, uint16_t ms = 0);
 
 // Toggle or set LCD view mode (0=SPLIT, 1=WATERFALL, 2=LOG)
-void ft8ToggleViewMode();
 void ft8SetViewMode(uint8_t mode);
 uint8_t ft8GetViewMode();
 

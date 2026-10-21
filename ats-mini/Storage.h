@@ -15,7 +15,6 @@
 extern Preferences prefs;
 
 void prefsTickTime();
-void prefsInvalidate();
 bool prefsAreWritten();
 bool nvsErase();
 
