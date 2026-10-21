@@ -12,6 +12,7 @@
 #include "Themes.h"
 #include "Utils.h"
 #include "EIBI.h"
+#include "Options.h"
 #include "Ft8Tx.h"
 #include "PskReporter.h"
 #include "Layout-FT8.h"
@@ -113,6 +114,7 @@ void setup()
 {
   // Enable serial port
   Serial.begin(115200);
+  webLogSetEnabled(true);   // optionsLoad() applies the saved choice later in setup
   delay(50);
   Serial.println("\r\n[BOOT] Starting ATS-Mini ESP32 + SI4732 Receiver...");
 
@@ -187,6 +189,7 @@ void setup()
   // Initialize flash file system
   diskInit();
   eibiReleaseFsIfUnused();
+  optionsLoad();
 
   // Check for SI4732 connected on I2C interface
   // If the SI4732 is not detected, then halt with no further processing

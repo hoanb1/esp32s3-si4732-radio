@@ -7,6 +7,7 @@
 #include "Layout-FT8.h"
 #include "Ft8Tx.h"
 #include "PskReporter.h"
+#include "Options.h"
 #include "WebUI.h"
 #include "WorldMap.h"
 
@@ -250,6 +251,7 @@ static void gatewayWatchdog()
 
 void netTickTime()
 {
+  optionsApply();
   wsTick();
   processControlQueue();
 
@@ -1220,6 +1222,7 @@ static void wsTick()
       uint32_t behind = wfHead - pages[i].wfSeq;
       if (behind > 36) behind = 36;
       uint32_t rows = behind > WS_WF_ROWS_MAX ? WS_WF_ROWS_MAX : behind;
+      if (!optionWebWaterfall()) rows = 0;   // switched off in Options
       if (rows && !wsHeapOk(2 + rows * 120)) rows = 0;   // the page catches up on a later tick
       if (rows) {
         auto buf = std::make_shared<std::vector<uint8_t>>(2 + rows * 120);
@@ -1415,6 +1418,7 @@ static void webInit()
   // /api/timesync - Set UTC time from browser epoch
   ft8TxRegisterWeb(server);
   pskrRegisterWeb(server);
+  optionsRegisterWeb(server);
 
   server.on("/api/timesync", HTTP_GET, [] (AsyncWebServerRequest *request) {
     if (request->hasParam("epoch")) {

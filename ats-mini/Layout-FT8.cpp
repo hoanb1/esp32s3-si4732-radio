@@ -125,13 +125,14 @@ static uint32_t webWfRowCount = 0;   // rows ever added, so /ws can send only th
 // = level above the row median in 1.5 dB steps (-3 .. +19.5 dB). Row n of webWfRowCount lives at n % HR_ROWS.
 #define HR_ROWS     8
 #define HR_MAX_BINS 440
-static uint8_t hrRows[HR_ROWS][HR_MAX_BINS / 2];
+static uint8_t (*hrRows)[HR_MAX_BINS / 2] = NULL;   // heap, only while the hi-res web waterfall is on
 static uint8_t hrMeta[HR_ROWS][2];   // block index within the FT8 slot (255 = not slot aligned), slot of the hour (0..239)
 static uint16_t hrBins = 0;
 
 static void storeHiResRow(const uint8_t *mag, int numBins, uint32_t rowNo, uint8_t blockInSlot, uint8_t slotOfHour) {
   hrMeta[rowNo % HR_ROWS][0] = blockInSlot;
   hrMeta[rowNo % HR_ROWS][1] = slotOfHour;
+  if (!hrRows) return;
   if (numBins > HR_MAX_BINS) numBins = HR_MAX_BINS;
   // Row median (0.5 dB units) from a histogram
   uint16_t hist[256] = {0};
@@ -157,9 +158,6 @@ static int ft8TrafficCount = 0;
 static uint32_t ft8TotalDecoded = 0;
 
 // System diagnostic log ring buffer for Web UI (/api/logs) - fixed char array avoids heap fragmentation
-static char ft8Logs[FT8_MAX_LOGS][96];
-static int ft8LogHead = 0;
-static int ft8LogCount = 0;
 
 // FT8 slot timing & state
 static uint32_t manualSlotSyncMs = 0;
@@ -234,25 +232,23 @@ void ft8AddLog(const char *fmt, ...) {
   vsnprintf(buf, sizeof(buf), fmt, args);
   va_end(args);
 
-  uint8_t h = 0, m = 0, s = 0;
-  ft8GetCurrentUTC(&h, &m, &s);
-  snprintf(ft8Logs[ft8LogHead], sizeof(ft8Logs[0]), "[%02u:%02u:%02u] %s", h, m, s, buf);
-  ft8LogHead = (ft8LogHead + 1) % FT8_MAX_LOGS;
-  if (ft8LogCount < FT8_MAX_LOGS) ft8LogCount++;
-  Serial.printf("%s\r\n", buf);   // also into the web radio log
+  Serial.printf("%s\r\n", buf);   // the web radio log keeps it (when on)
 }
 
+// The last lines of the web radio log ("[]" while the log is off)
 String ft8GetLogsJson() {
-  String out;
-  out.reserve(1024);
-  out = "[";
-  int start = (ft8LogHead - ft8LogCount + FT8_MAX_LOGS) % FT8_MAX_LOGS;
-  for (int i = 0; i < ft8LogCount; i++) {
-    if (i > 0) out += ",";
-    String s = ft8Logs[(start + i) % FT8_MAX_LOGS];
+  String out = "[";
+  char line[WEBLOG_LINE_LEN];
+  uint32_t head = webLogHead();
+  bool first = true;
+  for (uint32_t seq = head > FT8_MAX_LOGS ? head - FT8_MAX_LOGS : 0; seq != head; seq++) {
+    if (!webLogGet(seq, line, sizeof(line))) continue;
+    String s = line;
     s.replace("\\", "\\\\");
     s.replace("\"", "\\\"");
+    if (!first) out += ",";
     out += "\"" + s + "\"";
+    first = false;
   }
   out += "]";
   return out;
@@ -1254,7 +1250,14 @@ const FT8MessageEntry* ft8GetTrafficEntry(int idx) {
 }
 const uint8_t* ft8GetWebWaterfallBuffer() { return webWf; }
 uint32_t ft8GetWebWaterfallRowCount() { return webWfRowCount; }
-uint16_t ft8GetHiResBins() { return hrBins; }
+uint16_t ft8GetHiResBins() { return hrRows ? hrBins : 0; }
+// Loop task only (the rows are written and sent from it)
+void ft8SetHiResEnabled(bool on) {
+  if (on == (hrRows != NULL)) return;
+  if (on) hrRows = (uint8_t (*)[HR_MAX_BINS / 2])calloc(HR_ROWS, HR_MAX_BINS / 2);
+  else { free(hrRows); hrRows = NULL; hrBins = 0; }
+}
+bool ft8HiResEnabled() { return hrRows != NULL; }
 const uint8_t *ft8GetHiResRow(uint32_t rowNo) { return hrRows[rowNo % HR_ROWS]; }
 const uint8_t *ft8GetHiResMeta(uint32_t rowNo) { return hrMeta[rowNo % HR_ROWS]; }
 

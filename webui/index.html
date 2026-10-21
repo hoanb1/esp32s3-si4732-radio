@@ -147,14 +147,14 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 .sl .lbl{width:34px}
 
 /* Memories */
-.chips{display:flex;flex-wrap:wrap;gap:5px;max-height:150px;overflow-y:auto}
-.chip{display:inline-flex;align-items:center;background:#152540;border:1px solid #29436b;border-radius:7px;overflow:hidden;font-size:.75rem}
-.chip button{background:transparent;border:none;border-radius:0;padding:4px 8px}
-.chip button:hover{background:rgba(0,229,255,.15);color:var(--cyan)}
-.chip .f{color:var(--text);margin-left:4px;font-size:.72rem}
-.chip .m{color:var(--muted);font-size:.66rem;margin-left:3px}
-.chip .del{border-left:1px solid #29436b;color:var(--muted);padding:4px 7px;font-weight:800}
-.chip .del:hover{background:var(--red);color:#fff}
+.bm-tbl{max-height:260px}
+tr.bm{cursor:pointer}
+tr.bm td{padding:4px 9px}
+tr.bm:hover td{background:rgba(0,229,255,.08)}
+tr.grp td{background:#0c1828;color:var(--muted);font-size:.68rem;text-transform:uppercase;letter-spacing:.04em}
+td.act{width:1%;padding:2px 6px}
+td.act button{background:transparent;border:none;color:var(--muted);padding:2px 7px;font-weight:800;border-radius:5px}
+td.act button:hover{background:var(--red);color:#fff}
 
 /* Waterfall */
 .wf{background:#040811;border:1px solid #253b61;border-radius:8px;overflow:hidden;position:relative}
@@ -166,6 +166,10 @@ select.band option{color:var(--text);background:var(--card);font-size:.9rem;font
 /* FT8 / FT4 */
 .ft8{}
 .hidden{display:none!important}
+.off{display:none!important}   /* hidden by a choice in Options (separate from mode-driven .hidden) */
+.opt-grid{display:grid;grid-template-columns:auto 1fr;gap:8px 14px;align-items:center}
+.opt-grid .lbl{font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:.68rem}
+.opt-note{font-size:.72rem;color:var(--muted)}
 /* Station map */
 #stationMap{position:relative;height:400px;border:1px solid #1e3252;border-radius:8px;background:#050b15;overflow:hidden;touch-action:none;cursor:grab;user-select:none}
 #stationMap.drag{cursor:grabbing}
@@ -430,7 +434,10 @@ details#txCard:not([open])>summary{border-bottom:0;padding-bottom:0}
         <input type="text" id="bmNameInput" class="flex1" maxlength="9" placeholder="Save current frequency as… (max 9 chars)" onkeydown="if(event.key==='Enter')saveCurrentBookmark()">
         <button class="primary" onclick="saveCurrentBookmark()">+ Save</button>
       </div>
-      <div class="chips" id="bookmarksContainer"></div>
+      <div class="tbl bm-tbl"><table>
+        <thead><tr><th>Name</th><th>Freq</th><th>Mode</th><th>Band</th><th></th></tr></thead>
+        <tbody id="bookmarksContainer"></tbody>
+      </table></div>
     </div>
   </div>
 
@@ -602,6 +609,32 @@ details#txCard:not([open])>summary{border-bottom:0;padding-bottom:0}
     </div>
 
     <div class="logs mono" id="txEvents" style="height:auto;min-height:44px;max-height:140px">No transmissions yet</div>
+  </details>
+
+  <!-- Options: radio features that cost heap, saved on the radio; page sections, saved in this browser -->
+  <details class="card" id="optCard">
+    <summary class="card-hdr">
+      <span class="card-title">⚙️ Options</span>
+      <span class="badge info" id="optHeap">heap –</span>
+    </summary>
+    <div class="opt-grid">
+      <span class="lbl">Radio</span>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="optLog" onchange="optSet('log',this.checked)"><span>Radio log</span></label>
+        <label class="sw"><input type="checkbox" id="optWebwf" onchange="optSet('webwf',this.checked)"><span>Web waterfall</span></label>
+        <label class="sw"><input type="checkbox" id="optHires" onchange="optSet('hires',this.checked)"><span>Full-resolution waterfall</span></label>
+      </div>
+      <span></span>
+      <div class="opt-note">Off frees radio memory: log 2 KB, full-resolution rows 1.8 KB, and less memory per open page for each waterfall update. The LCD waterfall is not affected. Saved on the radio.</div>
+      <span class="lbl">This page</span>
+      <div class="row">
+        <label class="sw"><input type="checkbox" id="pgMap" onchange="pageSet('map',this.checked)"><span>Map</span></label>
+        <label class="sw"><input type="checkbox" id="pgPskr" onchange="pageSet('pskr',this.checked)"><span>PSKReporter</span></label>
+        <label class="sw"><input type="checkbox" id="pgTx" onchange="pageSet('tx',this.checked)"><span>FT8 Transmit</span></label>
+      </div>
+      <span></span>
+      <div class="opt-note">Only hides sections in this browser; it does not change radio memory. PSKReporter uploading keeps running while its card is hidden.</div>
+    </div>
   </details>
 
   <!-- Live radio log (Serial output pushed over /ws) -->
@@ -911,7 +944,7 @@ function updateFt8Visibility() {
   $('txCard').classList.toggle('hidden', !ft8Visible);
   $('heardCard').classList.toggle('hidden', !ft8Visible);
   if (ft8Visible) pskrFetch();
-  if (shown) { fetchTx(); setTimeout(showMap, 1500); }   // the map after the page's first small requests
+  if (shown) { fetchTx(); if (pagePrefs.map) setTimeout(showMap, 1500); }   // the map after the first small requests; not while hidden in Options
 }
 
 function setOnline(ok) {
@@ -1029,15 +1062,23 @@ async function loadBookmarks() {
   renderBookmarks();
 }
 
+// Table rows sorted by frequency: saved memories first, then the built-in presets
 function renderBookmarks() {
   T('bmCountTxt', `Saved: ${bookmarksCache.length}/24`);
-  let html = bookmarksCache.map(bm => {
-    const f = bm.mode === 'FM' ? (bm.freq_hz / 1e6).toFixed(2) + 'M' : (bm.freq_hz / 1e3).toFixed(1) + 'k';
-    return `<div class="chip" title="Memory slot #${bm.slot + 1}"><button onclick="sendCtrl('bookmark_tune',{slot:${bm.slot}})">⭐ ${esc(bm.name)}<span class="f mono">${f}</span><span class="m">${esc(bm.mode)}</span></button><button class="del" onclick="deleteBookmark(${bm.slot})" title="Delete memory">×</button></div>`;
-  }).join('');
-  html += PRESETS.map((p, i) =>
-    `<div class="chip"><button onclick="tunePreset(${i})">${p[0]}<span class="f mono">${p[1]}${p[2] === 'mhz' ? 'M' : 'k'}</span><span class="m">${p[3]}</span></button></div>`).join('');
-  $('bookmarksContainer').innerHTML = html;
+  const saved = bookmarksCache.slice().sort((a, b) => a.freq_hz - b.freq_hz).map(bm => {
+    const f = bm.mode === 'FM' ? (bm.freq_hz / 1e6).toFixed(2) + ' M' : (bm.freq_hz / 1e3).toFixed(1) + ' k';
+    return `<tr class="bm" title="Tune to memory slot #${bm.slot + 1}" onclick="sendCtrl('bookmark_tune',{slot:${bm.slot}})">` +
+      `<td>⭐ ${esc(bm.name)}</td><td class="mono">${f}</td><td>${esc(bm.mode)}</td><td class="mono">${esc(bm.band)}</td>` +
+      `<td class="act"><button onclick="event.stopPropagation();deleteBookmark(${bm.slot})" title="Delete memory">×</button></td></tr>`;
+  }).join('') || `<tr><td colspan="5" class="empty">No saved memories — type a name above and press Save</td></tr>`;
+  const presets = PRESETS.map((p, i) => ({ p, i, hz: parseFloat(p[1]) * (p[2] === 'mhz' ? 1e6 : 1e3) }))
+    .sort((a, b) => a.hz - b.hz)
+    .map(({ p, i }) => {
+      const f = p[2] === 'mhz' ? p[1] + ' M' : p[1] + ' k';
+      return `<tr class="bm" title="Tune to preset ${esc(p[0])}" onclick="tunePreset(${i})">` +
+        `<td>${esc(p[0])}</td><td class="mono">${f}</td><td>${esc(p[3])}</td><td class="mono">${esc(p[0].split(' ')[0])}</td><td></td></tr>`;
+    }).join('');
+  $('bookmarksContainer').innerHTML = saved + `<tr class="grp"><td colspan="5">Presets</td></tr>` + presets;
 }
 
 async function tunePreset(i) {
@@ -1105,7 +1146,7 @@ $('wfPalette').addEventListener('change', e => {
 });
 
 function drawWaterfall(buf) {
-  if (hrW && buf === hrBuf) return drawHiRes();
+  if (hrW) return drawHiRes();   // full-resolution rows own the canvas; 120-column data would shrink it
   const lut = LUT[wfPal] || LUT[0], px = wfImg.data;
   for (let i = 0, j = 0; i < WF_ROWS * 120; i++, j += 4) {
     const k = buf[i] * 3;
@@ -1115,9 +1156,10 @@ function drawWaterfall(buf) {
 }
 
 async function fetchWaterfall() {
+  if (hrW) return;   // the polling fallback only carries 120-column rows
   try {
     const buf = new Uint8Array(await req('/api/waterfall', {}, 'buf', 3000));
-    if (buf.length < WF_RADIO_ROWS * 120) return;
+    if (buf.length < WF_RADIO_ROWS * 120 || hrW) return;
     wfBuf.set(buf.subarray(0, WF_RADIO_ROWS * 120), 0);   // polling fallback: radio keeps the newest 36 rows
     wfLast = wfBuf;
     drawWaterfall(wfBuf);
@@ -1700,6 +1742,59 @@ document.addEventListener('click', e => {
     if (!d.contains(e.target) || e.target.closest('.menu-pop button')) d.open = false;
   });
 });
+
+// ---- Options: radio features (/api/options, saved in NVS) and page sections (localStorage) ----
+let optState = null, optTimer = 0;
+function renderOpts(o) {
+  optState = o;
+  for (const [id, k] of [['optLog', 'log'], ['optWebwf', 'webwf'], ['optHires', 'hires']])
+    if (document.activeElement !== $(id)) $(id).checked = !!o[k];
+  $('optHires').disabled = !o.webwf;
+  T('optHeap', `heap ${(o.heap / 1024).toFixed(1)} KB · largest ${(o.largest / 1024).toFixed(1)} · low ${(o.heap_min / 1024).toFixed(1)}`);
+  C('optHeap', 'badge ' + (o.largest < 4096 ? 'err' : o.largest < 8192 ? 'warn' : 'ok'));
+  $('logCard').classList.toggle('off', !o.log);
+  $('wfCard').classList.toggle('off', !o.webwf);
+  if (!o.hires || !o.webwf) wfLowRes();
+}
+async function optFetch(body) {
+  try {
+    renderOpts(await req('/api/options', body ? { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body } : {}));
+  } catch (e) {}
+}
+function optSet(key, on) {
+  optFetch(`key=${key}&on=${on ? 1 : 0}`);
+  setTimeout(optFetch, 700);   // the radio applies it from its loop
+}
+// Back to the 120-column rows when the radio stops sending full-resolution ones
+function wfLowRes() {
+  if (!hrW) return;
+  hrW = 0; hrBuf = null; hrImg = null;
+  hrBlk.fill(255);
+  wfCanvas.width = 120;
+  wfLast = wfBuf;
+  wfOvCtx.clearRect(0, 0, wfOv.width, wfOv.height);
+  if (wfOn && wfVisible) drawWaterfall(wfBuf);
+}
+$('optCard').addEventListener('toggle', () => {
+  clearInterval(optTimer);
+  if ($('optCard').open) { optFetch(); optTimer = setInterval(() => { if (!document.hidden) optFetch(); }, 5000); }
+});
+
+const PAGE_KEY = 'pagePrefs', PAGE_CARDS = { map: 'mapCard', pskr: 'heardCard', tx: 'txCard' };
+let pagePrefs = { map: true, pskr: true, tx: true };
+try { Object.assign(pagePrefs, JSON.parse(localStorage.getItem(PAGE_KEY) || '{}')); } catch (e) {}
+function applyPagePrefs() {
+  for (const k in PAGE_CARDS) $(PAGE_CARDS[k]).classList.toggle('off', !pagePrefs[k]);
+  $('pgMap').checked = pagePrefs.map; $('pgPskr').checked = pagePrefs.pskr; $('pgTx').checked = pagePrefs.tx;
+}
+function pageSet(k, on) {
+  pagePrefs[k] = on;
+  try { localStorage.setItem(PAGE_KEY, JSON.stringify(pagePrefs)); } catch (e) {}
+  applyPagePrefs();
+  if (k === 'map' && on && ft8Visible) setTimeout(showMap, 100);
+}
+applyPagePrefs();
+optFetch();
 
 let pollTimer = 0, polling = false, pollAgain = false, tick = 0;
 function kick(ms = 0) {

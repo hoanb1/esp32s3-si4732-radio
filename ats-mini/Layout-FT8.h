@@ -106,6 +106,8 @@ const uint8_t *ft8GetHiResRow(uint32_t rowNo);
 const uint8_t *ft8GetHiResMeta(uint32_t rowNo);   // [block index in FT8 slot or 255, slot of the hour 0..239]
 void ft8AddLog(const char *fmt, ...);
 String ft8GetLogsJson();
+void ft8SetHiResEnabled(bool on);   // hi-res web waterfall rows (1.8 KB of heap while on)
+bool ft8HiResEnabled();
 size_t ft8FillWavChunk(uint8_t *buf, size_t maxLen, size_t index); // WAV audio stream from live ADC ring buffer
 uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count);  // start sample number and length of the next /api/audio chunk
 size_t ft8WebAudioCopy(uint8_t *dst, uint32_t seq, size_t n);  // copy mu-law samples seq..seq+n-1
