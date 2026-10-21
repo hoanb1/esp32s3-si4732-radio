@@ -3,8 +3,8 @@
 #include "EIBI.h"
 #include "Button.h"
 
-#include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClient.h>
 #include <LittleFS.h>
 #include <FS.h>
 
@@ -298,10 +298,84 @@ void eibiReleaseFsIfUnused()
   if(!LittleFS.exists(EIBI_PATH)) LittleFS.end();
 }
 
+// Plain-HTTP GET for the EiBi download. HTTPClient would also link mktime and strptime (about 3 KB
+// of IRAM, which is short on the original ESP32). This reads the status line, Content-Length and
+// chunked bodies, and nothing else.
+class EibiHttp {
+public:
+  bool get(const char *url)
+  {
+    if(strncmp(url, "http://", 7) != 0) return(false);
+    String host = url + 7;
+    String path = "/";
+    int slash = host.indexOf('/');
+    if(slash >= 0) { path = host.substring(slash); host = host.substring(0, slash); }
+
+    if(!client.connect(host.c_str(), 80)) return(false);
+    client.setTimeout(5);   // seconds
+    client.printf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path.c_str(), host.c_str());
+
+    if(readLine().indexOf(" 200") < 0) return(false);
+    for(;;)
+    {
+      String line = readLine();
+      if(line.length() == 0) break;   // blank line ends the headers
+      line.toLowerCase();
+      if(line.startsWith("content-length:")) len = line.substring(15).toInt();
+      else if(line.startsWith("transfer-encoding:") && line.indexOf("chunked") >= 0) chunked = true;
+    }
+    return(true);
+  }
+
+  int contentLength() const { return(len); }   // -1 when the length is not known
+
+  bool connected() { return(!done && (client.connected() || client.available() > 0)); }
+  int available() { return(done ? 0 : client.available()); }
+
+  // Next body byte, or -1 at the end of the body
+  int read()
+  {
+    if(done) return(-1);
+    if(!chunked)
+    {
+      int c = client.read();
+      if(c >= 0 && len >= 0 && ++got >= len) done = true;
+      return(c);
+    }
+    // Chunked: "<hex size>\r\n<data>\r\n", a zero size ends the body
+    if(chunkLeft == 0)
+    {
+      String sz = readLine();
+      if(sz.length() == 0) sz = readLine();   // the CRLF that follows the previous chunk's data
+      long size = strtol(sz.c_str(), NULL, 16);
+      if(size <= 0) { done = true; return(-1); }
+      chunkLeft = size;
+    }
+    int c = client.read();
+    if(c >= 0) chunkLeft--;
+    return(c);
+  }
+
+  void end() { client.stop(); }
+
+private:
+  WiFiClient client;
+  bool chunked = false, done = false;
+  int len = -1, got = 0;
+  long chunkLeft = 0;
+
+  String readLine()
+  {
+    String s = client.readStringUntil('\n');
+    s.trim();
+    return(s);
+  }
+};
+
 bool eibiLoadSchedule()
 {
   static const char *eibiMessage = "Loading EiBi Schedule";
-  HTTPClient http;
+  EibiHttp http;
 
   if(!LittleFS.begin(false, "/littlefs", 2, "littlefs")) return(false);
 
@@ -311,8 +385,7 @@ bool eibiLoadSchedule()
   drawScreen(eibiMessage, "Connecting...");
 
   // Open HTTP connection to EiBi site
-  http.begin(EIBI_URL);
-  if(http.GET() != HTTP_CODE_OK)
+  if(!http.get(EIBI_URL))
   {
     drawScreen(eibiMessage, "Failed connecting to EiBi!");
     http.end();
@@ -329,8 +402,7 @@ bool eibiLoadSchedule()
   }
 
   // Start loading data
-  WiFiClient *stream = http.getStreamPtr();
-  int totalLen = http.getSize();
+  int totalLen = http.contentLength();
   int byteCnt, lineCnt, charCnt;
   char charBuf[200];
 
@@ -349,10 +421,12 @@ bool eibiLoadSchedule()
       return(false);
     }
 
-    if(!stream->available()) delay(1);
+    if(!http.available()) delay(1);
     else
     {
-      char c = stream->read();
+      int ci = http.read();
+      if(ci < 0) break;
+      char c = (char)ci;
       byteCnt++;
 
       if(c!='\n' && charCnt<sizeof(charBuf)-1) charBuf[charCnt++] = c;
