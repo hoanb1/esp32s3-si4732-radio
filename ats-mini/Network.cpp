@@ -19,6 +19,7 @@
 #include <NTPClient.h>
 #include <ESPmDNS.h>
 #include <esp_sntp.h>
+#include <esp_system.h>
 #include <sys/time.h>
 
 #define CONNECT_TIME    1500  // Delay before connecting WiFi after request
@@ -59,8 +60,47 @@ static int lastScannedCount = 0;
 String loginUsername = "";
 String loginPassword = "";
 
+//
+// Load shedding. With ~32 KB of byte-addressable heap after boot, a few browsers pulling the
+// page, /map.svg and /ws at once used to drain it to ~1.5 KB; the next `new` in the AsyncTCP
+// task then aborted, or lwIP/WiFi starved and the radio dropped off the network.
+// New connections are reset at accept (no request object, no TIME_WAIT) while the heap is low.
+//
+#define NET_ACCEPT_MIN_FREE    12000   // free 8-bit heap needed to take a new connection
+#define NET_ACCEPT_MIN_BLOCK   4000    // and largest free block
+static volatile uint32_t netRefused = 0, netBusy = 0;   // since the last [NET] line
+static volatile int flashRespActive = 0;                // FlashResponse (page, map) sends running
+
+static bool netHeapLow(size_t freeMin, size_t blockMin)
+{
+  return heap_caps_get_free_size(MALLOC_CAP_8BIT) < freeMin ||
+         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < blockMin;
+}
+
+class GuardedWebServer : public AsyncWebServer
+{
+  public:
+    explicit GuardedWebServer(uint16_t port) : AsyncWebServer(port)
+    {
+      // Same as the library's accept callback, with the heap check in front
+      _server.onClient([] (void *s, AsyncClient *c) {
+        if (!c) return;
+        c->setRxTimeout(3);
+        if (netHeapLow(NET_ACCEPT_MIN_FREE, NET_ACCEPT_MIN_BLOCK) ||
+            !new (std::nothrow) AsyncWebServerRequest((AsyncWebServer *)s, c)) {
+          netRefused++;
+          // Reset, not close: no FIN/TIME_WAIT state left behind. The abort queues an error
+          // event for this client, so it is deleted from that event, not here.
+          c->onDisconnect([] (void *, AsyncClient *c) { delete c; });
+          c->abort();
+          return;
+        }
+      }, this);
+    }
+};
+
 // AsyncWebServer object on port 80
-AsyncWebServer server(80);
+GuardedWebServer server(80);
 
 //
 // /ws: one WebSocket per open page carries everything the page watches, so it does not
@@ -216,6 +256,8 @@ void netRequestConnect()
 //
 #define GW_PING_INTERVAL_MS 20000
 #define GW_DEAD_MS          65000
+#define GW_DEAD_RESTARTS    3      // dead periods in a row before restarting
+static void netRestart(const char *why);
 static esp_ping_handle_t gwPing = NULL;
 static uint32_t gwPingTarget = 0;
 static volatile uint32_t gwLastReplyMs = 0;
@@ -246,11 +288,56 @@ static void gatewayWatchdog()
     return;
   }
 
+  static uint8_t gwDeadCount = 0;
+  if (millis() - gwLastReplyMs < GW_PING_INTERVAL_MS * 2) gwDeadCount = 0;
   if (millis() - gwLastReplyMs > GW_DEAD_MS) {
     Serial.printf("[WiFi] Gateway %s silent for %lu s while 'connected': reconnecting\r\n",
                   WiFi.gatewayIP().toString().c_str(), (unsigned long)((millis() - gwLastReplyMs) / 1000));
     gwLastReplyMs = millis();
+    // Reconnecting did not bring it back (seen once with the heap drained): start over
+    if (++gwDeadCount >= GW_DEAD_RESTARTS) netRestart("gateway unreachable after 3 reconnects");
     WiFi.disconnect(false, false);   // keep the config; the watchdog below reconnects
+  }
+}
+
+//
+// Last resort: restart, keeping the reason across the reset for the boot log
+//
+#define NET_WHY_MAGIC 0x4E455457
+RTC_NOINIT_ATTR static uint32_t netWhyMagic;
+RTC_NOINIT_ATTR static char netWhy[64];
+
+static void netRestart(const char *why)
+{
+  Serial.printf("[NET] Restarting: %s (8-bit heap %u, largest %u)\r\n", why,
+                heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  snprintf(netWhy, sizeof(netWhy), "%s", why);
+  netWhyMagic = NET_WHY_MAGIC;
+  Serial.flush();
+  delay(100);
+  esp_restart();
+}
+
+//
+// Heap watchdog: the load shedding above should keep the heap off the floor; if something
+// still pins it there, drop the web clients, then restart.
+//
+#define HEAP_WD_LOW         4000   // free 8-bit heap counted as "near zero"
+#define HEAP_WD_CLOSE_S     15     // seconds that low before closing every web connection
+#define HEAP_WD_RESTART_S   60     // and before restarting
+static void heapWatchdog()
+{
+  static uint32_t lastMs = 0;
+  static uint16_t lowSecs = 0;
+  if (millis() - lastMs < 1000) return;
+  lastMs = millis();
+  if (!netHeapLow(HEAP_WD_LOW, 1024)) { lowSecs = 0; return; }
+  if (++lowSecs == HEAP_WD_CLOSE_S) {
+    Serial.printf("[NET] Heap near zero for %u s (%u free): closing web clients\r\n", lowSecs,
+                  heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    ws.closeAll(1013, "radio low on memory");
+  } else if (lowSecs >= HEAP_WD_RESTART_S) {
+    netRestart("heap near zero for 60 s");
   }
 }
 
@@ -276,6 +363,7 @@ void netTickTime()
 
   // Auto-reconnect watchdog if STA drops connection, with automatic fallback to Open Hotspot AP
   gatewayWatchdog();
+  heapWatchdog();
   static uint32_t lastWifiCheckMs = 0;
   static uint8_t disconnectTicks = 0;
   if (millis() - lastWifiCheckMs >= 6000) {
@@ -283,9 +371,11 @@ void netTickTime()
     static uint8_t netLogTicks = 0;
     if (++netLogTicks >= 10) {   // once a minute, for the web log card
       netLogTicks = 0;
-      Serial.printf("[NET] RSSI %d dBm, 8-bit heap %u (min %u, largest %u), web clients %u\r\n", (int)WiFi.RSSI(),
-                    heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)ws.count());
+      Serial.printf("[NET] RSSI %d dBm, 8-bit heap %u (min %u, largest %u), web clients %u, refused %lu, busy %lu\r\n",
+                    (int)WiFi.RSSI(), heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                    heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                    (unsigned)ws.count(), (unsigned long)netRefused, (unsigned long)netBusy);
+      netRefused = netBusy = 0;
     }
     if (wifiModeIdx > NET_AP_ONLY) {
       if (WiFi.status() != WL_CONNECTED) {
@@ -1003,8 +1093,11 @@ static void processControlQueue()
 // failed tcp_write (ERR_MEM under low heap) and silently drops a whole 2920
 // byte chunk, which corrupts the gzipped page and larger API payloads.
 // A stalled send is retried from the next ACK or the ~500 ms client poll.
+// The body is queued by reference (it lives in flash for good), so lwIP keeps no heap copy of
+// the unacknowledged bytes; only the headers are copied.
 //
 #define FLASH_RESP_MAX_IN_FLIGHT 2920
+#define FLASH_RESP_MAX_ACTIVE    2      // more at once gets a 503: each holds a request and a TCP send window
 
 class FlashResponse : public AsyncWebServerResponse
 {
@@ -1015,7 +1108,9 @@ class FlashResponse : public AsyncWebServerResponse
       _contentType = type;
       _contentLength = len;
       addHeader("Connection", "close", false);
+      flashRespActive++;
     }
+    ~FlashResponse() { flashRespActive--; }
 
     bool _sourceValid() const override { return true; }
 
@@ -1053,7 +1148,7 @@ class FlashResponse : public AsyncWebServerResponse
         size_t inFlight = _writtenLength - _ackedLength;
         if (inFlight >= FLASH_RESP_MAX_IN_FLIGHT) break;
         if (left > FLASH_RESP_MAX_IN_FLIGHT - inFlight) left = FLASH_RESP_MAX_IN_FLIGHT - inFlight;
-        size_t n = client->add(src, left);
+        size_t n = client->add(src, left, _state == RESPONSE_HEADERS ? ASYNC_WRITE_FLAG_COPY : 0);
         if (!n) break;
         if (_state == RESPONSE_HEADERS) _headSent += n; else _sentLength += n;
         _writtenLength += n;
@@ -1071,6 +1166,29 @@ class FlashResponse : public AsyncWebServerResponse
     size_t _headSent = 0;
 };
 
+
+static void sendFlashGz(AsyncWebServerRequest *request, const char *type, const uint8_t *data, size_t len,
+                        const char *etag)
+{
+  AsyncWebServerResponse *response;
+  if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == etag) {
+    response = request->beginResponse(304);
+  } else if (flashRespActive >= FLASH_RESP_MAX_ACTIVE) {
+    // Busy: a page reloads itself, a fetch() retries
+    netBusy++;
+    response = request->beginResponse(503, "text/html",
+      "<meta http-equiv=refresh content=2>Radio busy, retrying...");
+    response->addHeader("Retry-After", "2");
+    request->send(response);
+    return;
+  } else {
+    response = new FlashResponse(200, type, data, len);
+    response->addHeader("Content-Encoding", "gzip");
+  }
+  response->addHeader("ETag", etag);
+  response->addHeader("Cache-Control", "no-cache");
+  request->send(response);
+}
 
 //
 // Radio status JSON for /api/status and the /ws push (callers own the buffer: two tasks build it)
@@ -1324,36 +1442,13 @@ static void webInit()
     next();
   });
 
-  // Main Web UI page - pre-gzipped in flash (zero heap copy), revalidated by ETag
+  // Main Web UI page and the world map for the station map (Natural Earth 1:110m SVG):
+  // pre-gzipped in flash (zero heap copy), revalidated by ETag
   server.on("/", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == WEBUI_ETAG) {
-      AsyncWebServerResponse *response = request->beginResponse(304);
-      response->addHeader("ETag", WEBUI_ETAG);
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-      return;
-    }
-    AsyncWebServerResponse *response = new FlashResponse(200, "text/html; charset=utf-8", WEBUI_HTML_GZ, WEBUI_HTML_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("ETag", WEBUI_ETAG);
-    response->addHeader("Cache-Control", "no-cache");
-    request->send(response);
+    sendFlashGz(request, "text/html; charset=utf-8", WEBUI_HTML_GZ, WEBUI_HTML_GZ_LEN, WEBUI_ETAG);
   });
-
-  // World map for the web UI station map (Natural Earth 1:110m SVG, gzipped in flash), revalidated by ETag
   server.on("/map.svg", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == WORLDMAP_ETAG) {
-      AsyncWebServerResponse *response = request->beginResponse(304);
-      response->addHeader("ETag", WORLDMAP_ETAG);
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-      return;
-    }
-    AsyncWebServerResponse *response = new FlashResponse(200, "image/svg+xml", WORLDMAP_SVG_GZ, WORLDMAP_SVG_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("ETag", WORLDMAP_ETAG);
-    response->addHeader("Cache-Control", "no-cache");
-    request->send(response);
+    sendFlashGz(request, "image/svg+xml", WORLDMAP_SVG_GZ, WORLDMAP_SVG_GZ_LEN, WORLDMAP_ETAG);
   });
 
   // Legacy status / memory / config pages
@@ -1615,6 +1710,11 @@ static void webInit()
   ws.onEvent(wsOnEvent);
   server.addHandler(&ws);
   server.begin();
+  if (netWhyMagic == NET_WHY_MAGIC) {
+    netWhy[sizeof(netWhy) - 1] = 0;
+    Serial.printf("[NET] Last restart by the network watchdog: %s\r\n", netWhy);
+    netWhyMagic = 0;
+  }
   Serial.printf("[Web] HTTP server started on port 80 (free_heap=%u, free_8bit=%u, max_alloc=%u)\r\n",
                 (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
