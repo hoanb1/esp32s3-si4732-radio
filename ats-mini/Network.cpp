@@ -61,13 +61,15 @@ String loginUsername = "";
 String loginPassword = "";
 
 //
-// Load shedding. With ~32 KB of byte-addressable heap after boot, a few browsers pulling the
-// page, /map.svg and /ws at once used to drain it to ~1.5 KB; the next `new` in the AsyncTCP
-// task then aborted, or lwIP/WiFi starved and the radio dropped off the network.
-// New connections are reset at accept (no request object, no TIME_WAIT) while the heap is low.
+// Load shedding. Only ~19 KB of byte-addressable heap is left after boot (~12 KB with one page
+// open, largest block ~5 KB), and a few browsers pulling the page, /map.svg and /ws at once
+// drain it to a few hundred bytes; the next `new` in the AsyncTCP task then aborts, or
+// lwIP/WiFi starves and the radio drops off the network.
+// Moderate lows get a 503 the page retries (HTTP_MIN_BLOCK middleware); only below the floor
+// here are new connections reset at accept (no request object, no TIME_WAIT).
 //
-#define NET_ACCEPT_MIN_FREE    12000   // free 8-bit heap needed to take a new connection
-#define NET_ACCEPT_MIN_BLOCK   4000    // and largest free block
+#define NET_ACCEPT_MIN_FREE    6000    // free 8-bit heap needed to take a new connection
+#define NET_ACCEPT_MIN_BLOCK   2048    // and largest free block (below HTTP_MIN_BLOCK)
 static volatile uint32_t netRefused = 0, netBusy = 0;   // since the last [NET] line
 static volatile int flashRespActive = 0;                // FlashResponse (page, map) sends running
 
@@ -322,7 +324,8 @@ static void netRestart(const char *why)
 // Heap watchdog: the load shedding above should keep the heap off the floor; if something
 // still pins it there, drop the web clients, then restart.
 //
-#define HEAP_WD_LOW         4000   // free 8-bit heap counted as "near zero"
+#define HEAP_WD_LOW         2500   // free 8-bit heap counted as "near zero"
+#define HEAP_WD_LOW_BLOCK   1024   // or largest free block
 #define HEAP_WD_CLOSE_S     15     // seconds that low before closing every web connection
 #define HEAP_WD_RESTART_S   60     // and before restarting
 static void heapWatchdog()
@@ -331,7 +334,7 @@ static void heapWatchdog()
   static uint16_t lowSecs = 0;
   if (millis() - lastMs < 1000) return;
   lastMs = millis();
-  if (!netHeapLow(HEAP_WD_LOW, 1024)) { lowSecs = 0; return; }
+  if (!netHeapLow(HEAP_WD_LOW, HEAP_WD_LOW_BLOCK)) { lowSecs = 0; return; }
   if (++lowSecs == HEAP_WD_CLOSE_S) {
     Serial.printf("[NET] Heap near zero for %u s (%u free): closing web clients\r\n", lowSecs,
                   heap_caps_get_free_size(MALLOC_CAP_8BIT));
