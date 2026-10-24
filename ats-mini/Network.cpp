@@ -89,7 +89,7 @@ class GuardedWebServer : public AsyncWebServer
         if (!c) return;
         c->setRxTimeout(3);
         if (netHeapLow(NET_ACCEPT_MIN_FREE, NET_ACCEPT_MIN_BLOCK) ||
-            !new (std::nothrow) AsyncWebServerRequest((AsyncWebServer *)s, c)) {
+            !AsyncWebServerRequest::create((AsyncWebServer *)s, c)) {   // the request owns itself
           netRefused++;
           // Reset, not close: no FIN/TIME_WAIT state left behind. The abort queues an error
           // event for this client, so it is deleted from that event, not here.
