@@ -1170,6 +1170,16 @@ class FlashResponse : public AsyncWebServerResponse
 };
 
 
+// 503 that a page reloads by itself (meta refresh) and a fetch() retries (Retry-After)
+static void sendBusy(AsyncWebServerRequest *request)
+{
+  netBusy++;
+  AsyncWebServerResponse *response = request->beginResponse(503, "text/html",
+    "<meta http-equiv=refresh content=2>Radio busy, retrying...");
+  response->addHeader("Retry-After", "2");
+  request->send(response);
+}
+
 static void sendFlashGz(AsyncWebServerRequest *request, const char *type, const uint8_t *data, size_t len,
                         const char *etag)
 {
@@ -1178,11 +1188,7 @@ static void sendFlashGz(AsyncWebServerRequest *request, const char *type, const 
     response = request->beginResponse(304);
   } else if (flashRespActive >= FLASH_RESP_MAX_ACTIVE) {
     // Busy: a page reloads itself, a fetch() retries
-    netBusy++;
-    response = request->beginResponse(503, "text/html",
-      "<meta http-equiv=refresh content=2>Radio busy, retrying...");
-    response->addHeader("Retry-After", "2");
-    request->send(response);
+    sendBusy(request);
     return;
   } else {
     response = new FlashResponse(200, type, data, len);
@@ -1439,7 +1445,7 @@ static void webInit()
   // Low on heap: refuse at once (the page retries) rather than crash half-way through a response
   server.addMiddleware([] (AsyncWebServerRequest *request, ArMiddlewareNext next) {
     if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTP_MIN_BLOCK) {
-      request->send(503);
+      sendBusy(request);
       return;
     }
     next();
