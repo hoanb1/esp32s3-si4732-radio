@@ -920,14 +920,18 @@ bool ft8TickWaterfall() {
     // A block from a new slot starts a new FT8 collection; block 0 begins exactly at the slot start
     uint32_t blkSlot = adcBlockSlot[rBuf];
     if (blkSlot != monSlotId) {
-      // Reload at most once per 4 slots: a reload resets the SI4732 volume, so reloading every slot kept the ADC level low
-      if (!sleepOn() && isSSB() && (lastAdcMean < 100.0f || rx.getPatchId() == 0) && blkSlot - lastBiasRecoverSlot >= 4) {
+      // Reload at most once per 4 slots: a reload resets the SI4732 volume, so reloading every slot kept the ADC level low.
+      // GPIO34 normally sits only ~30..90 counts above the ADC floor, so only a dead input (mean ~0) counts as lost bias;
+      // the ~1.7 s I2C patch load stalls this loop and leaves a gap in the slot's blocks.
+      bool reloaded = false;
+      if (!sleepOn() && isSSB() && (lastAdcMean < 5.0f || rx.getPatchId() == 0) && blkSlot - lastBiasRecoverSlot >= 4) {
         Serial.printf("[FT8] Recovering SI4732 SSB patch / GPIO34 bias (mean=%.0f, patch=0x%04X)...\r\n",
                       lastAdcMean, rx.getPatchId());
         lastBiasRecoverSlot = blkSlot;
         unloadSSB();
         selectBand(bandIdx, false);
         ft8ApplyAudio();   // restore the fixed FT8 ADC volume that the reload reset
+        reloaded = true;
       }
       // Auto level: one step per slot toward the window [FT8_ADC_VPP_LO, FT8_ADC_VPP_HI] (mean block Vpp of the slot just ended)
       if (ft8AdcAuto && digActive && ft8VppCnt > 0) {
@@ -940,7 +944,7 @@ bool ft8TickWaterfall() {
       ft8VppSum = 0;
       ft8VppCnt = 0;
       monSlotId = blkSlot;
-      monSlotUsable = (adcBlockIndex[rBuf] == 0);
+      monSlotUsable = (adcBlockIndex[rBuf] == 0) && !reloaded;   // blocks were overwritten during the reload
       adcDroppedBlocks = 0;
       monitor_reset(&liveMon);
       slotDecoded = digActive && !monSlotUsable;   // a slot whose start was missed cannot be time-aligned
