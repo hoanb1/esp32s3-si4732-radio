@@ -219,8 +219,7 @@ bool sleepOn(int x)
     // Silence speaker when display is turned off via long-press sleep
     ft8ApplyAudio();
     ledcWrite(PIN_LCD_BL, 0);
-    spr.fillSprite(TFT_BLACK);
-    spr.pushSprite(0, 0);
+    drawBands([]() { spr.fillSprite(TFT_BLACK); });
     tft.writecommand(ST7789_DISPOFF);
     tft.writecommand(ST7789_SLPIN);
 

@@ -129,6 +129,58 @@ bool drawWiFiStatus(const char *statusLine1, const char *statusLine2, int x, int
 }
 
 //
+// Render the screen through the half-height sprite: render() draws the whole 320x170 screen,
+// the sprite origin shifts so that one band at a time lands in it, and each band is pushed
+//
+static void drawScreenContent(const char *statusLine1, const char *statusLine2);
+int sprBandY = 0;
+static volatile uint8_t shotState = 0;   // 0 idle, 1 band requested, 2 band held for the reader
+static volatile int8_t  shotWant  = 0;
+static volatile uint32_t shotTime = 0;
+
+static void renderBand(int band, const std::function<void()> &render)
+{
+  sprBandY = band * SPR_BAND_H;
+  spr.setOrigin(0, -sprBandY);
+  render();
+  spr.setOrigin(0, 0);
+}
+
+void drawScreenBand(int band)
+{
+  renderBand(band, []() { spr.fillSprite(TH.bg); drawScreenContent(0, 0); });
+}
+
+void drawBands(const std::function<void()> &render)
+{
+  // The web screenshot is reading the sprite: leave it alone
+  if(shotState == 2 && (millis() - shotTime) < 3000) return;
+  shotState = 0;
+
+  for(int band = 0 ; band < 2 ; band++)
+  {
+    renderBand(band, render);
+    spr.pushSprite(0, sprBandY);
+  }
+  sprBandY = 0;
+}
+
+// Screenshot access to the half-height sprite, called from the web task
+bool screenshotPending() { return shotState == 1; }
+
+void screenshotDone() { shotState = 0; }
+
+bool screenshotBand(int band)
+{
+  if(shotState == 2 && shotWant == band) { shotTime = millis(); return true; }
+  if(shotState == 1 && shotWant == band) return false;
+  shotWant = band;
+  shotTime = millis();
+  shotState = 1;
+  return false;
+}
+
+//
 // Draw zoomed menu item
 //
 void drawZoomedMenu(const char *text, bool force)
@@ -149,8 +201,12 @@ void drawMessage(const char *msg)
 {
   if(sleepOn()) return;
 
-  drawZoomedMenu(msg, true);
-  spr.pushSprite(0, 0);
+  // Redraw the current screen with the message on top, as the sprite holds only one band
+  drawBands([msg]() {
+    spr.fillSprite(TH.bg);
+    drawScreenContent(0, 0);
+    drawZoomedMenu(msg, true);
+  });
 }
 
 //
@@ -445,13 +501,8 @@ void drawScanGraphs(uint32_t freq)
 //
 // Draw screen according to given command
 //
-void drawScreen(const char *statusLine1, const char *statusLine2)
+static void drawScreenContent(const char *statusLine1, const char *statusLine2)
 {
-  if(sleepOn()) return;
-
-  // Clear screen buffer
-  spr.fillSprite(TH.bg);
-
   // About screen is a special case
   if(currentCmd==CMD_ABOUT)
   {
@@ -466,6 +517,24 @@ void drawScreen(const char *statusLine1, const char *statusLine2)
     drawLayoutSmeter(statusLine1, statusLine2);
   else
     drawLayoutDefault(statusLine1, statusLine2);
+}
 
-  spr.pushSprite(0, 0);
+void drawScreen(const char *statusLine1, const char *statusLine2)
+{
+  // Web screenshot asked for one band: render it and hold it until the reader is done
+  // (also while the display sleeps, or the reader would wait forever)
+  if(shotState == 1)
+  {
+    renderBand(shotWant, []() { spr.fillSprite(TH.bg); drawScreenContent(0, 0); });
+    shotTime = millis();
+    shotState = 2;
+    return;
+  }
+
+  if(sleepOn()) return;
+
+  drawBands([statusLine1, statusLine2]() {
+    spr.fillSprite(TH.bg);
+    drawScreenContent(statusLine1, statusLine2);
+  });
 }

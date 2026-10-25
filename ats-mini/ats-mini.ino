@@ -151,12 +151,12 @@ void setup()
   tft.setRotation(3);
 
   tft.fillScreen(TH.bg);
-  // 8-bit sprite (54 KB): this board has no PSRAM, and a 16-bit sprite (109 KB) leaves too little
-  // DRAM for the 200..2900 Hz FT8 waterfall plus WiFi
+  // 8-bit sprite of half the screen (27 KB), rendered twice per frame (see drawBands()): this board
+  // has no PSRAM, and a full 8-bit sprite (54 KB) leaves too little DRAM for WiFi and the web UI
   spr.setColorDepth(8);
-  void *sprPtr = spr.createSprite(320, 170);
-  Serial.printf("[BOOT] TFT Sprite 8-bit (320x170): %p, free_heap=%u (8bit=%u, max_alloc=%u)\r\n",
-                sprPtr, (unsigned int)ESP.getFreeHeap(),
+  void *sprPtr = spr.createSprite(320, SPR_BAND_H);
+  Serial.printf("[BOOT] TFT Sprite 8-bit (320x%d band): %p, free_heap=%u (8bit=%u, max_alloc=%u)\r\n",
+                SPR_BAND_H, sprPtr, (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                 (unsigned int)ESP.getMaxAllocHeap());
   spr.setTextDatum(MC_DATUM);
@@ -1087,7 +1087,7 @@ void loop()
   }
 
   // Redraw screen if necessary
-  if(needRedraw) drawScreen();
+  if(needRedraw || screenshotPending()) drawScreen();
 
   // Add a small default delay in the main loop
   delay(5);

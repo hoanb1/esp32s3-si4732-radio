@@ -55,7 +55,6 @@ void drawAboutHelp(uint8_t arrow)
     spr.drawString("To see this screen again,", 130, 70 + 16 * 4, 2);
     spr.drawString("go to Menu->Settings->About.", 130, 70 + 16 * 5, 2);
   }
-  spr.pushSprite(0, 0);
 }
 
 //
@@ -123,7 +122,6 @@ static void drawAboutSystem(uint8_t arrow)
     uint16_t rgb = (i&1? 0x001F:0) | (i&2? 0x07E0:0) | (i&4? 0xF800:0);
     spr.fillRect(i*40, 160, 40, 20, rgb);
   }
-  spr.pushSprite(0, 0);
 }
 
 //
@@ -137,7 +135,6 @@ static void drawAboutAuthors(uint8_t arrow)
   spr.drawString(AUTHORS_LINE2, 2, 70 + 16, 2);
   spr.drawString(AUTHORS_LINE3, 2, 70 + 16 * 2, 2);
   spr.drawString(AUTHORS_LINE4, 2, 70 + 16 * 3, 2);
-  spr.pushSprite(0, 0);
 }
 
 //

@@ -1694,7 +1694,7 @@ static void webInit()
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
-  // /api/screenshot.bmp - Stream 320x170 16-bit RGB565 BMP from the (8-bit) sprite
+  // /api/screenshot.bmp - Stream 320x170 16-bit RGB565 BMP from the (half-height 8-bit) sprite, one band at a time
   server.on("/api/screenshot.bmp", HTTP_GET, [] (AsyncWebServerRequest *request) {
     const uint32_t width = 320;
     const uint32_t height = 170;
@@ -1704,7 +1704,7 @@ static void webInit()
 
     AsyncWebServerResponse *response = request->beginResponse("image/bmp", fileSize,
       [width, height, hdrSize, imgBytes, fileSize](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-        if (index >= fileSize) return 0;
+        if (index >= fileSize) { screenshotDone(); return 0; }
 
         size_t written = 0;
         if (index == 0) {
@@ -1737,9 +1737,14 @@ static void webInit()
           int rowFromBottom = pixOffset / width;
           int y = (height - 1) - rowFromBottom;
           if (y < 0) break;
+          // The sprite holds one half of the screen at a time: the LCD loop renders the band we need
+          if (!screenshotBand(y / SPR_BAND_H)) {
+            if (written) break;
+            return RESPONSE_TRY_AGAIN;
+          }
           uint16_t *dst = (uint16_t *)(buffer + written);
           for (uint32_t x = 0; x < width; x++) {
-            dst[x] = spr.readPixel(x, y);
+            dst[x] = spr.readPixel(x, y % SPR_BAND_H);
           }
           written += width * 2;
           index += width * 2;

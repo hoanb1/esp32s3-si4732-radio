@@ -1545,8 +1545,10 @@ static void ft8DrawWaterfall(int x0, int w, int y0, int rows, int rowH) {
       if (xb <= xa) xb = xa + 1;
       if (fb) {
         uint8_t px = wfLut[v >> 4];
-        for (int y = y0 + r * rowH; y < y0 + (r + 1) * rowH; y++)
-          memset(fb + y * 320 + xa, px, xb - xa);
+        for (int y = y0 + r * rowH; y < y0 + (r + 1) * rowH; y++) {
+          int yb = y - sprBandY;   // Row inside the half-height sprite
+          if (yb >= 0 && yb < SPR_BAND_H) memset(fb + yb * 320 + xa, px, xb - xa);
+        }
       } else {
         spr.fillRect(xa, y0 + r * rowH, xb - xa, rowH, wfColor(v));
       }

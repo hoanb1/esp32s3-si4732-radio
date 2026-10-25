@@ -1,6 +1,11 @@
 #ifndef DRAW_H
 #define DRAW_H
 
+#include <functional>
+
+// The 320x170 screen is drawn through a 320x85 sprite, twice per frame (top and bottom band)
+#define SPR_BAND_H      85
+
 // Display position control
 #define MENU_OFFSET_X    0    // Menu horizontal offset
 #define MENU_OFFSET_Y   18    // Menu vertical offset
@@ -37,6 +42,12 @@ uint16_t shadeColor(uint16_t color, int8_t steps);
 uint16_t panelColor();
 int drawChip(const char *text, int x, int y, uint16_t fg, uint16_t bg, bool filled);
 
+void drawBands(const std::function<void()> &render);
+extern int sprBandY;                 // Screen row of the band being rendered (0 or SPR_BAND_H)
+void drawScreenBand(int band);       // Render one band of the current screen into the sprite, no push
+bool screenshotPending();
+bool screenshotBand(int band);       // True when the sprite holds the given screen band
+void screenshotDone();
 void drawMessage(const char *msg);
 void drawZoomedMenu(const char *text, bool force = false);
 void drawScanGraphs(uint32_t freq);
