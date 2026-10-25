@@ -966,7 +966,12 @@ for (let i = 0; i < 256; i++) {
   ULAW[i] = (u & 0x80 ? -m : m) / 32768;
 }
 let audSeq = 0, audNext = 0, ws = null, wsLastStatus = 0;
-const wsLive = () => ws && ws.readyState === 1 && Date.now() - wsLastStatus < 2500;
+// The radio skips a status frame when its heap is low (it sends a '.' heartbeat instead), so tolerate gaps;
+// while the socket is open never poll the waterfall and poll /api/status only every 5 s: HTTP polling
+// costs the radio far more heap than the frames it replaces and makes things worse
+const wsUp = () => ws && ws.readyState === 1;
+const wsLive = () => wsUp() && Date.now() - wsLastStatus < 8000;
+let wsRetryMs = 2000, lastStatusFetch = 0;
 const wfBuf = new Uint8Array(WF_ROWS * 120);
 const logLines = [];
 let logPaused = false;
@@ -974,10 +979,11 @@ let logPaused = false;
 function wsConnect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { T('wsState', 'live'); if (webAudioOn) ws.send('audio=1'); };
-  ws.onclose = () => { T('wsState', 'reconnecting…'); ws = null; setTimeout(wsConnect, 2000); };
+  ws.onopen = () => { wsRetryMs = 2000; T('wsState', 'live'); if (webAudioOn) ws.send('audio=1'); };
+  ws.onclose = () => { T('wsState', 'reconnecting…'); ws = null; setTimeout(wsConnect, wsRetryMs); wsRetryMs = Math.min(wsRetryMs * 2, 15000); };
   ws.onmessage = ev => {
     if (typeof ev.data === 'string') {
+      if (ev.data === '.') { wsLastStatus = Date.now(); return; }   // heartbeat
       if (ev.data[0] === '{') {
         try { applyStatus(JSON.parse(ev.data)); wsLastStatus = Date.now(); } catch (e) {}
       } else addLogLine(ev.data);
@@ -1696,9 +1702,9 @@ async function poll() {
   if (document.hidden) return;
   polling = true;
   try {
-    if (!wsLive()) await fetchStatus();   // the /ws push replaces status and waterfall polling
+    if (!wsLive() && (!wsUp() || Date.now() - lastStatusFetch >= 5000)) { lastStatusFetch = Date.now(); await fetchStatus(); }   // the /ws push replaces status and waterfall polling
     if (online) {
-      if (!wsLive() && wfVisible && wfOn) await fetchWaterfall();
+      if (!wsUp() && wfVisible && wfOn) await fetchWaterfall();
       if (isDigital() && curStatus.msg_count !== lastMsgCount) {
         lastMsgCount = curStatus.msg_count;
         await fetchTraffic();

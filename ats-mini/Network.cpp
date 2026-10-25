@@ -170,6 +170,8 @@ static bool wsHeapOk(size_t bytes, size_t reserve = WS_HEAP_RESERVE, size_t slac
 // the full reserve.
 #define WS_HEAP_RESERVE_LIVE 7000
 #define WS_SLACK_LIVE        512
+#define WS_HEAP_RESERVE_STATUS 2500   // status frame = heartbeat: nearly always sent
+#define WS_SLACK_STATUS        256
 
 // NTP Client to get UTC time
 WiFiUDP ntpUDP;
@@ -1465,7 +1467,12 @@ static void wsTick()
     lastStatusMs = now;
     static char json[1024];
     int len = buildStatusJson(json, sizeof(json));
-    bool statusOk = wsHeapOk(len, WS_HEAP_RESERVE_LIVE, WS_SLACK_LIVE);
+    // The status frame doubles as the page's heartbeat: a page that misses it falls back to HTTP polling,
+    // which costs far more heap than the frame. So it gets a much lower reserve than the waterfall, and a
+    // one-byte '.' heartbeat goes out when even that does not fit
+    bool statusOk = wsHeapOk(len, WS_HEAP_RESERVE_STATUS, WS_SLACK_STATUS);
+    static std::shared_ptr<std::vector<uint8_t>> beat;
+    if (!statusOk && !beat && wsHeapOk(1, 1500, 128)) beat = std::make_shared<std::vector<uint8_t>>(1, (uint8_t)'.');
     // (without statusOk only the rows/logs below go out)
     std::shared_ptr<std::vector<uint8_t>> status;
     if (statusOk) status = std::make_shared<std::vector<uint8_t>>((uint8_t *)json, (uint8_t *)json + len);
@@ -1487,6 +1494,7 @@ static void wsTick()
       } else stallId[i] = 0;
       if (!c || !c->canSend() || c->queueLen() > 0) continue;   // still sending the last tick: it gets the next one
       if (status) c->text(status);
+      else if (beat) c->text(beat);
       uint32_t behind = wfHead - pages[i].wfSeq;
       if (behind > 36) behind = 36;
       uint32_t rows = behind > WS_WF_ROWS_MAX ? WS_WF_ROWS_MAX : behind;
