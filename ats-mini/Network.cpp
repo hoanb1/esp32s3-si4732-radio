@@ -1706,48 +1706,48 @@ static void webInit()
       [width, height, hdrSize, imgBytes, fileSize](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
         if (index >= fileSize) { screenshotDone(); return 0; }
 
+        uint8_t hdr[66] = {0};
+        hdr[0] = 'B'; hdr[1] = 'M';
+        memcpy(&hdr[2], &fileSize, 4);
+        memcpy(&hdr[10], &hdrSize, 4);
+        uint32_t dibSize = 40;
+        memcpy(&hdr[14], &dibSize, 4);
+        memcpy(&hdr[18], &width, 4);
+        memcpy(&hdr[22], &height, 4);
+        uint16_t planes = 1, bpp = 16;
+        memcpy(&hdr[26], &planes, 2);
+        memcpy(&hdr[28], &bpp, 2);
+        uint32_t comp = 3; // BI_BITFIELDS
+        memcpy(&hdr[30], &comp, 4);
+        memcpy(&hdr[34], &imgBytes, 4);
+        uint32_t rMask = 0xF800, gMask = 0x07E0, bMask = 0x001F;
+        memcpy(&hdr[54], &rMask, 4);
+        memcpy(&hdr[58], &gMask, 4);
+        memcpy(&hdr[62], &bMask, 4);
+
+        // Byte by byte: maxLen follows the TCP window and may be smaller than a row,
+        // and returning 0 would end the response
         size_t written = 0;
-        if (index == 0) {
-          uint8_t hdr[66] = {0};
-          hdr[0] = 'B'; hdr[1] = 'M';
-          memcpy(&hdr[2], &fileSize, 4);
-          memcpy(&hdr[10], &hdrSize, 4);
-          uint32_t dibSize = 40;
-          memcpy(&hdr[14], &dibSize, 4);
-          memcpy(&hdr[18], &width, 4);
-          memcpy(&hdr[22], &height, 4);
-          uint16_t planes = 1, bpp = 16;
-          memcpy(&hdr[26], &planes, 2);
-          memcpy(&hdr[28], &bpp, 2);
-          uint32_t comp = 3; // BI_BITFIELDS
-          memcpy(&hdr[30], &comp, 4);
-          memcpy(&hdr[34], &imgBytes, 4);
-          uint32_t rMask = 0xF800, gMask = 0x07E0, bMask = 0x001F;
-          memcpy(&hdr[54], &rMask, 4);
-          memcpy(&hdr[58], &gMask, 4);
-          memcpy(&hdr[62], &bMask, 4);
-
-          memcpy(buffer, hdr, hdrSize);
-          written += hdrSize;
-          index += hdrSize;
-        }
-
-        while (written + width * 2 <= maxLen && index < fileSize) {
-          uint32_t pixOffset = (index - hdrSize) / 2;
-          int rowFromBottom = pixOffset / width;
-          int y = (height - 1) - rowFromBottom;
-          if (y < 0) break;
+        int band = -1;
+        while (written < maxLen && index < fileSize) {
+          if (index < hdrSize) { buffer[written++] = hdr[index++]; continue; }
+          uint32_t pix = (index - hdrSize) / 2;
+          int y = (height - 1) - pix / width;
+          int x = pix % width;
           // The sprite holds one half of the screen at a time: the LCD loop renders the band we need
-          if (!screenshotBand(y / SPR_BAND_H)) {
-            if (written) break;
-            return RESPONSE_TRY_AGAIN;
+          // (wait for it here: this library closes the connection on RESPONSE_TRY_AGAIN)
+          if (y / SPR_BAND_H != band) {
+            band = y / SPR_BAND_H;
+            bool ready = screenshotBand(band);
+            for (int t = 0; !ready && t < 150; t++) {
+              delay(2);
+              ready = screenshotBand(band);
+            }
+            if (!ready) { screenshotDone(); return written; }
           }
-          uint16_t *dst = (uint16_t *)(buffer + written);
-          for (uint32_t x = 0; x < width; x++) {
-            dst[x] = spr.readPixel(x, y % SPR_BAND_H);
-          }
-          written += width * 2;
-          index += width * 2;
+          uint16_t px = spr.readPixel(x, y % SPR_BAND_H);
+          buffer[written++] = ((index - hdrSize) & 1) ? (px >> 8) : (px & 0xFF);
+          index++;
         }
         return written;
       }
