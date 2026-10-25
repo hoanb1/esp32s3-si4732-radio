@@ -1553,7 +1553,7 @@ async function fetchTx() {
   if (document.hidden) return;
   if (isDigital()) {
     try { await txFetch(); } catch (e) { T('txPlan', 'Could not reach the transmitter status, retrying…'); C('txPlan', 'plan warn'); }
-    txTimer = setTimeout(fetchTx, txState.on || (txState.qso && txState.qso !== 'idle') ? 1000 : 3000);
+    txTimer = setTimeout(fetchTx, txState.on || (txState.qso && txState.qso !== 'idle') ? 2500 : 8000);   // each poll costs the radio a request's worth of heap
   } else if (drawerOpen && !txFormLoaded) {
     try { await txFetch(); } catch (e) {}
   }
@@ -1689,7 +1689,7 @@ setInterval(() => {
   T('heardNext', w > 0 ? `next check in ${Math.floor(w / 60000)}:${String(Math.floor(w / 1000) % 60).padStart(2, '0')}` : heardAutoAt ? `auto check in ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : '');
   $('heardBtn').disabled = w > 0 || heardBusy;
 }, 1000);
-setInterval(() => { if (isDigital() && !document.hidden) { pskrFetch(); renderHeard(); } }, 10000);
+setInterval(() => { if (isDigital() && !document.hidden) { pskrFetch(); renderHeard(); } }, 30000);
 
 // Poll loop: one request at a time, paused while the tab is hidden
 async function poll() {
