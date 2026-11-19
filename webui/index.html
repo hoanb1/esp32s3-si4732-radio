@@ -391,6 +391,8 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="lb" style="flex-basis:auto">Grid</span><input type="text" id="txGrid" maxlength="4" placeholder="AA00" style="width:70px;text-transform:uppercase"></div>
     <div class="fr"><span class="lb">Audio</span><input type="number" id="txAudio" min="200" max="2900" step="10"> Hz
       <span class="lb" style="flex-basis:auto">Crystal</span><input type="number" id="txPpm" step="0.1"> ppm</div>
+    <div class="fr"><span class="lb">TX source</span>
+      <select id="txSrc" class="f1" onchange="renderTx(txState)"><option value="0">Si5351 CLK2 – any band, with PA + relay</option><option value="1">ESP32 GPIO (APLL) – 80 m bench</option></select></div>
     <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
       <select id="txPin" class="f1"><option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option><option value="16">GPIO16 – BCK, backlight wire (bench tests)</option></select></div>
     <div class="fr">
@@ -1529,7 +1531,7 @@ function renderTx(st) {
   if (enabledChanged) renderTrafficTable();   // its Answer buttons follow the TX switch
   if (!txFormLoaded && !txDirty) {
     $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio;
-    $('txPin').value = String(st.pin); $('txPpm').value = st.ppm;
+    $('txPin').value = String(st.pin); $('txSrc').value = String(st.src); $('txPpm').value = st.ppm;
     txFormLoaded = true;
   }
   const busy = st.on || st.qso !== 'idle';
@@ -1545,6 +1547,7 @@ function renderTx(st) {
   let plan, ok = false;
   if (!st.call || !st.grid) plan = 'Enter your callsign and grid in Settings > FT8 transmit station, then Save. Nothing is sent without a callsign.';
   else if (!st.usb) plan = 'Switch the radio to FT8 (USB) to transmit.';
+  else if (st.src === 0 && !st.si_ok) plan = 'Si5351 is not active (External reference off or chip missing). Pick ESP32 GPIO under Settings > TX source, or enable the Si5351.';
   else if (!st.plan && !st.si) plan = `${(st.rf / 1e6).toFixed(4)} MHz is out of reach: exact 6.25 Hz FT8 tones only work around 3.5–5 MHz. Tune to 80 m FT8 (3573 kHz) to transmit.`;
   else {
     ok = true;
@@ -1556,9 +1559,10 @@ function renderTx(st) {
   }
   T('txPlan', plan);
   C('txPlan', ok ? 'plan' : 'plan warn');
-  $('txPinRow').style.display = st.si ? 'none' : '';
-  $('txSiRow').style.display = st.si ? '' : 'none';
-  $('txOutNote').style.display = st.si ? '' : 'none';
+  const siSel = $('txSrc').value === '0';
+  $('txPinRow').style.display = siSel ? 'none' : '';
+  $('txSiRow').style.display = siSel ? '' : 'none';
+  $('txOutNote').style.display = siSel ? '' : 'none';
   const canSend = ok && st.enabled;
   $('txCqBtn').disabled = !canSend || busy;
   $('txSendBtn').disabled = !canSend || !!st.busy;
@@ -1612,12 +1616,12 @@ async function txAction(action, params = {}) {
   } catch (e) {}
   setTimeout(fetchTx, 400);
 }
-['txCall', 'txGrid', 'txAudio', 'txPin', 'txPpm'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
+['txCall', 'txGrid', 'txAudio', 'txPin', 'txPpm', 'txSrc'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
 async function txSave() {
   const call = $('txCall').value.trim().toUpperCase(), grid = $('txGrid').value.trim().toUpperCase();
   if (!/^[A-Z0-9/]{3,10}$/.test(call) || !/\d/.test(call)) { T('txSaveMsg', 'Callsign looks wrong'); return; }
   if (!/^[A-R]{2}\d\d$/.test(grid)) { T('txSaveMsg', 'Grid must be like OL21'); return; }
-  await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, ppm: $('txPpm').value });
+  await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, src: $('txSrc').value, ppm: $('txPpm').value });
   txDirty = false; txFormLoaded = false;
   T('txSaveMsg', 'Saved');
   setTimeout(() => T('txSaveMsg', ''), 2500);

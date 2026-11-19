@@ -36,6 +36,7 @@ void ft8GetCurrentUTC(uint8_t *h, uint8_t *m, uint8_t *s, uint16_t *msOut);   //
 // Station and TX settings, saved in NVS ("ft8tx"); set by serial K commands or /api/ft8tx
 static char myCall[12] = "";
 static char myGrid[5] = "";
+static uint8_t txSrc = 0;             // 0 = Si5351 CLK2 (needs the Si5351 active), 1 = ESP32 APLL on GPIO (txPin)
 static int8_t txPin = 0;              // 0 = I2S0 MCLK on GPIO0 (CLK_OUT1), else I2S0 BCK on this GPIO
 static uint16_t txAudioHz = 1500;     // tone 0 above the USB dial, as in WSJT-X
 static int32_t txPpm10 = 0;           // ESP32 crystal error, 0.1 ppm (positive = crystal fast)
@@ -93,7 +94,7 @@ static double txWantHz() {
 }
 
 // With the Si5351 on the bus (it is the SI4732 reference) CLK2 makes the tones: any frequency, exact 6.25 Hz steps
-static bool txSi() { return extRefActive(); }
+static bool txSi() { return txSrc == 0 && extRefActive(); }
 
 // T/R relay module (S = signal, active high): COM = antenna, NO = PA (transmit), NC = SI4732 (receive, relay off)
 #define TX_RELAY_PIN 26
@@ -112,6 +113,7 @@ static bool txPlan() {
     plan.stepsPerTone = 1;
     return plan.baseHz >= 4000.0 && plan.baseHz <= 100e6;
   }
+  if (txSrc == 0) return false;   // Si5351 chosen but not active
   const double xt = xtalHz();
   const double wantHz = txWantHz();
   double bestErr = 1e9;
@@ -353,6 +355,7 @@ static bool txReplan() {
   planOk = currentMode == USB && txPlan();
   planUs = micros() - t0;
   if (currentMode != USB) Serial.println("[TX] Radio must be in USB / FT8 mode to transmit");
+  else if (!planOk && txSrc == 0) Serial.println("[TX] Si5351 is not active (External reference off or chip missing): choose ESP32 GPIO or enable it");
   else if (!planOk) Serial.printf("[TX] No APLL setting for %.0f Hz (only ~3.5-5 MHz, 80 m FT8 at 3573 kHz)\r\n", planForHz);
   else txPrintPlan();
   return planOk;
@@ -370,6 +373,7 @@ static void txSave() {
   p.putString("call", myCall);
   p.putString("grid", myGrid);
   p.putChar("pin", txPin);
+  p.putUChar("src", txSrc);
   p.putUShort("audio", txAudioHz);
   p.putInt("ppm10", txPpm10);
   p.end();
@@ -384,6 +388,7 @@ static void txLoad() {
   strlcpy(myCall, p.getString("call", "").c_str(), sizeof(myCall));
   strlcpy(myGrid, p.getString("grid", "").c_str(), sizeof(myGrid));
   txPin = p.getChar("pin", 0);
+  txSrc = p.getUChar("src", 0);
   txAudioHz = p.getUShort("audio", 1500);
   txPpm10 = p.getInt("ppm10", 0);
   p.end();
@@ -707,6 +712,12 @@ void ft8TxCommand(const char *args) {
       txSave();
       txReplan();
       break;
+    case 'S':   // KS<0|1>: TX source, 0 = Si5351 CLK2, 1 = ESP32 GPIO/APLL (saved)
+      txStop();
+      txSrc = atoi(args) ? 1 : 0;
+      txSave();
+      txReplan();
+      break;
     case 'p':   // Kp<gpio>: 0 = GPIO0 MCLK, else BCK on that GPIO (saved)
       txStop();
       txPin = (int8_t)atoi(args);
@@ -855,7 +866,7 @@ void ft8TxPoll() {
 }
 
 static String txStatusJson() {
-  char b[200];
+  char b[260];
   bool here = planOk && planForHz == txWantHz() && currentMode == USB;
   double spacing = plan.stepHz * plan.stepsPerTone;
   snprintf(b, sizeof(b),
@@ -865,9 +876,9 @@ static String txStatusJson() {
   String out;
   out.reserve(160 + TX_EVENTS * 68);   // one allocation: the heap is tight while pages load
   out = b;
-  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
+  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"src\":%u,\"si_ok\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
            here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0,
-           txSi() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
+           txSi() ? "true" : "false", (unsigned)txSrc, extRefActive() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;
@@ -902,6 +913,7 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
         txWebPush(line);
       }
       if (param("audio").length()) { snprintf(line, sizeof(line), "o%ld", param("audio").toInt()); txWebPush(line); }
+      if (param("src").length()) { snprintf(line, sizeof(line), "S%ld", param("src").toInt()); txWebPush(line); }
       if (param("pin").length()) { snprintf(line, sizeof(line), "p%ld", param("pin").toInt()); txWebPush(line); }
       if (param("ppm").length()) { snprintf(line, sizeof(line), "u%ld", lroundf(param("ppm").toFloat() * 10)); txWebPush(line); }
     } else if (action == "relaytest") {
