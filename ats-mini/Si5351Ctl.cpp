@@ -32,6 +32,20 @@ bool si5351Probe()
   return si5351Ready;
 }
 
+bool si5351SetCentiHz(uint8_t clk, uint64_t centiHz)
+{
+  if(clk > 2 || !si5351Ready) return false;
+  si5351.set_freq(centiHz, (si5351_clock)clk);
+  return true;
+}
+
+bool si5351Enable(uint8_t clk, bool on)
+{
+  if(clk > 2 || !si5351Ready) return false;
+  si5351.output_enable((si5351_clock)clk, on ? 1 : 0);
+  return true;
+}
+
 bool si5351Set(uint8_t clk, uint32_t hz)
 {
   if(clk > 2) return false;

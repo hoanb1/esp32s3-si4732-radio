@@ -92,7 +92,17 @@ static double txWantHz() {
   return currentFrequency * 1000.0 + txAudioHz;
 }
 
+// With the Si5351 on the bus (it is the SI4732 reference) CLK2 makes the tones: any frequency, exact 6.25 Hz steps
+static bool txSi() { return extRefActive(); }
+
 static bool txPlan() {
+  if (txSi()) {
+    plan = {};
+    plan.baseHz = txWantHz();
+    plan.stepHz = TX_TONE_HZ;
+    plan.stepsPerTone = 1;
+    return plan.baseHz >= 4000.0 && plan.baseHz <= 100e6;
+  }
   const double xt = xtalHz();
   const double wantHz = txWantHz();
   double bestErr = 1e9;
@@ -135,6 +145,10 @@ static bool txPlan() {
 }
 
 static void txPrintPlan() {
+  if (txSi()) {
+    Serial.printf("[TX] Si5351 CLK%d: tone 0 = %.2f Hz, step %.2f Hz\r\n", SI5351_TX_CLK, plan.baseHz, plan.stepHz);
+    return;
+  }
   double spacing = plan.stepHz * plan.stepsPerTone;
   Serial.printf("[TX] %s: base %.2f Hz (asked %.0f), VCO %.3f MHz, odiv=%lu mclk/%lu bck/%lu, step %.4f Hz x%lu = %.4f Hz/tone (tone 7 off by %+.2f Hz), sdm=%lu.%lu.%lu, ppm %+.1f\r\n",
                 txPin == 0 ? "GPIO0 MCLK" : "BCK pin", plan.baseHz, txWantHz(), plan.vcoHz / 1e6,
@@ -147,6 +161,10 @@ static void txPrintPlan() {
 }
 
 static inline void txSetTone(uint8_t tone) {
+  if (txSi()) {
+    si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((plan.baseHz + tone * TX_TONE_HZ) * 100.0));
+    return;
+  }
   REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM0, (plan.sdm & 0xFF) + tone * plan.stepsPerTone);
   if (txLatchSdm) {
     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_SDM_STOP, 1);
@@ -159,6 +177,7 @@ static inline void txSetTone(uint8_t tone) {
 static bool radioDown = false;
 
 static void txRadioOff() {
+  if (txSi()) return;   // Si5351 CLK2 makes the tones: the SI4732 keeps receiving (and hears the TX)
   if (radioDown) return;
   digitalWrite(RESET_PIN, LOW);
   radioDown = true;
@@ -183,6 +202,11 @@ static void txRadioOn() {
 
 static void txStart() {
   if (txOn) return;
+  if (txSi()) {
+    si5351Enable(SI5351_TX_CLK, true);
+    txOn = true;
+    return;
+  }
   txRadioOff();
   periph_module_enable(PERIPH_I2S0_MODULE);
   rtc_clk_apll_enable(true);
@@ -215,6 +239,11 @@ static void txStart() {
 
 static void txStop() {
   if (!txOn) return;
+  if (txSi()) {
+    si5351Enable(SI5351_TX_CLK, false);
+    txOn = false;
+    return;
+  }
   if (txPin == 0) {
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0_GPIO0);
     gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
