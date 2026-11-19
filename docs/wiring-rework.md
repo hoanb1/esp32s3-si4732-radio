@@ -1,6 +1,6 @@
 # Wiring rework: Si5351 + Si4732 digital audio
 
-Status: plan, nothing soldered yet. "(?)" = not verified on the board, check with a multimeter/photo first.
+Status: plan, nothing soldered yet. "(?)" = not verified on the board, check with a multimeter/photo first. Crystal pins 2+13 confirmed (breakout schematic, 2026-11-19).
 
 ## Existing wiring (from `ats-mini/Common.h`, unchanged)
 
@@ -25,7 +25,7 @@ Status: plan, nothing soldered yet. "(?)" = not verified on the board, check wit
 | A3 | ESP32 3V3 | Si5351 VIN | 10 uF + 100 nF at the module |
 | A4 | ESP32 GND | Si5351 GND | |
 | A5 | Si5351 CLK2 | Si4732 pin 13 (RCLK) | 32.768 kHz square wave |
-| A6 | Si4732 pin 13 / pin 2 | remove 32.768 kHz crystal + its 2 caps (?) | crystal likely sits across RCLK and GPO3/DCLK; check the board |
+| A6 | Si4732 pin 13 / pin 2 | remove crystal XT1 (32.768 kHz) and C1 (22 pF, pin 2 side); C2 (22 pF, pin 13 side) may stay or go | confirmed on the breakout schematic: XT1 sits between pin 2 (DCLK) and pin 13 (RCLK), each side has a 22 pF to GND. Pin 2 goes nowhere else, so it is free after removal |
 
 Firmware: Si4732 `REFCLK_FREQ`/`REFCLK_PRESCALE` set for 32.768 kHz, SSB patch reloaded, `rx_ppm` back to 0 (then calibrate again).
 
