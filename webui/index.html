@@ -305,7 +305,7 @@ td.act button:hover{background:var(--red);color:#fff}
   </div>
   <div class="col">
    <div class="card" id="txCard">
-    <div class="ch"><h2>QSO / Transmit</h2><span class="row"><span class="badge" id="txBadge">loading…</span><span class="badge" id="txArmBadge" title="Enable TX in Settings">TX off</span></span></div>
+    <div class="ch"><h2>QSO / Transmit</h2><span class="row"><span class="badge" id="txBadge">loading…</span></span></div>
     <div class="plan" id="txPlan">Loading transmitter status…</div>
     <div class="row">
       <button class="pri" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">Call CQ</button>
@@ -1538,8 +1538,6 @@ function renderTx(st) {
   C('txBadge', st.on ? 'badge err' : busy ? 'badge warn' : st.enabled ? 'badge ok' : 'badge');
   T('txBadge', st.on ? 'on air: ' + st.text : st.qso !== 'idle' ? st.qso + (st.dx ? ' · ' + st.dx : '') : st.enabled ? 'ready' : 'idle');
   if (document.activeElement !== $('txEnable')) $('txEnable').checked = !!st.enabled;
-  C('txArmBadge', st.enabled ? 'badge err' : 'badge');
-  T('txArmBadge', st.enabled ? 'TX enabled' : 'TX off');
   T('txArmText', 'Enable TX');
   if (document.activeElement !== $('txEnable2')) $('txEnable2').checked = !!st.enabled;
   T('txArmText2', 'Enable TX');
