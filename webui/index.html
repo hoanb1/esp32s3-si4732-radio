@@ -313,6 +313,10 @@ td.act button:hover{background:var(--red);color:#fff}
       <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto off</span></label>
       <span class="note" id="txNote"></span>
     </div>
+    <div class="row" id="txBands" title="FT8 calling frequencies (USB). Tuning is checked after each change.">
+      <span class="note">Band</span>
+      <button onclick="txBand(7074)">40</button><button onclick="txBand(10136)">30</button><button onclick="txBand(14074)">20</button><button onclick="txBand(18100)">17</button><button onclick="txBand(21074)">15</button><button onclick="txBand(24915)">12</button><button onclick="txBand(28074)">10</button>
+    </div>
     <div class="row">
       <input type="text" id="txMsg" class="f1" maxlength="37" placeholder="free message for the next slot" style="text-transform:uppercase" onkeydown="if(event.key==='Enter')$('txSendBtn').click()">
       <button id="txSendBtn" disabled onclick="txAction('send',{msg:$('txMsg').value})">Send</button>
@@ -386,13 +390,16 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="lb" style="flex-basis:auto">Grid</span><input type="text" id="txGrid" maxlength="4" placeholder="AA00" style="width:70px;text-transform:uppercase"></div>
     <div class="fr"><span class="lb">Audio</span><input type="number" id="txAudio" min="200" max="2900" step="10"> Hz
       <span class="lb" style="flex-basis:auto">Crystal</span><input type="number" id="txPpm" step="0.1"> ppm</div>
-    <div class="fr"><span class="lb">Output pin</span>
+    <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
       <select id="txPin" class="f1"><option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option><option value="16">GPIO16 – BCK, backlight wire (bench tests)</option></select></div>
     <div class="fr">
       <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span></label>
       <button class="pri" onclick="txSave()">Save station</button>
     </div>
-    <div class="note">80 m only; square wave output needs a low-pass filter before an antenna.</div>
+    <div class="fr" id="txSiRow" style="display:none"><span class="lb">Si5351 + relay</span>
+      <button onclick="txRelayTest()" title="Closes the T/R relay 5 times for 5 s, no RF. Receive is cut while it is closed.">Test relay (5 x 5 s)</button>
+      <span class="note" id="txRelayMsg"></span></div>
+    <div class="note" id="txOutNote">Tones come from Si5351 CLK2 (any band 1.8-30 MHz): CLK2 &rarr; LPF &rarr; PA &rarr; T/R relay (GPIO26) &rarr; antenna. A low-pass filter after the PA is required.</div>
    </div>
 
    <div class="card">
@@ -1535,14 +1542,20 @@ function renderTx(st) {
   let plan, ok = false;
   if (!st.call || !st.grid) plan = 'Enter your callsign and grid in Settings > FT8 transmit station, then Save. Nothing is sent without a callsign.';
   else if (!st.usb) plan = 'Switch the radio to FT8 (USB) to transmit.';
-  else if (!st.plan) plan = `${(st.rf / 1e6).toFixed(4)} MHz is out of reach: exact 6.25 Hz FT8 tones only work around 3.5–5 MHz. Tune to 80 m FT8 (3573 kHz) to transmit.`;
+  else if (!st.plan && !st.si) plan = `${(st.rf / 1e6).toFixed(4)} MHz is out of reach: exact 6.25 Hz FT8 tones only work around 3.5–5 MHz. Tune to 80 m FT8 (3573 kHz) to transmit.`;
   else {
     ok = true;
-    plan = `${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone error ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz` +
+    plan = st.si
+      ? `${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz via Si5351 CLK2 · T/R relay ${st.relay ? 'TX' : 'RX'}`
+      : `${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone error ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz`;
+    plan +=
       (st.enabled ? '' : ' · enable TX in Settings to transmit');
   }
   T('txPlan', plan);
   C('txPlan', ok ? 'plan' : 'plan warn');
+  $('txPinRow').style.display = st.si ? 'none' : '';
+  $('txSiRow').style.display = st.si ? '' : 'none';
+  $('txOutNote').style.display = st.si ? '' : 'none';
   const canSend = ok && st.enabled;
   $('txCqBtn').disabled = !canSend || busy;
   $('txSendBtn').disabled = !canSend || !!st.busy;
@@ -1563,6 +1576,22 @@ async function fetchTx() {
   } else if (drawerOpen && !txFormLoaded) {
     try { await txFetch(); } catch (e) {}
   }
+}
+async function txBand(khz) {
+  if (txState.on || (txState.qso && txState.qso !== 'idle')) { T('txNote', 'Stop first'); setTimeout(() => T('txNote', ''), 2500); return; }
+  T('txNote', 'tuning ' + khz + ' kHz...');
+  await sendCtrl('freq', { freq: khz, unit: 'khz' });
+  await new Promise(r => setTimeout(r, 2500));
+  try { await txFetch(); } catch (e) {}
+  const ok = Math.abs((txState.rf || 0) - (khz * 1000 + (parseInt($('txAudio').value) || 1500))) < 1;
+  T('txNote', ok ? khz + ' kHz ready' : 'tune failed, check the radio');
+  setTimeout(() => T('txNote', ''), 4000);
+}
+async function txRelayTest() {
+  if (txState.on || (txState.qso && txState.qso !== 'idle')) { T('txRelayMsg', 'busy'); return; }
+  T('txRelayMsg', 'testing for 50 s...');
+  await txAction('relaytest');
+  setTimeout(() => T('txRelayMsg', ''), 52000);
 }
 function setAuto(on) { txAction('auto', { mode: on ? 2 : 0 }); }
 async function txAction(action, params = {}) {

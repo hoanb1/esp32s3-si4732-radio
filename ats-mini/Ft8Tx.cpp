@@ -865,8 +865,9 @@ static String txStatusJson() {
   String out;
   out.reserve(160 + TX_EVENTS * 68);   // one allocation: the heap is tight while pages load
   out = b;
-  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
-           here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0, txEnabled ? "true" : "false",
+  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
+           here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0,
+           txSi() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;
