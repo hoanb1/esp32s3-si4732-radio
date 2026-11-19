@@ -95,6 +95,15 @@ static double txWantHz() {
 // With the Si5351 on the bus (it is the SI4732 reference) CLK2 makes the tones: any frequency, exact 6.25 Hz steps
 static bool txSi() { return extRefActive(); }
 
+// T/R relay module (S = signal, active high): COM = antenna, NO = PA (transmit), NC = SI4732 (receive, relay off)
+#define TX_RELAY_PIN 26
+#define TX_RELAY_SETTLE_MS 15
+static void txRelay(bool tx) {
+  static bool init = false;
+  if (!init) { digitalWrite(TX_RELAY_PIN, LOW); pinMode(TX_RELAY_PIN, OUTPUT); init = true; }
+  digitalWrite(TX_RELAY_PIN, tx ? HIGH : LOW);
+}
+
 static bool txPlan() {
   if (txSi()) {
     plan = {};
@@ -203,6 +212,8 @@ static void txRadioOn() {
 static void txStart() {
   if (txOn) return;
   if (txSi()) {
+    txRelay(true);                          // antenna to the PA first, then RF
+    vTaskDelay(pdMS_TO_TICKS(TX_RELAY_SETTLE_MS));
     si5351Enable(SI5351_TX_CLK, true);
     txOn = true;
     return;
@@ -240,7 +251,9 @@ static void txStart() {
 static void txStop() {
   if (!txOn) return;
   if (txSi()) {
-    si5351Enable(SI5351_TX_CLK, false);
+    si5351Enable(SI5351_TX_CLK, false);     // RF off first, then the antenna back to the SI4732
+    vTaskDelay(pdMS_TO_TICKS(5));
+    txRelay(false);
     txOn = false;
     return;
   }
@@ -799,6 +812,7 @@ bool ft8TxRadioDown() { return radioDown; }
 
 void ft8TxPoll() {
   txLoad();
+  if (txSi()) txRelay(false);   // relay released (receive) from boot on
   if (radioDown && !txOn) txRadioOn();
   // Keep the plan in step with the dial so the web page shows whether this frequency can be sent
   static uint32_t lastCheck = 0;
