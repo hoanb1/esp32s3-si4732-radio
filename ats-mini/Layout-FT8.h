@@ -73,6 +73,12 @@ int ft8NearestBand(uint32_t khz);
 
 // Apply SI4732 volume + speaker amplifier state for the current mode/mute/sleep state
 void ft8ApplyAudio();
+bool audioDigitalWanted();          // saved setting
+bool audioDigitalOn();              // wanted and the Si5351 reference clock is active
+void audioDigitalSet(bool on);
+bool audioDigitalRunning();
+uint32_t audioDigitalFrames();
+int audioDigitalPeak(bool clear);
 void ft8SetAdcVolume(uint8_t v);
 void ft8SetAdcManual(uint8_t v);
 void ft8SetAdcAuto(bool on);

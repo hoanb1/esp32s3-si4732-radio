@@ -393,6 +393,9 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="lb" style="flex-basis:auto">Crystal</span><input type="number" id="txPpm" step="0.1"> ppm</div>
     <div class="fr"><span class="lb">TX source</span>
       <select id="txSrc" class="f1" onchange="renderTx(txState)"><option value="0">Si5351 CLK2 – any band, with PA + relay</option><option value="1">ESP32 GPIO (APLL) – 80 m bench</option></select></div>
+    <div class="fr"><span class="lb">Audio input</span>
+      <select id="audIn" class="f1" onchange="setAudIn(this.value)"><option value="0">Analog – Si4732 line out → ADC (GPIO34)</option><option value="1">Digital – Si4732 I2S (DCLK 21, DFS 22, DOUT → 34)</option></select></div>
+    <div class="fr"><span class="lb"></span><span id="audInMsg" class="f1" style="font-size:12px;opacity:.7"></span></div>
     <div class="fr" id="txDrvRow"><span class="lb">TX power</span>
       <select id="txDrv" class="f1"><option value="0">Low – 2 mA (≈1 mW, for the PA)</option><option value="1">Medium – 4 mA (≈2.5 mW)</option><option value="2">High – 6 mA (≈5 mW)</option><option value="3">Max – 8 mA (≈10 mW)</option></select></div>
     <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
@@ -1799,6 +1802,21 @@ loadBookmarks();
 optFetch();
 kick(0);
 wsConnect();
+
+async function setAudIn(v) {
+  if (!confirm('Switch the audio input and restart the radio?')) { audInSync(); return; }
+  try { await fetch('/api/control?action=audio_in&val=' + v); } catch (e) {}
+  T('audInMsg', 'restarting…');
+}
+async function audInSync() {
+  try {
+    const r = await (await fetch('/api/status')).json();
+    $('audIn').value = r.dig_want ? '1' : '0';
+    T('audInMsg', r.dig_run ? ('digital input running, ' + r.dig_frames + ' frames, peak ' + r.dig_peak)
+                  : (r.dig_want ? 'digital selected but not running (needs the Si5351 reference clock)' : 'analog ADC'));
+  } catch (e) {}
+}
+audInSync(); setInterval(audInSync, 5000);
 </script>
 </body>
 </html>

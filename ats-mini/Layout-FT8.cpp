@@ -8,6 +8,9 @@
 #include "Ft8Tx.h"
 #include "PskReporter.h"
 
+#include "Si5351Ctl.h"
+#include <Preferences.h>
+#include <driver/i2s_std.h>
 #include <WiFi.h>
 #include <esp_timer.h>
 #include <soc/sens_struct.h>
@@ -462,6 +465,69 @@ static void adcTask(void *arg) {
   }
 }
 
+// ---- Digital audio input: Si4732 DOUT -> ESP32 I2S1 (master RX, 48 kHz 16-bit) ----
+// ESP32 drives DCLK (GPIO21) and DFS (GPIO22); DOUT (Si4732 pin 16) goes to GPIO34. Each 3 frames are averaged into one
+// 16 kHz sample (the Si4732 audio is already below 4 kHz) and written to the same raw ring as the SAR ADC ISR,
+// scaled to 12 bits with a 2048 offset, so the resampler and everything after it are unchanged.
+#define DIG_PIN_BCK 21
+#define DIG_PIN_WS  22
+#define DIG_RATE    48000
+static bool digWanted = false, digRunning = false;
+static i2s_chan_handle_t digChan = NULL;
+static volatile uint32_t digFrames = 0;
+static volatile int16_t digPeak = 0;
+
+bool audioDigitalWanted() {
+  Preferences p; bool v = false;
+  if (p.begin("radiocal", true)) { v = p.getBool("digin", false); p.end(); }
+  return v;
+}
+bool audioDigitalOn() { return audioDigitalWanted() && extRefActive(); }
+void audioDigitalSet(bool on) {
+  Preferences p;
+  if (p.begin("radiocal", false)) { p.putBool("digin", on); p.end(); }
+}
+bool audioDigitalRunning() { return digRunning; }
+uint32_t audioDigitalFrames() { return digFrames; }
+int audioDigitalPeak(bool clear) { int v = digPeak; if (clear) digPeak = 0; return v; }
+
+static void digTask(void *arg) {
+  static int16_t buf[144 * 2];
+  for (;;) {
+    size_t got = 0;
+    if (i2s_channel_read(digChan, buf, sizeof(buf), &got, 100) != ESP_OK || got < 12) continue;
+    int frames = got / 4;
+    int16_t pk = 0;
+    for (int i = 0; i + 2 < frames; i += 3) {
+      int32_t s = ((int32_t)buf[i * 2] + buf[i * 2 + 2] + buf[i * 2 + 4]) / 3;
+      int16_t a = s < 0 ? -s : s; if (a > pk) pk = a;
+      uint16_t v = (uint16_t)((s >> 4) + 2048);
+      uint32_t h = adcRawHead;
+      volatile uint32_t *p = &adcRaw[(h & (FT8_RAW_RING - 1)) >> 1];
+      *p = (h & 1) ? ((*p & 0x0000FFFFu) | ((uint32_t)v << 16)) : ((*p & 0xFFFF0000u) | v);
+      adcRawHead = h + 1;
+    }
+    digFrames += frames;
+    if (pk > digPeak) digPeak = pk;
+  }
+}
+
+static bool digStart() {
+  i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+  cc.dma_desc_num = 4; cc.dma_frame_num = 144;
+  if (i2s_new_channel(&cc, NULL, &digChan) != ESP_OK) return false;
+  i2s_std_config_t sc = {
+    .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(DIG_RATE),
+    .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+    .gpio_cfg = { .mclk = I2S_GPIO_UNUSED, .bclk = (gpio_num_t)DIG_PIN_BCK, .ws = (gpio_num_t)DIG_PIN_WS,
+                  .dout = I2S_GPIO_UNUSED, .din = (gpio_num_t)FT8_ADC_PIN, .invert_flags = {0, 0, 0} },
+  };
+  if (i2s_channel_init_std_mode(digChan, &sc) != ESP_OK || i2s_channel_enable(digChan) != ESP_OK) return false;
+  xTaskCreatePinnedToCore(digTask, "ft8_dig", 3072, NULL, 5, NULL, 1);
+  digRunning = true;
+  return true;
+}
+
 static bool adcStart() {
   // One regular read configures ADC1 channel 6 (GPIO34), 0 dB attenuation and the RTC controller
   analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
@@ -529,7 +595,9 @@ void ft8Init() {
   // Start crystal-timed capture of GPIO34 audio
   if (!adcBuf || !adcRaw) Serial.println("[FT8] ADC buffer allocation failed");
   rsDesign();
-  bool adcOk = adcBuf && adcRaw && adcStart();
+  digWanted = audioDigitalOn();
+  bool adcOk = adcBuf && adcRaw && (digWanted ? digStart() : adcStart());
+  if (digWanted) { adcRunning = true; Serial.printf("[FT8] digital audio input %s (I2S1 %d Hz, BCK %d WS %d DIN %d)\r\n", adcOk ? "running" : "FAILED", DIG_RATE, DIG_PIN_BCK, DIG_PIN_WS, FT8_ADC_PIN); }
   xTaskCreatePinnedToCore(adcTask, "ft8_adc", 2560, NULL, 5, NULL, 1);   // peak use ~1 KB (serial Z)
   Serial.printf("[FT8] ADC capture %s (%d Hz timer, resample %d/%d -> %d Hz)\r\n",
                 adcOk ? "running" : "FAILED", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
@@ -1212,6 +1280,10 @@ void ft8ApplyAudio() {
   // The SI4732 keeps producing audio for the ADC whatever the speaker does; MUTE_MAIN/SQUELCH are handled by muteOn().
   // In FT8/FT4 the SI4732 level is fixed for the ADC (at volume <= 36 the audio is below the ADC noise and nothing
   // decodes); the amplifier has no gain control, so with the speaker on it plays at that level.
+  if (digRunning) {   // Si4732 digital out: 16-bit I2S stereo, rising edge, 48 kHz (DCLK/DFS are already running)
+    rx.digitalOutputFormat(0, 0, 0, 0);
+    rx.digitalOutputSampleRate(DIG_RATE);
+  }
   if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
     rx.setVolume(digital ? ft8AdcVolume : volume);
     rx.setAudioMute(false);
@@ -1244,7 +1316,7 @@ bool ft8IsSpeakerMuted() {
 }
 
 bool ft8ToggleAdcTimer() {
-  if (!adcTimer) return false;
+  if (!adcTimer) return false;   // digital input: always running
   if (adcRunning) { adcRunning = false; timerStop(adcTimer); }
   else { timerStart(adcTimer); adcRunning = true; }
   return adcRunning;
