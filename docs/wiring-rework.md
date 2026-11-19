@@ -9,7 +9,7 @@ Status: plan, nothing soldered yet. "(?)" = not verified on the board, check wit
 | GPIO13 | I2C SDA (Si4732) |
 | GPIO14 | I2C SCL (Si4732) |
 | GPIO27 | Si4732 RST (pin 9) |
-| GPIO34 | audio ADC input, from Si4732 LOUT (pin 1) (?) |
+| GPIO34 | audio ADC1_CH6, from Si4732 line out (`Common.h:57`) |
 | GPIO15 | speaker amp enable |
 | GPIO16 | LCD backlight |
 | GPIO23/18/5/17/4 | LCD MOSI/SCLK/CS/DC/RST |
@@ -64,3 +64,10 @@ See `docs/ft8-transmit-si5351.md`.
 | | | CLK0 | PA input |
 | GPIO26 | | | relay |
 | GPIO19 | | | PA enable |
+
+## Firmware facts (checked in code)
+
+- Reference clock is set in code, not by the crystal alone: `rx.setRefClock(32802)` at `ats-mini.ino:419/441/452` (FM/AM/SSB), plus `ssbPpmLoad()` and the `rx_ppm` web action. Debug command `P<Hz>` (`Remote.cpp:513`) accepts 31130..34406 Hz.
+- With the Si5351 on RCLK: output exactly 32768 Hz, set `REFCLK_FREQ` to 32768, `rx_ppm` to 0, then recalibrate. Remove the 32802 hard-coding.
+- Si4732 GPO1 (pin 4) is already used as output (`setGpioCtl(1,0,0)`); GPO2 (pin 3) and GPO3 (pin 2) are unused by the code.
+- `Ft8Tx.cpp` (866 lines) already exists and transmits with the ESP32 APLL (I2S0 MCLK on GPIO0 or BCK on a GPIO). It resets the Si4732 around TX (`txRadioOff/txRadioOn`). The Si5351 replaces that tone path; the APLL code goes away.
