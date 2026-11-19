@@ -6,6 +6,9 @@
 
 #define SI5351_ADDR 0x60
 
+// Si5351 output wired to the SI4732 RCLK pin (pin 13). The rework wire goes from the module pin "0".
+#define SI5351_REF_CLK 0
+
 // The module's 25 MHz crystal measured +78 ppm (2026-11-19): CLK0 = 21.075 MHz arrived as a 2649.5 Hz
 // tone on USB dial 21074 kHz instead of 1000 Hz (RX already calibrated against the Pi's NTP-locked
 // FT8 transmitter, rx_ppm 892.0). 25 MHz * (1 + 78.26e-6) = 25001956.5 Hz.
@@ -69,7 +72,7 @@ bool extRefBegin()
   }
   if(!enabled) return false;
 
-  extRefOn = si5351Set(2, 32768);
+  extRefOn = si5351Set(SI5351_REF_CLK, 32768);
   if(!extRefOn)
   {
     extRefEnable(false);
@@ -78,7 +81,7 @@ bool extRefBegin()
   else
   {
     delay(20);   // let the reference settle before the SI4732 reset
-    Serial.println("[SI5351] SI4732 reference = CLK2 32768 Hz");
+    Serial.println("[SI5351] SI4732 reference = CLK0 32768 Hz");
   }
   return extRefOn;
 }
