@@ -311,7 +311,7 @@ td.act button:hover{background:var(--red);color:#fff}
       <button class="pri" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">Call CQ</button>
       <button class="dng" onclick="txAction('stop')" title="Stop the QSO and any transmission now">Stop</button>
       <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto off</span></label>
-      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable2" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText2">TX off</span></label>
+      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable2" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText2">Enable TX</span></label>
       <span class="note" id="txNote"></span>
     </div>
     <div class="row" id="txBands" title="FT8 calling frequencies (USB). Tuning is checked after each change.">
@@ -396,7 +396,7 @@ td.act button:hover{background:var(--red);color:#fff}
     <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
       <select id="txPin" class="f1"><option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option><option value="16">GPIO16 – BCK, backlight wire (bench tests)</option></select></div>
     <div class="fr">
-      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span></label>
+      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">Enable TX</span></label>
       <button class="pri" onclick="txSave()">Save station</button>
     </div>
     <div class="fr" id="txSiRow" style="display:none"><span class="lb">Si5351 + relay</span>
@@ -1540,9 +1540,9 @@ function renderTx(st) {
   if (document.activeElement !== $('txEnable')) $('txEnable').checked = !!st.enabled;
   C('txArmBadge', st.enabled ? 'badge err' : 'badge');
   T('txArmBadge', st.enabled ? 'TX enabled' : 'TX off');
-  T('txArmText', st.enabled ? 'TX enabled' : 'TX off');
+  T('txArmText', 'Enable TX');
   if (document.activeElement !== $('txEnable2')) $('txEnable2').checked = !!st.enabled;
-  T('txArmText2', st.enabled ? 'TX enabled' : 'TX off');
+  T('txArmText2', 'Enable TX');
 
   let plan, ok = false;
   if (!st.call || !st.grid) plan = 'Enter your callsign and grid in Settings > FT8 transmit station, then Save. Nothing is sent without a callsign.';
