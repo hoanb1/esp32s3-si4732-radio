@@ -1,4 +1,5 @@
 #include "Ft8Tx.h"
+#include "Si5351Ctl.h"
 #include "Common.h"
 #include "Utils.h"
 #include "Layout-FT8.h"
@@ -167,7 +168,8 @@ static void txRadioOn() {
   Serial.println("[RX] restart: reset high");
   digitalWrite(RESET_PIN, HIGH);
   Serial.println("[RX] restart: rx.setup");
-  rx.setup(RESET_PIN, MW_BAND_TYPE);
+  rx.setup(RESET_PIN, 0, MW_BAND_TYPE, SI473X_ANALOG_AUDIO, extRefActive() ? XOSCEN_RCLK : XOSCEN_CRYSTAL, 0);
+  delay(250);
   Serial.println("[RX] restart: unloadSSB/ssbPpmLoad");
   unloadSSB();
   ssbPpmLoad();

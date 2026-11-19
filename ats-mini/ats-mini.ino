@@ -3,6 +3,7 @@
 // =================================
 
 #include "Common.h"
+#include "Si5351Ctl.h"
 #include <Wire.h>
 #include "Rotary.h"
 #include "Button.h"
@@ -141,6 +142,9 @@ void setup()
   // The line below may be necessary to setup I2C pins on ESP32
   Wire.begin(ESP32_I2C_SDA, ESP32_I2C_SCL);
 
+  // Optional Si5351 reference clock for the SI4732 (must run before its reset)
+  extRefBegin();
+
   // TFT display brightness control (PWM)
   // Note: At brightness levels below 100%, switching from the PWM may cause power spikes and/or RFI
   ledcAttach(PIN_LCD_BL, 16000, 8);  // Pin assignment, 16kHz, 8-bit
@@ -201,10 +205,18 @@ void setup()
     tft.setTextSize(2);
     tft.setTextColor(TH.text_warn, TH.bg);
     tft.println("Si4732 not detected");
+    if(extRefActive())
+    {
+      extRefEnable(false);   // external reference did not work: retry on the crystal
+      delay(1500);
+      ESP.restart();
+    }
     while(1) delay(100);
   }
 
-  rx.setup(RESET_PIN, MW_BAND_TYPE);
+  rx.setup(RESET_PIN, 0, MW_BAND_TYPE, SI473X_ANALOG_AUDIO, extRefActive() ? XOSCEN_RCLK : XOSCEN_CRYSTAL, 0);
+  delay(250);
+  extRefDone();
 
   // Attached pin to allows SI4732 library to mute audio as required to minimise loud clicks
 #if AUDIO_MUTE >= 0
@@ -371,10 +383,13 @@ uint16_t rxGetFrequency()
 
 void ssbPpmLoad()
 {
+  // With the Si5351 reference the crystal's ~893 ppm error is gone: own calibration key, default 0
+  const bool ext = extRefActive();
+  if(ext) ssbPpmCal10 = 0;
   Preferences p;
   if(p.begin("radiocal", true))
   {
-    ssbPpmCal10 = p.getShort("ssbppm10", ssbPpmCal10);
+    ssbPpmCal10 = p.getShort(ext ? "ssbppm10x" : "ssbppm10", ssbPpmCal10);
     p.end();
   }
 }
@@ -384,7 +399,7 @@ void ssbPpmSave()
   Preferences p;
   if(p.begin("radiocal", false))
   {
-    p.putShort("ssbppm10", ssbPpmCal10);
+    p.putShort(extRefActive() ? "ssbppm10x" : "ssbppm10", ssbPpmCal10);
     p.end();
   }
 }
@@ -416,7 +431,7 @@ void useBand(const Band *band)
   {
     // rx.setMaxDelaySetFrequency(60);
     rx.setFM(band->minimumFreq, band->maximumFreq, band->currentFreq, getCurrentStep()->step);
-    rx.setRefClock(32802);
+    rx.setRefClock(rxRefClockHz());
     rxSetFrequency(band->currentFreq);
     // rx.setTuneFrequencyAntennaCapacitor(0);
     rx.setSeekFmLimits(band->minimumFreq, band->maximumFreq);
@@ -438,7 +453,7 @@ void useBand(const Band *band)
     if(band->bandMode==AM)
     {
       rx.setAM(band->minimumFreq, band->maximumFreq, band->currentFreq, getCurrentStep()->step);
-      rx.setRefClock(32802);
+      rx.setRefClock(rxRefClockHz());
       rxSetFrequency(band->currentFreq);
       // More sensitive seek thresholds
       // https://github.com/pu2clr/SI4735/issues/7#issuecomment-810963604
@@ -449,7 +464,7 @@ void useBand(const Band *band)
     {
       // Configure SI4732 for SSB (SI4732 step not used, set to 0)
       rx.setSSB(band->minimumFreq, band->maximumFreq, band->currentFreq, 0, currentMode);
-      rx.setRefClock(32802);
+      rx.setRefClock(rxRefClockHz());
       rxSetFrequency(band->currentFreq);
       // Ensure wide 4.0 kHz audio passband (300..2500 Hz flat) and true SSB mode (DSP_AFCDIS=1, AVC_DIVIDER=0) for FT8
       rx.setSSBDspAfc(1);

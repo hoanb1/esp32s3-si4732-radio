@@ -12,4 +12,14 @@ bool si5351Probe();
 // Output clock `clk` (0..2) at `hz` (4 kHz..160 MHz); hz = 0 switches it off.
 bool si5351Set(uint8_t clk, uint32_t hz);
 
+// External SI4732 reference clock: Si5351 CLK2 = 32768 Hz on RCLK (pin 13) instead of the 32.768 kHz
+// crystal. Needs the crystal (and C1) removed. Off by default; enabled in NVS, effective after a restart.
+// If a boot with it enabled never gets through rx.setup() (no clock reached the chip) the next boot
+// switches it off again.
+bool extRefBegin();            // before the SI4732 reset: starts CLK2 if enabled; false = use the crystal
+void extRefDone();             // after rx.setup() returned: this boot got through
+bool extRefActive();
+void extRefEnable(bool on);    // saved to NVS
+uint16_t rxRefClockHz();       // REFCLK_FREQ for the SI4732: 32768 with the Si5351, 32802 (crystal error trim) without
+
 #endif

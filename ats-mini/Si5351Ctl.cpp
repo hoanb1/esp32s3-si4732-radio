@@ -1,6 +1,7 @@
 #include "Common.h"
 #include "Si5351Ctl.h"
 #include <Wire.h>
+#include <Preferences.h>
 #include <si5351.h>
 
 #define SI5351_ADDR 0x60
@@ -45,3 +46,64 @@ bool si5351Set(uint8_t clk, uint32_t hz)
   Serial.printf("[SI5351] CLK%u = %lu Hz\r\n", clk, (unsigned long)hz);
   return true;
 }
+
+static bool extRefOn = false;
+
+bool extRefBegin()
+{
+  Preferences p;
+  bool enabled = false;
+  if(p.begin("radiocal", false))
+  {
+    enabled = p.getBool("extref", false);
+    if(enabled && p.getBool("extpend", false))
+    {
+      // The previous boot started the Si5351 reference and never finished rx.setup()
+      p.putBool("extref", false);
+      p.putBool("extpend", false);
+      enabled = false;
+      Serial.println("[SI5351] external RCLK failed last boot: back to the crystal");
+    }
+    else if(enabled) p.putBool("extpend", true);
+    p.end();
+  }
+  if(!enabled) return false;
+
+  extRefOn = si5351Set(2, 32768);
+  if(!extRefOn)
+  {
+    extRefEnable(false);
+    Serial.println("[SI5351] no Si5351: using the crystal");
+  }
+  else
+  {
+    delay(20);   // let the reference settle before the SI4732 reset
+    Serial.println("[SI5351] SI4732 reference = CLK2 32768 Hz");
+  }
+  return extRefOn;
+}
+
+void extRefDone()
+{
+  Preferences p;
+  if(p.begin("radiocal", false))
+  {
+    p.putBool("extpend", false);
+    p.end();
+  }
+}
+
+bool extRefActive() { return extRefOn; }
+
+void extRefEnable(bool on)
+{
+  Preferences p;
+  if(p.begin("radiocal", false))
+  {
+    p.putBool("extref", on);
+    p.putBool("extpend", false);
+    p.end();
+  }
+}
+
+uint16_t rxRefClockHz() { return extRefOn ? 32768 : 32802; }

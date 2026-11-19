@@ -824,6 +824,12 @@ static void runControlAction(const ControlRequest &cr)
       // Bench test: si5351&clk=2&hz=32768 (hz=0 = off); no clk = only scan the bus and init
       if (getParamStr("clk").length()) si5351Set((uint8_t)getParamStr("clk").toInt(), (uint32_t)getParamStr("hz").toInt());
       else si5351Probe();
+    } else if (action == "ext_ref") {
+      // Si5351 CLK2 as the SI4732 reference clock (crystal removed): saved, applied by a restart
+      extRefEnable(getParamStr("val").toInt() != 0);
+      Serial.println("[SI5351] external RCLK setting saved, restarting");
+      delay(300);
+      ESP.restart();
     } else if (action == "adc_auto") {
       ft8SetAdcAuto(getParamStr("val").toInt() != 0);
     } else if (action == "mode") {

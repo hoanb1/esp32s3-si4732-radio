@@ -71,3 +71,11 @@ See `docs/ft8-transmit-si5351.md`.
 - With the Si5351 on RCLK: output exactly 32768 Hz, set `REFCLK_FREQ` to 32768, `rx_ppm` to 0, then recalibrate. Remove the 32802 hard-coding.
 - Si4732 GPO1 (pin 4) is already used as output (`setGpioCtl(1,0,0)`); GPO2 (pin 3) and GPO3 (pin 2) are unused by the code.
 - `Ft8Tx.cpp` (866 lines) already exists and transmits with the ESP32 APLL (I2S0 MCLK on GPIO0 or BCK on a GPIO). It resets the Si4732 around TX (`txRadioOff/txRadioOn`). The Si5351 replaces that tone path; the APLL code goes away.
+
+## External RCLK firmware option (Si5351 CLK2 -> Si4732 RCLK)
+
+- Off by default. After the crystal (XT1) and C1 are removed and CLK2 is wired to Si4732 pin 13:
+  `curl "http://<radio>/api/control?action=ext_ref&val=1"` (saves to NVS, board restarts).
+- Boot with it enabled: Si5351 CLK2 = 32768 Hz starts before the SI4732 reset, `POWER_UP` with XOSCEN=RCLK, `REFCLK_FREQ` = 32768, ppm calibration key `ssbppm10x` (default 0, separate from the crystal's `ssbppm10` = 893 ppm).
+- Safety: if a boot with it enabled never gets through `rx.setup()` (hang) or the SI4732 is not detected, the next boot switches it off and runs on the crystal. Revert by hand: `action=ext_ref&val=0`.
+- Check after enabling: log shows `[SI5351] SI4732 reference = CLK2 32768 Hz`; dial a known carrier and recalibrate `rx_ppm` (it starts at 0).
