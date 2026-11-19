@@ -316,6 +316,20 @@ static void txMessageTask(void *) {
   vTaskDelete(NULL);
 }
 
+// Relay only, no RF: 5 x (closed 5 s, open 5 s)
+static void txRelayTestTask(void *) {
+  for (int i = 1; i <= 5; i++) {
+    Serial.printf("[TX] relay test %d/5: closed\r\n", i);
+    txRelay(true);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    txRelay(false);
+    Serial.printf("[TX] relay test %d/5: open\r\n", i);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+  txTask = NULL;
+  vTaskDelete(NULL);
+}
+
 static void txToneTestTask(void *) {
   // Tones 0..7 for 2 s each, so a waterfall shows the 8-step ladder
   txSetTone(0);
@@ -716,6 +730,10 @@ void ft8TxCommand(const char *args) {
       txWifiOff = atoi(args) != 0;
       Serial.printf("[TX] WiFi off during TX: %s\r\n", txWifiOff ? "yes" : "no");
       break;
+    case 'L':   // KL: relay test, 5 x 5 s closed, no RF
+      if (txTask || txOn) { Serial.println("[TX] Busy"); break; }
+      xTaskCreatePinnedToCore(txRelayTestTask, "relaytest", 3072, NULL, 5, &txTask, 1);
+      break;
     case 'R':   // KR: test the SI4732 off/on cycle used around TX, without transmitting
       txRadioOff();
       delay(2000);
@@ -884,6 +902,8 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
       if (param("audio").length()) { snprintf(line, sizeof(line), "o%ld", param("audio").toInt()); txWebPush(line); }
       if (param("pin").length()) { snprintf(line, sizeof(line), "p%ld", param("pin").toInt()); txWebPush(line); }
       if (param("ppm").length()) { snprintf(line, sizeof(line), "u%ld", lroundf(param("ppm").toFloat() * 10)); txWebPush(line); }
+    } else if (action == "relaytest") {
+      txWebPush("L");
     } else if (action == "cq") {
       txWebPush("q");
     } else if (action == "answer") {
