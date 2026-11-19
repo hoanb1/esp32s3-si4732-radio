@@ -830,7 +830,8 @@ bool ft8TxRadioDown() { return radioDown; }
 
 void ft8TxPoll() {
   txLoad();
-  if (txSi()) txRelay(false);   // relay released (receive) from boot on
+  static bool relayInit = false;
+  if (!relayInit && txSi()) { txRelay(false); relayInit = true; }   // relay released (receive) from boot on
   if (radioDown && !txOn) txRadioOn();
   // Keep the plan in step with the dial so the web page shows whether this frequency can be sent
   static uint32_t lastCheck = 0;
