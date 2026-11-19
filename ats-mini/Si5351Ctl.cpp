@@ -46,6 +46,14 @@ bool si5351Enable(uint8_t clk, bool on)
   return true;
 }
 
+bool si5351Drive(uint8_t clk, uint8_t level)
+{
+  if(clk > 2 || level > 3 || !si5351Ready) return false;
+  static const si5351_drive d[4] = {SI5351_DRIVE_2MA, SI5351_DRIVE_4MA, SI5351_DRIVE_6MA, SI5351_DRIVE_8MA};
+  si5351.drive_strength((si5351_clock)clk, d[level]);
+  return true;
+}
+
 bool si5351Set(uint8_t clk, uint32_t hz)
 {
   if(clk > 2) return false;

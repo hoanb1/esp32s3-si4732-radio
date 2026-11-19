@@ -16,6 +16,7 @@ bool si5351Set(uint8_t clk, uint32_t hz);
 // Safe to call from the TX task: each call is whole Wire transactions.
 bool si5351SetCentiHz(uint8_t clk, uint64_t centiHz);
 bool si5351Enable(uint8_t clk, bool on);
+bool si5351Drive(uint8_t clk, uint8_t level);   // 0..3 = 2/4/6/8 mA
 #define SI5351_TX_CLK 2
 
 // External SI4732 reference clock: Si5351 CLK0 = 32768 Hz on RCLK (pin 13) instead of the 32.768 kHz

@@ -393,6 +393,8 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="lb" style="flex-basis:auto">Crystal</span><input type="number" id="txPpm" step="0.1"> ppm</div>
     <div class="fr"><span class="lb">TX source</span>
       <select id="txSrc" class="f1" onchange="renderTx(txState)"><option value="0">Si5351 CLK2 – any band, with PA + relay</option><option value="1">ESP32 GPIO (APLL) – 80 m bench</option></select></div>
+    <div class="fr" id="txDrvRow"><span class="lb">TX power</span>
+      <select id="txDrv" class="f1"><option value="0">Low – 2 mA (≈1 mW, for the PA)</option><option value="1">Medium – 4 mA (≈2.5 mW)</option><option value="2">High – 6 mA (≈5 mW)</option><option value="3">Max – 8 mA (≈10 mW)</option></select></div>
     <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
       <select id="txPin" class="f1"><option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option><option value="16">GPIO16 – BCK, backlight wire (bench tests)</option></select></div>
     <div class="fr">
@@ -1531,7 +1533,7 @@ function renderTx(st) {
   if (enabledChanged) renderTrafficTable();   // its Answer buttons follow the TX switch
   if (!txFormLoaded && !txDirty) {
     $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio;
-    $('txPin').value = String(st.pin); $('txSrc').value = String(st.src); $('txPpm').value = st.ppm;
+    $('txPin').value = String(st.pin); $('txSrc').value = String(st.src); $('txDrv').value = String(st.drv); $('txPpm').value = st.ppm;
     txFormLoaded = true;
   }
   const busy = st.on || st.qso !== 'idle';
@@ -1559,6 +1561,7 @@ function renderTx(st) {
   C('txPlan', ok ? 'plan' : 'plan warn');
   const siSel = $('txSrc').value === '0';
   $('txPinRow').style.display = siSel ? 'none' : '';
+  $('txDrvRow').style.display = siSel ? '' : 'none';
   $('txSiRow').style.display = siSel ? '' : 'none';
   $('txOutNote').style.display = siSel ? '' : 'none';
   const canSend = ok && st.enabled;
@@ -1614,12 +1617,12 @@ async function txAction(action, params = {}) {
   } catch (e) {}
   setTimeout(fetchTx, 400);
 }
-['txCall', 'txGrid', 'txAudio', 'txPin', 'txPpm', 'txSrc'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
+['txCall', 'txGrid', 'txAudio', 'txPin', 'txPpm', 'txSrc', 'txDrv'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
 async function txSave() {
   const call = $('txCall').value.trim().toUpperCase(), grid = $('txGrid').value.trim().toUpperCase();
   if (!/^[A-Z0-9/]{3,10}$/.test(call) || !/\d/.test(call)) { T('txSaveMsg', 'Callsign looks wrong'); return; }
   if (!/^[A-R]{2}\d\d$/.test(grid)) { T('txSaveMsg', 'Grid must be like OL21'); return; }
-  await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, src: $('txSrc').value, ppm: $('txPpm').value });
+  await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, src: $('txSrc').value, drv: $('txDrv').value, ppm: $('txPpm').value });
   txDirty = false; txFormLoaded = false;
   T('txSaveMsg', 'Saved');
   setTimeout(() => T('txSaveMsg', ''), 2500);

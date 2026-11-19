@@ -36,6 +36,7 @@ void ft8GetCurrentUTC(uint8_t *h, uint8_t *m, uint8_t *s, uint16_t *msOut);   //
 // Station and TX settings, saved in NVS ("ft8tx"); set by serial K commands or /api/ft8tx
 static char myCall[12] = "";
 static char myGrid[5] = "";
+static uint8_t txDrv = 0;             // Si5351 CLK2 drive 0..3 = 2/4/6/8 mA
 static uint8_t txSrc = 0;             // 0 = Si5351 CLK2 (needs the Si5351 active), 1 = ESP32 APLL on GPIO (txPin)
 static int8_t txPin = 0;              // 0 = I2S0 MCLK on GPIO0 (CLK_OUT1), else I2S0 BCK on this GPIO
 static uint16_t txAudioHz = 1500;     // tone 0 above the USB dial, as in WSJT-X
@@ -216,6 +217,7 @@ static void txStart() {
   if (txSi()) {
     txRelay(true);                          // antenna to the PA first, then RF
     vTaskDelay(pdMS_TO_TICKS(TX_RELAY_SETTLE_MS));
+    si5351Drive(SI5351_TX_CLK, txDrv);
     si5351Enable(SI5351_TX_CLK, true);
     txOn = true;
     return;
@@ -374,6 +376,7 @@ static void txSave() {
   p.putString("grid", myGrid);
   p.putChar("pin", txPin);
   p.putUChar("src", txSrc);
+  p.putUChar("drv", txDrv);
   p.putUShort("audio", txAudioHz);
   p.putInt("ppm10", txPpm10);
   p.end();
@@ -389,6 +392,7 @@ static void txLoad() {
   strlcpy(myGrid, p.getString("grid", "").c_str(), sizeof(myGrid));
   txPin = p.getChar("pin", 0);
   txSrc = p.getUChar("src", 0);
+  txDrv = p.getUChar("drv", 0); if (txDrv > 3) txDrv = 0;
   txAudioHz = p.getUShort("audio", 1500);
   txPpm10 = p.getInt("ppm10", 0);
   p.end();
@@ -712,6 +716,11 @@ void ft8TxCommand(const char *args) {
       txSave();
       txReplan();
       break;
+    case 'D':   // KD<0..3>: Si5351 CLK2 drive 2/4/6/8 mA (saved)
+      txStop();
+      txDrv = constrain(atoi(args), 0, 3);
+      txSave();
+      break;
     case 'S':   // KS<0|1>: TX source, 0 = Si5351 CLK2, 1 = ESP32 GPIO/APLL (saved)
       txStop();
       txSrc = atoi(args) ? 1 : 0;
@@ -876,9 +885,9 @@ static String txStatusJson() {
   String out;
   out.reserve(160 + TX_EVENTS * 68);   // one allocation: the heap is tight while pages load
   out = b;
-  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"src\":%u,\"si_ok\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
+  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"src\":%u,\"drv\":%u,\"si_ok\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
            here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0,
-           txSi() ? "true" : "false", (unsigned)txSrc, extRefActive() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
+           txSi() ? "true" : "false", (unsigned)txSrc, (unsigned)txDrv, extRefActive() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;
@@ -913,6 +922,7 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
         txWebPush(line);
       }
       if (param("audio").length()) { snprintf(line, sizeof(line), "o%ld", param("audio").toInt()); txWebPush(line); }
+      if (param("drv").length()) { snprintf(line, sizeof(line), "D%ld", param("drv").toInt()); txWebPush(line); }
       if (param("src").length()) { snprintf(line, sizeof(line), "S%ld", param("src").toInt()); txWebPush(line); }
       if (param("pin").length()) { snprintf(line, sizeof(line), "p%ld", param("pin").toInt()); txWebPush(line); }
       if (param("ppm").length()) { snprintf(line, sizeof(line), "u%ld", lroundf(param("ppm").toFloat() * 10)); txWebPush(line); }
