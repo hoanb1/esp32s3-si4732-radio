@@ -6,6 +6,7 @@
 #include "Draw.h"
 #include "Layout-FT8.h"
 #include "Ft8Tx.h"
+#include "Si5351Ctl.h"
 #include "PskReporter.h"
 #include "Options.h"
 #include "WebUI.h"
@@ -819,6 +820,10 @@ static void runControlAction(const ControlRequest &cr)
       ssbPpmSave();
       rxSetFrequency(currentFrequency);
       if (isSSB()) applySSBBfo();
+    } else if (action == "si5351") {
+      // Bench test: si5351&clk=2&hz=32768 (hz=0 = off); no clk = only scan the bus and init
+      if (getParamStr("clk").length()) si5351Set((uint8_t)getParamStr("clk").toInt(), (uint32_t)getParamStr("hz").toInt());
+      else si5351Probe();
     } else if (action == "adc_auto") {
       ft8SetAdcAuto(getParamStr("val").toInt() != 0);
     } else if (action == "mode") {
