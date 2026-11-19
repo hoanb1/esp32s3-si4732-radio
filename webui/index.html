@@ -310,7 +310,7 @@ td.act button:hover{background:var(--red);color:#fff}
     <div class="row">
       <button class="pri" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">Call CQ</button>
       <button class="dng" onclick="txAction('stop')" title="Stop the QSO and any transmission now">Stop</button>
-      <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto off</span></label>
+      <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto QSO</span></label>
       <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable2" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText2">Enable TX</span></label>
       <span class="note" id="txNote"></span>
     </div>
@@ -1567,7 +1567,7 @@ function renderTx(st) {
   const auto = st.auto || 0;
   if (document.activeElement !== $('txAuto')) $('txAuto').checked = auto > 0;
   $('txAuto').disabled = !canSend;
-  T('txAutoText', auto ? `Auto on · ${st.auto_qsos}/10 QSO` : 'Auto off');
+  T('txAutoText', auto ? `Auto QSO · ${st.auto_qsos}/10` : 'Auto QSO');
   const ev = (st.events || []).join('\n') || 'No transmissions yet';
   if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
 }
