@@ -1003,6 +1003,9 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
     } else if (action == "auto") {
       snprintf(line, sizeof(line), "z%u", (unsigned)constrain(param("mode").toInt(), 0, 2));
       txWebPush(line);
+    } else if (action == "wspr") {
+      snprintf(line, sizeof(line), "W%ld %ld", param("dbm").length() ? param("dbm").toInt() : 10, param("count").length() ? param("count").toInt() : 1);
+      txWebPush(line);
     } else if (action == "stop") {
       txWebPush("x");
       txWebPush("0");
