@@ -1355,6 +1355,7 @@ static int buildStatusJson(char *json, size_t cap)
   uint16_t adcSlotTail;
   ft8GetAdcClock(&adcSlot, &adcSlotRaw, &adcSlotTail);
 
+  char digDiag[120]; audioDigitalDiag(digDiag, sizeof(digDiag));
   int len = snprintf(json, cap,
     "{\"freq_khz\":\"%s\",\"raw_freq\":%u,\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
     "\"band_min\":%u,\"band_max\":%u,"
@@ -1368,7 +1369,7 @@ static int buildStatusJson(char *json, size_t cap)
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
     "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"heap_largest\":%u,\"heap_min\":%u,\"msg_count\":%lu,"
-    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d}",
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,%s}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1389,7 +1390,7 @@ static int buildStatusJson(char *json, size_t cap)
     (unsigned long)ft8GetTotalDecoded(),
     (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail,
     audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
-    (unsigned long)audioDigitalFrames(), audioDigitalPeak(false)
+    (unsigned long)audioDigitalFrames(), audioDigitalPeak(false), digDiag
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;

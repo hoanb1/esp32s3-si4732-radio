@@ -475,7 +475,8 @@ static void adcTask(void *arg) {
 static bool digWanted = false, digRunning = false;
 static i2s_chan_handle_t digChan = NULL;
 static volatile uint32_t digFrames = 0;
-static volatile int16_t digPeak = 0;
+static volatile int16_t digPeak = 0, digPeakR = 0;
+static volatile uint16_t digOr = 0, digRaw[6];
 
 bool audioDigitalWanted() {
   Preferences p; bool v = false;
@@ -489,6 +490,7 @@ void audioDigitalSet(bool on) {
 }
 bool audioDigitalRunning() { return digRunning; }
 uint32_t audioDigitalFrames() { return digFrames; }
+void audioDigitalDiag(char *out, size_t n) { snprintf(out, n, "\"dig_peakR\":%d,\"dig_or\":%u,\"dig_raw\":\"%04x %04x %04x %04x %04x %04x\"", (int)digPeakR, (unsigned)digOr, digRaw[0], digRaw[1], digRaw[2], digRaw[3], digRaw[4], digRaw[5]); }
 int audioDigitalPeak(bool clear) { int v = digPeak; if (clear) digPeak = 0; return v; }
 
 static void digTask(void *arg) {
@@ -498,6 +500,8 @@ static void digTask(void *arg) {
     if (i2s_channel_read(digChan, buf, sizeof(buf), &got, 100) != ESP_OK || got < 12) continue;
     int frames = got / 4;
     int16_t pk = 0;
+    for (int i = 0; i < 6; i++) digRaw[i] = (uint16_t)buf[i];
+    for (int i = 0; i < frames; i++) { int16_t r = buf[i * 2 + 1]; int16_t ar = r < 0 ? -r : r; if (ar > digPeakR) digPeakR = ar; digOr |= (uint16_t)buf[i * 2] | (uint16_t)r; }
     for (int i = 0; i + 2 < frames; i += 3) {
       int32_t s = ((int32_t)buf[i * 2] + buf[i * 2 + 2] + buf[i * 2 + 4]) / 3;
       int16_t a = s < 0 ? -s : s; if (a > pk) pk = a;

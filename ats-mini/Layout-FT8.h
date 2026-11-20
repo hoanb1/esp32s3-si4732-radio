@@ -79,6 +79,7 @@ void audioDigitalSet(bool on);
 bool audioDigitalRunning();
 uint32_t audioDigitalFrames();
 int audioDigitalPeak(bool clear);
+void audioDigitalDiag(char *out, size_t n);
 void ft8SetAdcVolume(uint8_t v);
 void ft8SetAdcManual(uint8_t v);
 void ft8SetAdcAuto(bool on);
