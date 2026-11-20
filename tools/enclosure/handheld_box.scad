@@ -1,70 +1,75 @@
-// Handheld enclosure for the ESP32 + SI4732 radio with Si5351 TX, PA, 20 m LPF, T/R relay and 2x18650.
-// ALL DIMENSIONS BELOW ARE ASSUMED (not measured). Measure your boards and edit the "Parts" block first.
+// Handheld enclosure: ATS-Mini (ESP32 + SI4732 + 2.0" LCD) + Si5351 + PA + 20 m LPF + T/R relay + 2x18650.
 // Render:  openscad -D 'part="base"' -o base.stl handheld_box.scad     (part = "base" | "lid" | "both")
+//
+// MEASURED from the ATS-Mini Gerber files (github.com/esp32-si4732/esp32-si4732-oshwhub, SI4732 v1.2):
+//   PCB 75.6 x 30.5 mm, 4 x M2 pads (dia 2.0) 2.7 mm from each edge (70.2 x 25.1 mm spacing),
+//   USB-C on the left short edge (y ~ 3.2 from the lower edge), encoder near the right end,
+//   LCD bezel piece from the vendor 3D shell: 49.7 x 25.8 mm centred 29.2 mm from the left edge, 15.2 mm from the lower edge.
+// DATASHEET/LISTING values: 18650 dia 18.6 x 65.5 (max), 2x18650 holder 77-78 x 40-41, Adafruit Si5351 31 x 22,
+//   QRP Labs LPF kit 38.1 x 12.7, SMA panel hole 6.0 (D-flat), EC11 shaft 6, bushing M7 -> hole 7.2.
+// ASSUMED (not found, check on your parts): heights of boards, PA board size, encoder/button height, PCB thickness 1.6.
 $fn = 48;
 part = "both";
 
-// ---- Outer shell ----
-wall   = 2.2;
-in_l   = 150;   // inner length (X): RX board on the left, RF section on the right
-in_w   = 72;    // inner width (Y)
-base_h = 24;    // inner height of the tray
-lid_h  = 9;     // inner height of the lid
-corner = 4;
+wall = 2.2; corner = 4;
+in_l = 150;          // inner X
+in_w = 80;           // inner Y: battery strip (front) + radio strip (back)
+base_h = 26;         // tray inner height (holder is ~22 high)
+lid_h  = 10;
 
-// ---- Parts (assumed sizes, mm) ----
-radio_l = 70; radio_w = 40;         // ESP32+SI4732+LCD board footprint
-lcd_win = [50, 28];                 // LCD window in the lid
-lcd_pos = [30, in_w/2];             // window centre (x, y) from inner corner, lid
-enc_pos = [62, in_w/2 + 14]; enc_d = 9;          // rotary encoder hole
-btn_pos = [[62, in_w/2 - 2], [62, in_w/2 - 14]]; btn_d = 7;
-rf_x    = 84;                       // divider wall x (RF section to the right of it)
-standoff_h = 6; standoff_d = 6; hole_d = 2.5;    // M2.5 standoffs
-radio_hole_pos = [[8,16],[8,56],[70,16],[70,56]];// radio board mounting holes (inner coords)
-rf_hole_pos    = [[96,14],[96,58],[140,14],[140,58]]; // RF modules plate holes
-bat_l = 70; bat_w = 38; bat_h = 19;              // 2x18650 side by side pocket
-sma_d = 6.5; usbc = [10, 4];
+// --- ATS-Mini board, placed in the back strip (high Y) at the left ---
+pcb_l = 75.6; pcb_w = 30.5; pcb_t = 1.6;
+pcb_x = 4; pcb_y = in_w - pcb_w - 3;                 // inner coords of the PCB lower-left corner
+pcb_holes = [[2.7, 2.7], [72.9, 2.7], [2.7, 27.8], [72.9, 27.8]];   // M2 pads, from PCB corner
+standoff_h = 4; standoff_d = 5.2; m2_pilot = 1.7;
+lcd_win = [47, 24.5]; lcd_c = [29.2, 15.2];         // LCD window size and centre, from PCB corner
+enc_c = [69.0, 15.2]; enc_hole = 7.2;                // encoder: M7 bushing (position approx., near the right end of the PCB)
+usbc_y = 3.2; usbc = [10, 4];                        // USB-C slot on the left wall
 
-module rrect(l, w, h, r) {
-  hull() for (x=[r, l-r], y=[r, w-r]) translate([x, y, 0]) cylinder(r=r, h=h);
-}
+// --- 2x18650 bay (front strip, under/left of the RF area) ---
+bat_x = 4; bat_y = 3; bat_l = 78; bat_w = 41;        // holder footprint
 
+// --- RF section (right side): Si5351 31x22, LPF 38.1x12.7, PA ~40x25 (assumed), relay, glued/taped to a plate ---
+rf_x = 88;                                           // divider wall x
+sma_d = 6.2;
+
+module rrect(l, w, h, r) { hull() for (x=[r, l-r], y=[r, w-r]) translate([x, y, 0]) cylinder(r=r, h=h); }
 module shell(h) {
   difference() {
     rrect(in_l + 2*wall, in_w + 2*wall, h + wall, corner);
     translate([wall, wall, wall]) rrect(in_l, in_w, h + 1, corner - 1);
   }
 }
-
 boss_pos = [[6,6],[in_l-6,6],[6,in_w-6],[in_l-6,in_w-6]];
+function ip(p) = [wall + p[0], wall + p[1]];        // inner -> outer coords
 
 module base() {
   difference() {
     union() {
       shell(base_h);
-      // screw bosses
-      for (p = boss_pos) translate([wall+p[0], wall+p[1], wall]) cylinder(d=7, h=base_h);
-      // standoffs
-      for (p = radio_hole_pos) translate([wall+p[0], wall+p[1], wall]) cylinder(d=standoff_d, h=standoff_h);
-      for (p = rf_hole_pos)    translate([wall+p[0], wall+p[1], wall]) cylinder(d=standoff_d, h=standoff_h);
-      // RF shield divider with a 14 mm gap at the bottom for coax / power wires
+      for (p = boss_pos) translate([ip(p)[0], ip(p)[1], wall]) cylinder(d=7, h=base_h);
+      for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+pcb_y+h[1], wall]) cylinder(d=standoff_d, h=standoff_h);
+      // RF divider with a 14 mm gap at the floor for coax/power wires
       difference() {
         translate([wall+rf_x, wall, wall]) cube([1.6, in_w, base_h]);
         translate([wall+rf_x-1, wall+in_w/2-7, wall]) cube([4, 14, 6]);
       }
-      // battery pocket walls (under the radio board, left-bottom)
+      // battery bay retaining walls (open on top, cells held by the holder)
+      difference() {
+        translate([wall+bat_x-1.5, wall+bat_y-1.5, wall]) cube([bat_l+3, bat_w+3, 10]);
+        translate([wall+bat_x, wall+bat_y, wall-1]) cube([bat_l, bat_w, 12]);
+      }
     }
-    // pilot holes in bosses and standoffs
-    for (p = boss_pos) translate([wall+p[0], wall+p[1], base_h-8]) cylinder(d=2.6, h=20);
-    for (p = concat(radio_hole_pos, rf_hole_pos)) translate([wall+p[0], wall+p[1], wall+1]) cylinder(d=hole_d, h=standoff_h+1);
-    // SMA antenna on the right end wall
+    for (p = boss_pos) translate([ip(p)[0], ip(p)[1], base_h-8]) cylinder(d=2.6, h=20);
+    for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+pcb_y+h[1], wall+1]) cylinder(d=m2_pilot, h=standoff_h+1);
+    // SMA on the right end wall
     translate([in_l+wall-1, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=sma_d, h=wall+2);
-    // USB-C on the left end wall
-    translate([-1, wall+in_w/2-usbc[0]/2, wall+6]) cube([wall+2, usbc[0], usbc[1]]);
-    // power switch on the front wall
-    translate([wall+20, -1, wall+base_h-8]) rotate([-90,0,0]) cylinder(d=6.2, h=wall+2);
-    // vents for the PA on the back wall
-    for (i=[0:4]) translate([wall+100+i*8, in_w+wall-1, wall+6]) cube([3, wall+2, 12]);
+    // USB-C on the left wall, aligned with the PCB connector
+    translate([-1, wall+pcb_y+usbc_y-usbc[0]/2+0, wall+standoff_h+pcb_t-1]) cube([wall+2, usbc[0], usbc[1]]);
+    // power switch, front wall
+    translate([wall+100, -1, wall+base_h-8]) rotate([-90,0,0]) cylinder(d=6.2, h=wall+2);
+    // PA vents on the back wall (RF side)
+    for (i=[0:4]) translate([wall+rf_x+10+i*10, in_w+wall-1, wall+6]) cube([3, wall+2, 12]);
   }
 }
 
@@ -72,17 +77,12 @@ module lid() {
   difference() {
     union() {
       shell(lid_h);
-      for (p = boss_pos) translate([wall+p[0], wall+p[1], wall]) cylinder(d=7, h=lid_h);
+      for (p = boss_pos) translate([ip(p)[0], ip(p)[1], wall]) cylinder(d=7, h=lid_h);
     }
-    // screw clearance + countersink from outside
-    for (p = boss_pos) translate([wall+p[0], wall+p[1], -1]) {
-      cylinder(d=3.4, h=wall+lid_h+2);
-      cylinder(d1=6.4, d2=3.4, h=2);
-    }
-    // openings (the lid is printed top-down, so the window is in its floor)
-    translate([wall+lcd_pos[0]-lcd_win[0]/2, wall+lcd_pos[1]-lcd_win[1]/2, -1]) cube([lcd_win[0], lcd_win[1], wall+2]);
-    translate([wall+enc_pos[0], wall+enc_pos[1], -1]) cylinder(d=enc_d, h=wall+2);
-    for (b = btn_pos) translate([wall+b[0], wall+b[1], -1]) cylinder(d=btn_d, h=wall+2);
+    for (p = boss_pos) translate([ip(p)[0], ip(p)[1], -1]) { cylinder(d=3.4, h=wall+lid_h+2); cylinder(d1=6.4, d2=3.4, h=2); }
+    // LCD window and encoder hole (lid is printed face-down, openings are in its floor)
+    translate([wall+pcb_x+lcd_c[0]-lcd_win[0]/2, wall+pcb_y+lcd_c[1]-lcd_win[1]/2, -1]) cube([lcd_win[0], lcd_win[1], wall+2]);
+    translate([wall+pcb_x+enc_c[0], wall+pcb_y+enc_c[1], -1]) cylinder(d=enc_hole, h=wall+2);
   }
 }
 
