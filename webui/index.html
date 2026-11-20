@@ -337,6 +337,8 @@ td.act button:hover{background:var(--red);color:#fff}
       <button class="dng" onclick="txAction('stop')">Stop</button>
       <span class="note" id="wsprNote"></span>
     </div>
+    <div class="row"><button onclick="wsprTune()" title="Dial 14096 kHz USB: WSPR appears at about 1100 Hz">Tune 20 m WSPR (receive)</button><span class="note">receive decoder: tools/wspr_rx.py</span></div>
+    <div class="logs mono" id="wsprRx" style="min-height:44px;max-height:150px">No WSPR spots received yet (time, SNR, dT, kHz, call, grid, dBm)</div>
     <div class="note">20 m WSPR: centre 14.0971 MHz (dial 14.0956 USB + 1500 Hz). Needs the Si5351, the T/R relay and a low-pass filter. Each message is about 111 s; spots appear on <a href="https://wsprnet.org/drupal/wsprnet/spots" target="_blank" rel="noopener">wsprnet.org</a> a few minutes later.</div>
    </div>
    <div class="card">
@@ -1602,6 +1604,13 @@ function wsprRender(st) {
     : `${st.call} ${st.grid} · 14.0971 MHz · T/R relay ${st.relay ? 'TX' : 'RX'}` + (st.enabled ? '' : ' · turn Enable TX on'));
   C('wsprPlan', ok ? 'plan' : 'plan warn');
   $('wsprBtn').disabled = !ok || !st.enabled || busy;
+  const rx = (st.wspr_rx || []).join('\n') || 'No WSPR spots received yet (time, SNR, dT, kHz, call, grid, dBm)';
+  if ($('wsprRx').textContent !== rx) $('wsprRx').textContent = rx;
+}
+async function wsprTune() {
+  T('wsprNote', 'tuning...');
+  await sendCtrl('freq', { freq: 14096, unit: 'khz' });
+  setTimeout(() => T('wsprNote', ''), 3000);
 }
 async function wsprSend() {
   if (!txState.enabled) { T('wsprNote', 'Turn Enable TX on first'); setTimeout(() => T('wsprNote', ''), 2500); return; }

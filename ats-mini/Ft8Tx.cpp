@@ -939,6 +939,26 @@ void ft8TxPoll() {
   }
 }
 
+// WSPR spots decoded off-radio (tools/wspr_rx.py posts them): newest kept for the web card
+#define WSPR_RX_MAX 10
+static char wsprRx[WSPR_RX_MAX][60];
+static uint8_t wsprRxHead = 0, wsprRxCount = 0;
+static void wsprRxAdd(const String &line) {
+  char b[60];
+  size_t n = 0;
+  for (size_t i = 0; i < line.length() && n < sizeof(b) - 1; i++) {
+    char c = line[i];
+    if (isalnum((unsigned char)c) || c == ' ' || c == '/' || c == '.' || c == ':' || c == '+' || c == '-' || c == '<' || c == '>') b[n++] = c;
+  }
+  b[n] = 0;
+  if (!n) return;
+  portENTER_CRITICAL(&txWebMux);
+  strlcpy(wsprRx[wsprRxHead], b, sizeof(wsprRx[0]));
+  wsprRxHead = (wsprRxHead + 1) % WSPR_RX_MAX;
+  if (wsprRxCount < WSPR_RX_MAX) wsprRxCount++;
+  portEXIT_CRITICAL(&txWebMux);
+}
+
 static String txStatusJson() {
   char b[260];
   bool here = planOk && planForHz == txWantHz() && currentMode == USB;
@@ -965,7 +985,18 @@ static String txStatusJson() {
     out += txEvents[k];
     out += "\"";
   }
-  out += "]}";
+  out += "]";
+  if (wsprRxCount) {
+    out += ",\"wspr_rx\":[";
+    for (uint8_t i = 0; i < wsprRxCount; i++) {
+      uint8_t k = (wsprRxHead + WSPR_RX_MAX - 1 - i) % WSPR_RX_MAX;   // newest first
+      out += i ? ",\"" : "\"";
+      out += wsprRx[k];
+      out += "\"";
+    }
+    out += "]";
+  }
+  out += "}";
   return out;
 }
 
@@ -1006,6 +1037,8 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
     } else if (action == "wspr") {
       snprintf(line, sizeof(line), "W%ld %ld", param("dbm").length() ? param("dbm").toInt() : 10, param("count").length() ? param("count").toInt() : 1);
       txWebPush(line);
+    } else if (action == "wsprspot") {
+      wsprRxAdd(param("s"));
     } else if (action == "stop") {
       txWebPush("x");
       txWebPush("0");
