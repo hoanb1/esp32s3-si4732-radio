@@ -214,7 +214,7 @@ void setup()
     while(1) delay(100);
   }
 
-  rx.setup(RESET_PIN, 0, MW_BAND_TYPE, audioDigitalOn() ? 0b10110000 : SI473X_ANALOG_AUDIO, extRefActive() ? XOSCEN_RCLK : XOSCEN_CRYSTAL, 0);
+  rx.setup(RESET_PIN, 0, MW_BAND_TYPE, audioDigitalOn() ? 0b00001011 : SI473X_ANALOG_AUDIO, extRefActive() ? XOSCEN_RCLK : XOSCEN_CRYSTAL, 0);
   delay(250);
   extRefDone();
 

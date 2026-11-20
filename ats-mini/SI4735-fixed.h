@@ -96,7 +96,8 @@ class SI4735_fixed: public SI4735
       waitToSend();
       Wire.beginTransmission(deviceAddress);
       Wire.write(POWER_UP);
-      Wire.write(0b00110001);
+      // Digital audio needs XOSCEN = 0 (AN332); analog keeps the historic XOSCEN = 1
+      Wire.write(this->currentAudioMode == SI473X_ANALOG_AUDIO ? 0b00110001 : (0b00100001 | (this->currentClockType << 4)));
       Wire.write(this->currentAudioMode);
       Wire.endTransmission();
       delay(maxDelayAfterPouwerUp);
