@@ -477,6 +477,7 @@ static i2s_chan_handle_t digChan = NULL;
 static volatile uint32_t digFrames = 0;
 static volatile int16_t digPeak = 0, digPeakR = 0;
 static volatile uint16_t digOr = 0, digRaw[6];
+static volatile int32_t digPropRate = -9, digPropFmt = -9, digPropVol = -9, digPropMute = -9;
 
 bool audioDigitalWanted() {
   Preferences p; bool v = false;
@@ -490,7 +491,7 @@ void audioDigitalSet(bool on) {
 }
 bool audioDigitalRunning() { return digRunning; }
 uint32_t audioDigitalFrames() { return digFrames; }
-void audioDigitalDiag(char *out, size_t n) { snprintf(out, n, "\"dig_peakR\":%d,\"dig_or\":%u,\"dig_raw\":\"%04x %04x %04x %04x %04x %04x\"", (int)digPeakR, (unsigned)digOr, digRaw[0], digRaw[1], digRaw[2], digRaw[3], digRaw[4], digRaw[5]); }
+void audioDigitalDiag(char *out, size_t n) { int pr = digPeakR; digPeakR = 0; snprintf(out, n, "\"dig_fmt\":%ld,\"dig_rate\":%ld,\"dig_vol\":%ld,\"dig_mute\":%ld,\"dig_peakR\":%d,\"dig_or\":%u,\"dig_raw\":\"%04x %04x %04x %04x %04x %04x\"", (long)digPropFmt, (long)digPropRate, (long)digPropVol, (long)digPropMute, pr, (unsigned)digOr, digRaw[0], digRaw[1], digRaw[2], digRaw[3], digRaw[4], digRaw[5]); }
 int audioDigitalPeak(bool clear) { int v = digPeak; if (clear) digPeak = 0; return v; }
 
 static void digTask(void *arg) {
@@ -1287,6 +1288,8 @@ void ft8ApplyAudio() {
   if (digRunning) {   // Si4732 digital out: 16-bit I2S stereo, rising edge, 48 kHz (DCLK/DFS are already running)
     rx.digitalOutputFormat(0, 0, 0, 0);
     rx.digitalOutputSampleRate(DIG_RATE);
+    digPropFmt = rx.getProperty(0x0102);
+    digPropRate = rx.getProperty(0x0104);
   }
   if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
     rx.setVolume(digital ? ft8AdcVolume : volume);
@@ -1295,6 +1298,7 @@ void ft8ApplyAudio() {
 #if PIN_AMP_EN >= 0
   digitalWrite(PIN_AMP_EN, speaker ? HIGH : LOW);
 #endif
+  if (digRunning) { digPropVol = rx.getProperty(0x4000); digPropMute = rx.getProperty(0x4001); }
 }
 
 void ft8SetAdcVolume(uint8_t v) {

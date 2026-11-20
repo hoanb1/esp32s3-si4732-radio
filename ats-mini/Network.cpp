@@ -1390,7 +1390,7 @@ static int buildStatusJson(char *json, size_t cap)
     (unsigned long)ft8GetTotalDecoded(),
     (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail,
     audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
-    (unsigned long)audioDigitalFrames(), audioDigitalPeak(false), digDiag
+    (unsigned long)audioDigitalFrames(), audioDigitalPeak(true), digDiag
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;
@@ -1485,7 +1485,7 @@ static void wsTick()
   // Status JSON and new waterfall rows, every 500 ms
   if (now - lastStatusMs >= 500) {
     lastStatusMs = now;
-    static char json[1024];
+    static char json[1280];
     int len = buildStatusJson(json, sizeof(json));
     // The status frame doubles as the page's heartbeat: a page that misses it falls back to HTTP polling,
     // which costs far more heap than the frame. So it gets a much lower reserve than the waterfall, and a
@@ -1619,7 +1619,7 @@ static void webInit()
 
   // /api/status - Real-time radio, FT8 slot, and WiFi status
   server.on("/api/status", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    static char json[1024];
+    static char json[1280];
     int len = buildStatusJson(json, sizeof(json));
     AsyncWebServerResponse *response = new FlashResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
     response->addHeader("Cache-Control", "no-store");
