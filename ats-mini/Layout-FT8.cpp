@@ -1290,6 +1290,7 @@ void ft8ApplyAudio() {
     rx.digitalOutputSampleRate(DIG_RATE);
     digPropFmt = rx.getProperty(0x0102);
     digPropRate = rx.getProperty(0x0104);
+    ft8AddLog("[DIG] fmt=%ld rate=%ld mode=%u", (long)digPropFmt, (long)digPropRate, (unsigned)currentMode);
   }
   if (!muteOn(MUTE_MAIN) && !muteOn(MUTE_SQUELCH)) {
     rx.setVolume(digital ? ft8AdcVolume : volume);
