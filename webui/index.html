@@ -325,6 +325,20 @@ td.act button:hover{background:var(--red);color:#fff}
     <div class="note">Or press Answer on a CQ in the decoded list.</div>
     <div class="logs mono" id="txEvents" style="min-height:44px;max-height:130px">No transmissions yet</div>
    </div>
+   <div class="card" id="wsprCard">
+    <div class="ch"><h2>WSPR transmit</h2><span class="row"><span class="badge" id="wsprBadge">idle</span></span></div>
+    <div class="plan" id="wsprPlan">Loading…</div>
+    <div class="row">
+      <span class="note">Power</span>
+      <select id="wsprDbm"><option value="0">0 dBm</option><option value="7">7 dBm</option><option value="10" selected>10 dBm</option><option value="13">13 dBm</option><option value="17">17 dBm</option><option value="20">20 dBm</option><option value="23">23 dBm</option></select>
+      <span class="note">Times</span>
+      <input type="number" id="wsprCount" min="1" max="30" value="3" style="width:60px">
+      <button class="pri" id="wsprBtn" disabled onclick="wsprSend()" title="One transmission starts 1 s into each even UTC minute, every 4 minutes">Start</button>
+      <button class="dng" onclick="txAction('stop')">Stop</button>
+      <span class="note" id="wsprNote"></span>
+    </div>
+    <div class="note">20 m WSPR: centre 14.0971 MHz (dial 14.0956 USB + 1500 Hz). Needs the Si5351, the T/R relay and a low-pass filter. Each message is about 111 s; spots appear on <a href="https://wsprnet.org/drupal/wsprnet/spots" target="_blank" rel="noopener">wsprnet.org</a> a few minutes later.</div>
+   </div>
    <div class="card">
     <div class="ch"><h2>PSKReporter: heard me</h2><span class="row"><span class="badge" id="heardBadge">not checked</span><a class="note" href="https://pskreporter.info/pskmap.html" target="_blank" rel="noopener">pskreporter.info</a></span></div>
     <div class="row"><button class="s" id="heardBtn" onclick="heardCheck(true)">Check now</button><span class="note" id="heardNext"></span></div>
@@ -1576,6 +1590,24 @@ function renderTx(st) {
   T('txAutoText', auto ? `Auto QSO · ${st.auto_qsos}/10` : 'Auto QSO');
   const ev = (st.events || []).join('\n') || 'No transmissions yet';
   if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
+  wsprRender(st);
+}
+function wsprRender(st) {
+  const ok = !!(st.call && st.grid && st.si && st.si_ok);
+  const busy = !!(st.on || st.busy);
+  C('wsprBadge', st.on ? 'badge err' : busy ? 'badge warn' : st.enabled ? 'badge ok' : 'badge');
+  T('wsprBadge', st.on ? 'on air' : busy ? 'waiting for the minute' : st.enabled ? 'ready' : 'idle');
+  T('wsprPlan', !st.call || !st.grid ? 'Set your callsign and grid in Settings first.'
+    : !ok ? 'Needs the Si5351 on the bus (External reference on).'
+    : `${st.call} ${st.grid} · 14.0971 MHz · T/R relay ${st.relay ? 'TX' : 'RX'}` + (st.enabled ? '' : ' · turn Enable TX on'));
+  C('wsprPlan', ok ? 'plan' : 'plan warn');
+  $('wsprBtn').disabled = !ok || !st.enabled || busy;
+}
+async function wsprSend() {
+  if (!txState.enabled) { T('wsprNote', 'Turn Enable TX on first'); setTimeout(() => T('wsprNote', ''), 2500); return; }
+  await txAction('wspr', { dbm: $('wsprDbm').value, count: $('wsprCount').value });
+  T('wsprNote', 'queued');
+  setTimeout(() => T('wsprNote', ''), 4000);
 }
 // Status loop only in FT8/FT4 mode; one fetch when the drawer needs the form values
 async function fetchTx() {
