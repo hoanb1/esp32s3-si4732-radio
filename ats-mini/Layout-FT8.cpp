@@ -469,7 +469,7 @@ static void adcTask(void *arg) {
 // ESP32 drives DCLK (GPIO21) and DFS (GPIO22); DOUT (Si4732 pin 16) goes to GPIO34. Each 3 frames are averaged into one
 // 16 kHz sample (the Si4732 audio is already below 4 kHz) and written to the same raw ring as the SAR ADC ISR,
 // scaled to 12 bits with a 2048 offset, so the resampler and everything after it are unchanged.
-#define DIG_PIN_BCK 21
+#define DIG_PIN_BCK 19
 #define DIG_PIN_WS  22
 #define DIG_RATE    48000
 static bool digWanted = false, digRunning = false;

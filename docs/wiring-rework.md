@@ -33,7 +33,7 @@ Firmware: Si4732 `REFCLK_FREQ`/`REFCLK_PRESCALE` set for 32.768 kHz, SSB patch r
 
 | # | From | To | Note |
 |---|---|---|---|
-| B1 | ESP32 GPIO21 (I2S BCK) | Si4732 pin 2 (DCLK) | 47-100 ohm in series; free only after A6 |
+| B1 | ESP32 GPIO19 (I2S BCK; the board has no GPIO21 pin) | Si4732 pin 2 (DCLK) | 47-100 ohm in series; free only after A6 |
 | B2 | ESP32 GPIO22 (I2S WS) | Si4732 pin 1 (DFS) | 47-100 ohm in series; cut LOUT trace to GPIO34 and amp |
 | B3 | Si4732 pin 16 (DOUT) | ESP32 GPIO34 (I2S DIN) | cut ROUT trace to the amp; GPIO34 is input-only, fine |
 
@@ -45,7 +45,7 @@ Unverified: whether the SSB patch outputs audio on the digital path. Do phase A 
 | ESP32 | To |
 |---|---|
 | GPIO26 | T/R relay driver (HIGH = TX) |
-| GPIO19 | PA enable (HIGH = on, LOW at boot) |
+| GPIO12 | PA enable (optional, not used yet) |
 | - | Si5351 CLK0 -> PA -> LPF -> relay -> antenna; relay NC -> Si4732 AMI |
 
 See `docs/ft8-transmit-si5351.md`.
@@ -57,7 +57,7 @@ See `docs/ft8-transmit-si5351.md`.
 | GPIO13 SDA | SDA (12) | SDA | |
 | GPIO14 SCL | SCLK (11) | SCL | |
 | GPIO27 | RST (9) | | |
-| GPIO21 | DCLK (2) | | |
+| GPIO19 | DCLK (2) | | |
 | GPIO22 | DFS (1) | | |
 | GPIO34 | DOUT (16) | | |
 | | RCLK (13) | CLK2 | |
