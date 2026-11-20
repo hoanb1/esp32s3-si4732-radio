@@ -835,7 +835,9 @@ static void runControlAction(const ControlRequest &cr)
       int hi = 0; uint32_t mv = 0;
       for (int i = 0; i < 4000; i++) hi += gpio_get_level((gpio_num_t)34);
       for (int i = 0; i < 16; i++) mv += analogReadMilliVolts(34);
-      ft8AddLog("[PIN34] high %d of 4000 reads, average %u mV", hi, (unsigned)(mv / 16));
+      int lo = 4095, hi2 = 0;
+      for (int i = 0; i < 2000; i++) { int v = analogRead(34); if (v < lo) lo = v; if (v > hi2) hi2 = v; }
+      ft8AddLog("[PIN34] high %d of 4000 reads, average %u mV, ADC min %d max %d", hi, (unsigned)(mv / 16), lo, hi2);
     } else if (action == "audio_in") {
       // Audio input: val=1 Si4732 digital I2S (needs the Si5351 reference + wires DCLK/DFS/DOUT), val=0 analog ADC; saved, restart
       audioDigitalSet(getParamStr("val").toInt() != 0);
