@@ -63,7 +63,7 @@ See `docs/ft8-transmit-si5351.md`.
 | | RCLK (13) | CLK2 | |
 | | | CLK0 | PA input |
 | GPIO26 | | | relay |
-| GPIO19 | | | PA enable |
+| GPIO12 | | | PA enable |
 
 ## Firmware facts (checked in code)
 
