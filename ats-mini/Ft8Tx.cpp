@@ -5,6 +5,7 @@
 #include "Layout-FT8.h"
 #include "Menu.h"
 #include "Storage.h"
+#include "Wspr.h"
 
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
@@ -316,6 +317,55 @@ static void txMessageTask(void *) {
     WiFi.reconnect();
   }
   Serial.printf("[TX] '%s' %s\r\n", txText, txAbort ? "aborted" : "sent");
+  txTask = NULL;
+  vTaskDelete(NULL);
+}
+
+// ---- WSPR: 162 symbols from the Si5351, started 1 s into an even UTC minute ----
+// Band centre: dial 14.0956 MHz USB + 1500 Hz; the four tones span 4.4 Hz around it.
+#define WSPR_CENTER_HZ 14097100.0
+static uint8_t wsprSym[WSPR_NN];
+static int wsprDbm = 10;
+static int wsprCount = 1;
+
+static void wsprWaitUntil(int64_t t) { txWaitUntil(t); }
+
+static void txWsprTask(void *) {
+  const double base = WSPR_CENTER_HZ - 1.5 * WSPR_TONE_HZ;
+  for (int n = 0; n < wsprCount && !txAbort; n++) {
+    uint8_t h, m, s;
+    uint16_t ms;
+    ft8GetCurrentUTC(&h, &m, &s, &ms);
+    uint32_t into = ((m % 2) * 60UL + s) * 1000UL + ms;   // ms into this even/odd minute pair
+    int64_t wait = 120000LL - into + 1000;
+    if (wait > 120000) wait -= 120000;                      // still before 1 s of this even minute
+    int64_t t0 = esp_timer_get_time() + wait * 1000;
+    Serial.printf("[WSPR] %d/%d '%s %s %d' starts in %.1f s\r\n", n + 1, wsprCount, myCall, myGrid, wsprDbm, wait / 1000.0);
+    wsprWaitUntil(t0 - 100000);
+    if (txAbort) break;
+    plan = {};
+    plan.baseHz = base;
+    plan.stepHz = WSPR_TONE_HZ;
+    plan.stepsPerTone = 1;
+    si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((base + wsprSym[0] * WSPR_TONE_HZ) * 100.0));
+    wsprWaitUntil(t0);
+    if (txAbort) break;
+    txStart();
+    for (int i = 0; i < WSPR_NN && !txAbort; i++) {
+      wsprWaitUntil(t0 + llround(i * 682666.6667));
+      si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((base + wsprSym[i] * WSPR_TONE_HZ) * 100.0));
+    }
+    wsprWaitUntil(t0 + llround(WSPR_NN * 682666.6667));
+    txStop();
+    planForHz = 0;   // force a re-plan for FT8 afterwards
+    if (n + 1 < wsprCount && !txAbort) wsprWaitUntil(esp_timer_get_time() + 100000);
+    // skip one slot (about 25 % duty, as is usual for WSPR): next loop starts at the following even minute
+    if (n + 1 < wsprCount && !txAbort) {
+      int64_t tNext = esp_timer_get_time() + 2LL * 60 * 1000000 - 5000000;
+      wsprWaitUntil(tNext);
+    }
+  }
+  Serial.printf("[WSPR] %s\r\n", txAbort ? "aborted" : "done");
   txTask = NULL;
   vTaskDelete(NULL);
 }
@@ -773,6 +823,21 @@ void ft8TxCommand(const char *args) {
       txStop();
       xTaskCreatePinnedToCore(txToneTestTask, "ft8tx", 4096, NULL, 20, &txTask, 1);
       break;
+    case 'W':   // KW<dBm> [count]: WSPR on 14.0971 MHz centre (dial 14.0956 USB + 1500 Hz), one every 4 minutes
+    {
+      if (!txAllowed()) break;
+      if (!txSi()) { Serial.println("[WSPR] needs the Si5351 on the bus (external reference enabled)"); break; }
+      if (!myCall[0] || !myGrid[0]) { Serial.println("[WSPR] set the station first: Kn<call> <grid>"); break; }
+      int dbm = 10, cnt = 1;
+      sscanf(args, "%d %d", &dbm, &cnt);
+      if (!wsprEncode(myCall, myGrid, dbm, wsprSym)) { Serial.println("[WSPR] call/grid/power not valid for a type 1 message"); break; }
+      wsprDbm = dbm;
+      wsprCount = constrain(cnt, 1, 30);
+      txStop();
+      txAbort = false;
+      xTaskCreatePinnedToCore(txWsprTask, "wspr", 4096, NULL, 20, &txTask, 1);
+      break;
+    }
     case 'm':   // Km<message>: send one FT8 message in the next slot
       txQueue(args);
       break;
