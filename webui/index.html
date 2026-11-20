@@ -720,7 +720,8 @@ scaleCanvas.addEventListener('click', e => {
   if (isFm) sendCtrl('freq', { freq: (Math.round(f / 10) * 10 / 100).toFixed(2), unit: 'mhz' });
   else sendCtrl('freq', { freq: f, unit: 'khz' });
 });
-function isDigital() { return curStatus.mode === 'FT8' || curStatus.mode === 'FT4'; }
+function isWspr() { const f = parseFloat(curStatus.freq_khz); return curStatus.mode === 'USB' && f >= 14095 && f <= 14097; }
+function isDigital() { return curStatus.mode === 'FT8' || curStatus.mode === 'FT4' || isWspr(); }
 
 function setOnline(ok) {
   if (ok) failCount = 0;
@@ -739,7 +740,8 @@ function applyStatus(d) {
   curStatus = d;
   const mode = d.mode || 'FM';
   const isFt4 = mode === 'FT4', dig = mode === 'FT8' || isFt4;
-  document.body.classList.toggle('dig', dig);
+  const wsprView = mode === 'USB' && parseFloat(d.freq_khz) >= 14095 && parseFloat(d.freq_khz) <= 14097;   // WSPR 20 m: keep the transmit section
+  document.body.classList.toggle('dig', dig || wsprView);
 
   T('boxLocalTime', d.local_time || '--:--');
   T('hdrSum', `${d.freq_khz} ${d.unit || 'kHz'} · ${mode}`);
@@ -811,7 +813,8 @@ function applyStatus(d) {
   S('slotFill', 'width', Math.min(100, Math.round(slotCur / slotMax * 100)) + '%');
   C('slotFill', d.decoding ? 'slot-fill dec' : 'slot-fill');
   T('decodeStatusBadge', dig ? (d.decoding ? `Decoding ${lbl}…` : `Listening ${lbl} · ${d.freq_khz} kHz`) : 'Idle');
-  if (dig !== wasDig) { wasDig = dig; if (dig) { lastMsgCount = -1; fetchTx(); pskrFetch(); renderHeard(); } }
+  const live = dig || wsprView;
+  if (live !== wasDig) { wasDig = live; if (live) { lastMsgCount = -1; fetchTx(); pskrFetch(); renderHeard(); } }
   if (d.last_duration_ms > 0) T('lastDurText', `last ${d.last_duration_ms} ms`);
 }
 
