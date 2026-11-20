@@ -89,6 +89,19 @@ class SI4735_fixed: public SI4735
       return true;
     }
 
+    // Same as SI4735::patchPowerUp() but keeps the audio mode chosen in setup() (the base class forces analog output,
+    // which silences the digital audio output after every SSB patch load)
+    void patchPowerUp()
+    {
+      waitToSend();
+      Wire.beginTransmission(deviceAddress);
+      Wire.write(POWER_UP);
+      Wire.write(0b00110001);
+      Wire.write(this->currentAudioMode);
+      Wire.endTransmission();
+      delay(maxDelayAfterPouwerUp);
+    }
+
     // Load SSB patch and ensure currentTune is AM_TUNE_FREQ before setSSBConfig()
     void loadPatch(const uint8_t *ssb_patch_content, const uint16_t ssb_patch_content_size, uint8_t ssb_audiobw)
     {
