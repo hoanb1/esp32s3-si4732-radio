@@ -15,7 +15,7 @@ wall = 2.2; corner = 4;
 in_l = 150;          // inner X
 in_w = 80;           // inner Y: battery strip (front) + radio strip (back)
 base_h = 26;         // tray inner height (holder is ~22 high)
-lid_h  = 10;
+lid_h  = 12;
 
 // --- ATS-Mini board, placed in the back strip (high Y) at the left ---
 pcb_l = 75.6; pcb_w = 30.5; pcb_t = 1.6;
@@ -23,8 +23,8 @@ pcb_x = 4; pcb_y = in_w - pcb_w - 3;                 // inner coords of the PCB 
 pcb_holes = [[2.7, 2.7], [72.9, 2.7], [2.7, 27.8], [72.9, 27.8]];   // M2 pads, from PCB corner
 standoff_h = 4; standoff_d = 5.2; m2_pilot = 1.7;
 lcd_win = [47, 24.5]; lcd_c = [29.2, 15.2];         // LCD window size and centre, from PCB corner
-enc_c = [69.0, 15.2]; enc_hole = 7.2;                // encoder: M7 bushing (position approx., near the right end of the PCB)
-usbc_y = 3.2; usbc = [10, 4];                        // USB-C slot on the left wall
+enc_c = [66.0, 15.2]; enc_hole = 7.2;                // EC11 encoder: footprint centre from the Gerber silkscreen (shaft up through the lid)
+usbc_y = 18.0; usbc = [10, 4];                       // USB-C centre on the left short edge (from the lower PCB edge, from the NPTH pegs)
 
 // --- 2x18650 bay (front strip, under/left of the RF area) ---
 bat_x = 4; bat_y = 3; bat_l = 78; bat_w = 41;        // holder footprint
@@ -71,7 +71,7 @@ module base() {
 
 // The lid is printed face-down; when assembled it is flipped about the X axis, so its Y is mirrored (ly).
 function ly(y) = in_w - y;
-standoff_gap = 4;   // PCB top face to lid floor: LCD stack height (assumed)
+standoff_gap = 6.5; // PCB top face to lid floor: EC11 body height above the PCB (LCD sits a little below the floor)
 module lid() {
   difference() {
     union() {
