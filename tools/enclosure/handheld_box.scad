@@ -47,11 +47,34 @@ module shell(h) {
 boss_pos = [[6,6],[in_l-6,6],[6,in_w-6],[in_l-6,in_w-6]];
 function ip(p) = [wall + p[0], wall + p[1]];        // inner -> outer coords
 
+// ---- Module mounts: 4 posts per module (M2 pilot holes, hole positions ASSUMED 2.5 mm inside each corner) ----
+post_h = 4; post_d = 4.4;
+mods = [                                  // [x, y, w, h] in inner coords
+  [92, 52, 31, 22],     // Si5351
+  [92, 34, 38.1, 12.7], // 20 m LPF
+  [96, 5, 40, 25],      // RF PA
+  [132, 52, 15, 10],    // T/R relay
+  [127, 63, 20, 16],    // audio amp (optional, ATS-Mini has its own)
+];
+module mount_posts() {
+  for (m = mods) for (dx=[2.5, m[2]-2.5], dy=[2.5, m[3]-2.5])
+    translate([wall+m[0]+dx, wall+m[1]+dy, wall]) difference() {
+      cylinder(d=post_d, h=post_h);
+      translate([0,0,1]) cylinder(d=1.7, h=post_h);
+    }
+}
+// Cable-tie slots (3 x 1.5 mm pairs, 6 mm apart): the harness is strapped to the floor next to the modules
+module tie_slots() {
+  for (p = [[76,24],[76,48],[96,48],[140,30],[76,66],[40,50]])
+    for (d=[0,6]) translate([wall+p[0]+d, wall+p[1], -1]) cube([1.5, 3, wall+2]);
+}
+
 module base() {
   difference() {
     union() {
       shell(base_h);
       for (p = boss_pos) translate([ip(p)[0], ip(p)[1], wall]) cylinder(d=7, h=base_h);
+      mount_posts();
       // RF divider with a 14 mm gap at the floor for coax/power wires
       difference() {
         translate([wall+rf_x, wall, wall]) cube([1.6, in_w, base_h]);
@@ -66,6 +89,9 @@ module base() {
       }
     }
     for (p = boss_pos) translate([ip(p)[0], ip(p)[1], base_h-8]) cylinder(d=2.6, h=20);
+    tie_slots();
+    // harness notch across the top of the divider (wires to the board and speaker pass here)
+    translate([wall+rf_x-1, wall+in_w-24, wall+base_h-7]) cube([4, 16, 8]);
     // SMA on the right end wall
     translate([in_l+wall-1, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=sma_d, h=wall+2);
     // power switch, front wall
@@ -112,14 +138,14 @@ module parts() {
   comp("dimgray", [wall+bat_x, wall+bat_y, wall], [bat_l, bat_w, 3]);
   for (i=[0,1]) color("goldenrod") translate([wall+bat_x+6, wall+bat_y+10.2+i*20.6, wall+3+9.3]) rotate([0,90,0]) cylinder(d=18.6, h=65.5);
   // RF section: Si5351, LPF, PA with heatsink, relay, SMA
-  comp("royalblue", [wall+92, wall+52, wall+1], [31, 22, 4]);
-  comp("darkorange", [wall+92, wall+34, wall+1], [38.1, 12.7, 9]);
-  comp("firebrick", [wall+96, wall+5, wall+1], [40, 25, 6]);
-  comp("slategray", [wall+96, wall+5, wall+7], [40, 25, 12]);
-  comp("white", [wall+132, wall+52, wall+1], [15, 10, 12]);
+  comp("royalblue", [wall+92, wall+52, wall+post_h], [31, 22, 4]);
+  comp("darkorange", [wall+92, wall+34, wall+post_h], [38.1, 12.7, 9]);
+  comp("firebrick", [wall+96, wall+5, wall+post_h], [40, 25, 6]);
+  comp("slategray", [wall+96, wall+5, wall+post_h+6], [40, 25, 12]);
+  comp("white", [wall+132, wall+52, wall+post_h], [15, 10, 12]);
   // speaker and audio amp
   color("darkslategray") translate([wall+spk_x, wall+in_w-spk[1], wall]) cube(spk);
-  comp("purple", [wall+amp_pos[0], wall+amp_pos[1], wall+1], amp_size);
+  comp("purple", [wall+amp_pos[0], wall+amp_pos[1], wall+post_h], amp_size);
   color("gold") translate([in_l+wall-4, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=6, h=8);
 }
 
