@@ -48,7 +48,6 @@ module base() {
     union() {
       shell(base_h);
       for (p = boss_pos) translate([ip(p)[0], ip(p)[1], wall]) cylinder(d=7, h=base_h);
-      for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+pcb_y+h[1], wall]) cylinder(d=standoff_d, h=standoff_h);
       // RF divider with a 14 mm gap at the floor for coax/power wires
       difference() {
         translate([wall+rf_x, wall, wall]) cube([1.6, in_w, base_h]);
@@ -61,11 +60,8 @@ module base() {
       }
     }
     for (p = boss_pos) translate([ip(p)[0], ip(p)[1], base_h-8]) cylinder(d=2.6, h=20);
-    for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+pcb_y+h[1], wall+1]) cylinder(d=m2_pilot, h=standoff_h+1);
     // SMA on the right end wall
     translate([in_l+wall-1, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=sma_d, h=wall+2);
-    // USB-C on the left wall, aligned with the PCB connector
-    translate([-1, wall+pcb_y+usbc_y-usbc[0]/2+0, wall+standoff_h+pcb_t-1]) cube([wall+2, usbc[0], usbc[1]]);
     // power switch, front wall
     translate([wall+100, -1, wall+base_h-8]) rotate([-90,0,0]) cylinder(d=6.2, h=wall+2);
     // PA vents on the back wall (RF side)
@@ -73,19 +69,54 @@ module base() {
   }
 }
 
+// The lid is printed face-down; when assembled it is flipped about the X axis, so its Y is mirrored (ly).
+function ly(y) = in_w - y;
+standoff_gap = 4;   // PCB top face to lid floor: LCD stack height (assumed)
 module lid() {
   difference() {
     union() {
       shell(lid_h);
       for (p = boss_pos) translate([ip(p)[0], ip(p)[1], wall]) cylinder(d=7, h=lid_h);
+      // M2 standoffs that carry the ATS-Mini board from the lid floor
+      for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+ly(pcb_y+h[1]), wall]) cylinder(d=standoff_d, h=standoff_gap);
     }
     for (p = boss_pos) translate([ip(p)[0], ip(p)[1], -1]) { cylinder(d=3.4, h=wall+lid_h+2); cylinder(d1=6.4, d2=3.4, h=2); }
-    // LCD window and encoder hole (lid is printed face-down, openings are in its floor)
-    translate([wall+pcb_x+lcd_c[0]-lcd_win[0]/2, wall+pcb_y+lcd_c[1]-lcd_win[1]/2, -1]) cube([lcd_win[0], lcd_win[1], wall+2]);
-    translate([wall+pcb_x+enc_c[0], wall+pcb_y+enc_c[1], -1]) cylinder(d=enc_hole, h=wall+2);
+    for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+ly(pcb_y+h[1]), wall+0.5]) cylinder(d=m2_pilot, h=standoff_gap+1);
+    // LCD window and encoder hole in the floor
+    translate([wall+pcb_x+lcd_c[0]-lcd_win[0]/2, wall+ly(pcb_y+lcd_c[1])-lcd_win[1]/2, -1]) cube([lcd_win[0], lcd_win[1], wall+2]);
+    translate([wall+pcb_x+enc_c[0], wall+ly(pcb_y+enc_c[1]), -1]) cylinder(d=enc_hole, h=wall+2);
+    // USB-C slot in the left lid wall, level with the PCB
+    translate([-1, wall+ly(pcb_y+usbc_y)-usbc[0]/2, wall+standoff_gap+pcb_t-1]) cube([wall+2, usbc[0], usbc[1]]);
   }
+}
+
+// ---- Ghost components for the assembly view (sizes: see header; heights partly assumed) ----
+module comp(c, p, s) color(c) translate(p) cube(s);
+module parts() {
+  top = wall + base_h;                          // rim plane between base and lid
+  pcb_z = top + lid_h - standoff_gap - pcb_t;   // PCB underside, hanging from the lid
+  // ATS-Mini PCB + LCD + encoder
+  comp("seagreen", [wall+pcb_x, wall+pcb_y, pcb_z], [pcb_l, pcb_w, pcb_t]);
+  comp("black", [wall+pcb_x+lcd_c[0]-24.85, wall+pcb_y+lcd_c[1]-12.9, pcb_z+pcb_t], [49.7, 25.8, 2.5]);
+  color("dimgray") translate([wall+pcb_x+enc_c[0], wall+pcb_y+enc_c[1], pcb_z+pcb_t]) cylinder(d=7, h=standoff_gap+wall+1.5);
+  comp("silver", [wall+pcb_x-2, wall+pcb_y+usbc_y-4.5, pcb_z-3], [8, 9, 3.2]);          // USB-C
+  // 2 x 18650 in the holder
+  comp("dimgray", [wall+bat_x, wall+bat_y, wall], [bat_l, bat_w, 3]);
+  for (i=[0,1]) color("goldenrod") translate([wall+bat_x+6, wall+bat_y+10.2+i*20.6, wall+3+9.3]) rotate([0,90,0]) cylinder(d=18.6, h=65.5);
+  // RF section: Si5351, LPF, PA with heatsink, relay, SMA
+  comp("royalblue", [wall+92, wall+52, wall+1], [31, 22, 4]);
+  comp("darkorange", [wall+92, wall+34, wall+1], [38.1, 12.7, 9]);
+  comp("firebrick", [wall+96, wall+5, wall+1], [40, 25, 6]);
+  comp("slategray", [wall+96, wall+5, wall+7], [40, 25, 12]);
+  comp("white", [wall+132, wall+52, wall+1], [15, 10, 12]);
+  color("gold") translate([in_l+wall-4, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=6, h=8);
 }
 
 if (part == "base") base();
 else if (part == "lid") lid();
+else if (part == "assembly" || part == "exploded") {
+  lift = (part == "exploded") ? 45 : 0;
+  base(); parts();
+  translate([0, in_w + 2*wall, wall + base_h + lid_h + wall + lift]) rotate([180,0,0]) color("lightsteelblue", 0.55) lid();
+}
 else { base(); translate([0, in_w + 2*wall + 10, 0]) lid(); }
