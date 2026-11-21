@@ -14,7 +14,7 @@ part = "both";
 wall = 2.2; corner = 4;
 in_l = 150;          // inner X
 in_w = 80;           // inner Y: battery strip (front) + radio strip (back)
-base_h = 26;         // tray inner height (holder is ~22 high)
+base_h = 30;         // tray inner height (holder is ~22 high)
 lid_h  = 12;
 
 // --- ATS-Mini board, placed in the back strip (high Y) at the left ---
@@ -33,8 +33,8 @@ bat_x = 4; bat_y = 3; bat_l = 78; bat_w = 41;        // holder footprint
 rf_x = 88;                                           // divider wall x
 sma_d = 6.2;
 
-// --- Speaker (round, 40 mm, assumed) hangs from the lid over the RF area; grille holes in the lid floor ---
-spk_d = 40; spk_h = 7; spk_c = [118, 40];            // diameter, thickness, centre (inner coords)
+// --- Speaker 70 x 30 x 30 (face 70 x 30 against the back wall, depth 30), under the ATS-Mini board in the back strip ---
+spk = [70, 30, 30]; spk_x = 4;
 amp_pos = [127, 63]; amp_size = [20, 16, 4];          // small audio amp module (PAM8403 class, assumed)
 
 module rrect(l, w, h, r) { hull() for (x=[r, l-r], y=[r, w-r]) translate([x, y, 0]) cylinder(r=r, h=h); }
@@ -57,6 +57,8 @@ module base() {
         translate([wall+rf_x, wall, wall]) cube([1.6, in_w, base_h]);
         translate([wall+rf_x-1, wall+in_w/2-7, wall]) cube([4, 14, 6]);
       }
+      // speaker cradle: two end blocks hold the 70 x 30 x 30 speaker against the back wall
+      for (x=[spk_x-2.2, spk_x+spk[0]]) translate([wall+x, wall+in_w-spk[1], wall]) cube([2.2, spk[1], 12]);
       // battery bay retaining walls (open on top, cells held by the holder)
       difference() {
         translate([wall+bat_x-1.5, wall+bat_y-1.5, wall]) cube([bat_l+3, bat_w+3, 10]);
@@ -68,6 +70,8 @@ module base() {
     translate([in_l+wall-1, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=sma_d, h=wall+2);
     // power switch, front wall
     translate([wall+100, -1, wall+base_h-8]) rotate([-90,0,0]) cylinder(d=6.2, h=wall+2);
+    // speaker grille: 7 slots in the back wall in front of the speaker face
+    for (i=[0:6]) translate([wall+spk_x+6+i*9, in_w+wall-1, wall+spk[2]/2-9]) cube([4, wall+2, 18]);
     // PA vents on the back wall (RF side)
     for (i=[0:4]) translate([wall+rf_x+10+i*10, in_w+wall-1, wall+6]) cube([3, wall+2, 12]);
   }
@@ -81,8 +85,6 @@ module lid() {
     union() {
       shell(lid_h);
       for (p = boss_pos) translate([ip(p)[0], ip(p)[1], wall]) cylinder(d=7, h=lid_h);
-      // speaker retaining ring
-      translate([wall+spk_c[0], wall+ly(spk_c[1]), wall]) difference() { cylinder(d=spk_d+4.4, h=spk_h-1); translate([0,0,-1]) cylinder(d=spk_d+0.4, h=spk_h+2); }
       // M2 standoffs that carry the ATS-Mini board from the lid floor
       for (h = pcb_holes) translate([wall+pcb_x+h[0], wall+ly(pcb_y+h[1]), wall]) cylinder(d=standoff_d, h=standoff_gap);
     }
@@ -91,8 +93,6 @@ module lid() {
     // LCD window and encoder hole in the floor
     translate([wall+pcb_x+lcd_c[0]-lcd_win[0]/2, wall+ly(pcb_y+lcd_c[1])-lcd_win[1]/2, -1]) cube([lcd_win[0], lcd_win[1], wall+2]);
     translate([wall+pcb_x+enc_c[0], wall+ly(pcb_y+enc_c[1]), -1]) cylinder(d=enc_hole, h=wall+2);
-    // speaker grille: concentric ring of 3 mm holes
-    for (r=[0, 7, 14]) for (a=[0:(r==0?360:360/(r==7?8:16)):359]) translate([wall+spk_c[0]+r*cos(a), wall+ly(spk_c[1])+r*sin(a), -1]) cylinder(d=3, h=wall+2);
     // USB-C slot in the left lid wall, level with the PCB
     translate([-1, wall+ly(pcb_y+usbc_y)-usbc[0]/2, wall+standoff_gap+pcb_t-1]) cube([wall+2, usbc[0], usbc[1]]);
   }
@@ -117,8 +117,8 @@ module parts() {
   comp("firebrick", [wall+96, wall+5, wall+1], [40, 25, 6]);
   comp("slategray", [wall+96, wall+5, wall+7], [40, 25, 12]);
   comp("white", [wall+132, wall+52, wall+1], [15, 10, 12]);
-  // speaker (hangs from the lid floor) and audio amp
-  color("darkslategray") translate([wall+spk_c[0], wall+spk_c[1], top + lid_h - spk_h]) cylinder(d=spk_d, h=spk_h);
+  // speaker and audio amp
+  color("darkslategray") translate([wall+spk_x, wall+in_w-spk[1], wall]) cube(spk);
   comp("purple", [wall+amp_pos[0], wall+amp_pos[1], wall+1], amp_size);
   color("gold") translate([in_l+wall-4, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=6, h=8);
 }
