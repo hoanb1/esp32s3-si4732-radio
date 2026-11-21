@@ -125,6 +125,7 @@ module parts() {
 
 if (part == "base") base();
 else if (part == "lid") lid();
+else if (part == "open") { base(); parts(); }
 else if (part == "assembly" || part == "exploded") {
   lift = (part == "exploded") ? 45 : 0;
   base(); parts();
