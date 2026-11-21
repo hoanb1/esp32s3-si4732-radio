@@ -146,7 +146,34 @@ module parts() {
   // speaker and audio amp
   color("darkslategray") translate([wall+spk_x, wall+in_w-spk[1], wall]) cube(spk);
   comp("purple", [wall+amp_pos[0], wall+amp_pos[1], wall+post_h], amp_size);
+  wires();
   color("gold") translate([in_l+wall-4, wall+in_w/2, wall+base_h/2]) rotate([0,90,0]) cylinder(d=6, h=8);
+}
+
+// ---- Wiring harness (ghost): coloured wires along their routed paths, points in INNER coords [x, y, z-above-floor] ----
+module wire(pts, c, d=1.8) color(c) for (i=[0:len(pts)-2])
+  hull() { translate([wall+pts[i][0],   wall+pts[i][1],   wall+pts[i][2]])   sphere(d=d, $fn=8);
+           translate([wall+pts[i+1][0], wall+pts[i+1][1], wall+pts[i+1][2]]) sphere(d=d, $fn=8); }
+module wires() {
+  bz = base_h + lid_h - standoff_gap - pcb_t - 1;   // board underside height above the floor (inner coords)
+  // battery -> floor gap in the divider -> switch (front wall) -> top notch -> ATS-Mini BAT
+  wire([[82,30,8],[86,40,3],[90,40,3],[90,12,3],[100,6,22]], "red");
+  wire([[82,34,8],[86,42,2],[91,42,2],[91,14,2],[98,6,20]], "black");
+  wire([[100,6,24],[90,6,26],[90,64,26],[84,64,27],[76,64,bz-1]], "red");
+  // Si5351 I2C/power -> notch -> board GPIO13/14
+  wire([[94,60,10],[90,62,24],[84,62,27],[70,60,bz-1]], "gold");
+  wire([[96,60,10],[90,66,24],[84,66,27],[68,64,bz-1]], "yellow");
+  // CLK -> PA -> LPF -> relay (coax, orange), relay COM -> SMA
+  wire([[100,52,8],[90,52,6],[90,17,6],[98,17,8]], "darkorange", 2.4);
+  wire([[130,30,10],[130,34,12]], "darkorange", 2.4);
+  wire([[128,46,12],[139,50,12],[139,52,12]], "darkorange", 2.4);
+  wire([[147,57,10],[150,50,12],[152,40,15]], "darkorange", 2.4);
+  // relay NC -> SI4732 AMI (shielded, via notch); relay coil <- GPIO26
+  wire([[134,62,12],[100,68,26],[84,68,27],[66,66,bz-1]], "silver", 1.6);
+  wire([[140,62,12],[110,70,27],[84,70,27],[62,66,bz-1]], "limegreen", 1.4);
+  // speaker -> board speaker pads
+  wire([[60,56,spk[2]-1],[58,56,bz-1]], "red", 1.6);
+  wire([[64,56,spk[2]-1],[62,58,bz-1]], "black", 1.6);
 }
 
 if (part == "base") base();
