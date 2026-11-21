@@ -171,6 +171,17 @@ module wires() {
   // relay NC -> SI4732 AMI (shielded, via notch); relay coil <- GPIO26
   wire([[134,62,12],[100,68,26],[84,68,27],[66,66,bz-1]], "silver", 1.6);
   wire([[140,62,12],[110,70,27],[84,70,27],[62,66,bz-1]], "limegreen", 1.4);
+  // --- the rest of the harness ---
+  wire([[96,64,10],[90,63,25],[84,63,27],[72,62,bz-1]], "orangered", 1.4);     // 3V3 -> Si5351 VIN
+  wire([[98,64,10],[90,65,25],[84,65,27],[74,64,bz-1]], "dimgray", 1.4);       // GND -> Si5351
+  wire([[136,64,12],[110,66,26],[84,64,27],[72,66,bz-1]], "orangered", 1.4);   // 3V3 -> relay driver
+  wire([[138,64,12],[112,68,26],[84,67,27],[70,67,bz-1]], "dimgray", 1.4);     // GND -> relay driver
+  wire([[100,22,10],[92,22,6],[90,22,6]], "red", 1.8);                          // PA supply tap (after the switch)
+  wire([[104,22,10],[92,26,4],[90,26,4]], "black", 1.8);                        // PA GND
+  wire([[108,26,10],[104,20,12],[92,20,12],[90,20,12],[90,58,12],[88,60,26],[78,60,bz-1]], "deeppink", 1.4); // PA enable GPIO12(?)
+  wire([[128,50,12],[122,44,12],[116,44,12]], "darkorange", 2.4);               // LPF jumper to relay path
+  wire([[120,62,12],[120,70,12],[130,70,12],[136,64,12]], "dimgray", 1.2);     // audio amp (optional) GND tie
+  wire([[127,70,8],[100,72,26],[84,72,27],[56,66,bz-1]], "dodgerblue", 1.4);   // audio amp in (optional)
   // speaker -> board speaker pads
   wire([[60,56,spk[2]-1],[58,56,bz-1]], "red", 1.6);
   wire([[64,56,spk[2]-1],[62,58,bz-1]], "black", 1.6);
