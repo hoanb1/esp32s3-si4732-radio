@@ -1861,8 +1861,12 @@ wsConnect();
   if (band) { const i = BANDS.findIndex(t => t.split(' (')[0].toLowerCase() === band); if (i >= 0) await sendCtrl('band', { id: i }); }
   const mode = (q.get('mode') || '').toUpperCase();
   if (MODE_CMD[mode]) await selectRadioMode(mode);
-  const f = parseFloat(q.get('freq'));
-  if (f > 0 && f < 3e6) await sendCtrl('freq', mode === 'FM' ? { freq: (f / 1000).toFixed(2), unit: 'mhz' } : { freq: f, unit: 'khz' });
+  const fm = /^\s*([0-9]*\.?[0-9]+)\s*(hz|khz|k|mhz|m)?\s*$/i.exec(q.get('freq') || '');
+  if (fm) {   // unit: suffix, else >= 1e6 means Hz, otherwise kHz; the radio picks the band itself
+    const u = (fm[2] || '').toLowerCase(), n = parseFloat(fm[1]);
+    const hz = Math.round(u === 'hz' ? n : u[0] === 'm' ? n * 1e6 : u[0] === 'k' ? n * 1e3 : n >= 1e6 ? n : n * 1e3);
+    if (hz >= 150e3 && hz <= 108e6) await sendCtrl('freq', { freq: hz, unit: 'hz' });
+  }
   const bw = q.get('bw');
   if (bw !== null && bw !== '') {
     let idx = /^\d+$/.test(bw) ? +bw : -1;

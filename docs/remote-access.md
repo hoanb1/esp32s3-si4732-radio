@@ -14,7 +14,7 @@ The page applies these query parameters once on load (in this order); unknown or
 |---|---|
 | `band` | band name before the bracket, case-insensitive, e.g. `20m ham` (`band=20m+ham`), `40m ham`, `vhf fm` |
 | `mode` | `usb`, `lsb`, `am`, `fm`, `cw`, `ft8`, `ft4` |
-| `freq` | kHz (MHz-with-decimals style is not used; for `mode=fm` the value is still kHz, e.g. `98500`) |
+| `freq` | frequency: plain number below 1000000 = kHz (`14074`, `15680.4`), 1000000 or more = Hz (`15680400`); or with a suffix `k`/`khz`, `m`/`mhz`, `hz` (`15.6804m`). The band is switched automatically. AM/FM round to whole kHz, SSB keeps the fraction |
 | `bw` | bandwidth index (0..) or label of the current mode, e.g. `2.2k` |
 | `vol` | 0..63 |
 | `audio` | `1` starts web audio; browsers keep it paused until the first click on the page |
