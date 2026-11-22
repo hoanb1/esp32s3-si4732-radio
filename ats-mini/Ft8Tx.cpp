@@ -15,6 +15,7 @@
 #include <sys/time.h>
 #include <WiFi.h>
 #include <esp_timer.h>
+#include <esp_random.h>
 #include <esp_wifi.h>
 #include <esp_rom_gpio.h>
 #include <driver/gpio.h>
@@ -41,6 +42,9 @@ static uint8_t txDrv = 0;             // Si5351 CLK2 drive 0..3 = 2/4/6/8 mA
 static uint8_t txSrc = 0;             // 0 = Si5351 CLK2 (needs the Si5351 active), 1 = ESP32 APLL on GPIO (txPin)
 static int8_t txPin = 0;              // 0 = I2S0 MCLK on GPIO0 (CLK_OUT1), else I2S0 BCK on this GPIO
 static uint16_t txAudioHz = 1500;     // tone 0 above the USB dial, as in WSJT-X
+static bool txOffsetOn = true;        // "TX offset": new random audio tone for every transmission
+static uint16_t txRangeLo = 300, txRangeHi = 2700;   // range of the random FT8 tone 0 (whole signal stays in 200..2900)
+static double txPickHz = 0;           // tone 0 chosen for the transmission in hand; 0 = none, use txAudioHz
 static int32_t txPpm10 = 0;           // ESP32 crystal error, 0.1 ppm (positive = crystal fast)
 // Debug only (not saved)
 static double txFreqHz = 0;           // RF frequency of tone 0; 0 = follow the dial (dial + txAudioHz)
@@ -92,7 +96,33 @@ static double xtalHz() { return TX_XTAL_HZ * (1.0 + txPpm10 * 1e-7); }
 // Find dividers that put one APLL step (or a whole number of steps) closest to 6.25 Hz at txFreqHz
 static double txWantHz() {
   if (txFreqHz > 0) return txFreqHz;
-  return currentFrequency * 1000.0 + txAudioHz;
+  return currentFrequency * 1000.0 + (txOffsetOn && txPickHz > 0 ? txPickHz : txAudioHz);
+}
+
+// Random tone 0 in [lo, hi] on the 6.25 Hz grid, never within 100 Hz of the previous pick and, when possible,
+// at least minSep Hz from every signal in avoid[] (decoded stations). rnd() returns a 32-bit random number.
+static double pickToneHz(uint16_t lo, uint16_t hi, double prev, double minSep, const uint16_t *avoid, int nAvoid, uint32_t (*rnd)()) {
+  uint32_t steps = (uint32_t)((hi - lo) / TX_TONE_HZ) + 1;
+  double best = lo, bestScore = -1;
+  for (int tries = 0; tries < 40; tries++) {
+    double f = lo + (rnd() % steps) * TX_TONE_HZ;
+    if (prev > 0 && fabs(f - prev) < 100.0) continue;
+    double sep = 1e9;
+    for (int i = 0; i < nAvoid; i++) sep = fmin(sep, fabs(f - avoid[i]));
+    if (sep >= minSep) return f;
+    if (sep > bestScore) { bestScore = sep; best = f; }   // nothing clear: keep the emptiest spot
+  }
+  return best;
+}
+
+// New FT8 tone 0 before a transmission (no-op when TX offset is off)
+static void txPickOffset() {
+  if (!txOffsetOn) { txPickHz = 0; return; }
+  uint16_t seen[FT8_MAX_TRAFFIC];
+  int n = ft8RecentFreqs(seen, FT8_MAX_TRAFFIC);
+  txPickHz = pickToneHz(txRangeLo, txRangeHi, txPickHz, 60.0, seen, n, esp_random);
+  Serial.printf("[TX] offset: audio tone %.2f Hz (%d decoded signals avoided)\r\n", txPickHz, n);
+  txEvent("TX offset %.1f Hz", txPickHz);
 }
 
 // With the Si5351 on the bus (it is the SI4732 reference) CLK2 makes the tones: any frequency, exact 6.25 Hz steps
@@ -343,17 +373,25 @@ static void txWsprTask(void *) {
     Serial.printf("[WSPR] %d/%d '%s %s %d' starts in %.1f s\r\n", n + 1, wsprCount, myCall, myGrid, wsprDbm, wait / 1000.0);
     wsprWaitUntil(t0 - 100000);
     if (txAbort) break;
+    // +-60 Hz around the 1500 Hz centre (band is 1400..1600 Hz), new every transmission
+    double wsprBase = base;
+    if (txOffsetOn) {
+      double off = ((int32_t)(esp_random() % 1201) - 600) / 10.0;
+      wsprBase += off;
+      Serial.printf("[WSPR] offset %+.1f Hz: tone 0 = %.2f Hz (audio %.1f Hz)\r\n", off, wsprBase, 1500.0 - 1.5 * WSPR_TONE_HZ + off);
+      txEvent("WSPR offset %+.1f Hz", off);
+    }
     plan = {};
-    plan.baseHz = base;
+    plan.baseHz = wsprBase;
     plan.stepHz = WSPR_TONE_HZ;
     plan.stepsPerTone = 1;
-    si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((base + wsprSym[0] * WSPR_TONE_HZ) * 100.0));
+    si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((wsprBase + wsprSym[0] * WSPR_TONE_HZ) * 100.0));
     wsprWaitUntil(t0);
     if (txAbort) break;
     txStart();
     for (int i = 0; i < WSPR_NN && !txAbort; i++) {
       wsprWaitUntil(t0 + llround(i * 682666.6667));
-      si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((base + wsprSym[i] * WSPR_TONE_HZ) * 100.0));
+      si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((wsprBase + wsprSym[i] * WSPR_TONE_HZ) * 100.0));
     }
     wsprWaitUntil(t0 + llround(WSPR_NN * 682666.6667));
     txStop();
@@ -428,6 +466,9 @@ static void txSave() {
   p.putUChar("src", txSrc);
   p.putUChar("drv", txDrv);
   p.putUShort("audio", txAudioHz);
+  p.putBool("off", txOffsetOn);
+  p.putUShort("olo", txRangeLo);
+  p.putUShort("ohi", txRangeHi);
   p.putInt("ppm10", txPpm10);
   p.end();
 }
@@ -444,6 +485,9 @@ static void txLoad() {
   txSrc = p.getUChar("src", 0);
   txDrv = p.getUChar("drv", 0); if (txDrv > 3) txDrv = 0;
   txAudioHz = p.getUShort("audio", 1500);
+  txOffsetOn = p.getBool("off", true);
+  txRangeLo = constrain(p.getUShort("olo", 300), 200, 2850);
+  txRangeHi = constrain(p.getUShort("ohi", 2700), txRangeLo, 2850);
   txPpm10 = p.getInt("ppm10", 0);
   p.end();
 }
@@ -492,6 +536,7 @@ static bool txQueue(const char *text) {
     Serial.println("[TX] Set the station callsign first (Kn<call> <grid>)");
     return false;
   }
+  txPickOffset();
   if (!txPlanReady()) return false;
   ftx_message_t msg;
   ftx_message_rc_t rc = ftx_message_encode(&msg, NULL, text);
@@ -766,6 +811,21 @@ void ft8TxCommand(const char *args) {
       txSave();
       txReplan();
       break;
+    case 'O':   // KO<0|1> [lo hi]: random audio offset per transmission, range of FT8 tone 0 (saved)
+    {
+      int on = 1, lo = txRangeLo, hi = txRangeHi;
+      int n = sscanf(args, "%d %d %d", &on, &lo, &hi);
+      if (n >= 1) txOffsetOn = on != 0;
+      if (n == 3) {
+        txRangeLo = constrain(lo, 200, 2850);
+        txRangeHi = constrain(hi, txRangeLo, 2850);
+      }
+      txPickHz = 0;
+      txSave();
+      txReplan();
+      Serial.printf("[TX] offset %s, range %u..%u Hz\r\n", txOffsetOn ? "ON" : "off", txRangeLo, txRangeHi);
+      break;
+    }
     case 'D':   // KD<0..3>: Si5351 CLK2 drive 2/4/6/8 mA (saved)
       txStop();
       txDrv = constrain(atoi(args), 0, 3);
@@ -884,7 +944,7 @@ void ft8TxCommand(const char *args) {
                     (long)tv.tv_sec, (long)(tv.tv_usec / 1000));
       if (!planOk) txReplan();
       else txPrintPlan();
-      Serial.printf("[TX] %s, latch %d, WiFi off %d. Commands: Ke<0|1> Kn<call> <grid> Kq Ka[call] Kx Km<msg> K0 Kc<tone> Kt Ko<audio Hz> Kp<gpio> Ku<0.1ppm> Kf<Hz> Kv<MHz> Kl Kw\r\n",
+      Serial.printf("[TX] %s, latch %d, WiFi off %d. Commands: Ke<0|1> Kn<call> <grid> Kq Ka[call] Kx Km<msg> K0 Kc<tone> Kt Ko<audio Hz> KO<0|1> [lo hi] Kp<gpio> Ku<0.1ppm> Kf<Hz> Kv<MHz> Kl Kw\r\n",
                     txOn ? "ON" : "off", txLatchSdm, txWifiOff);
       break;
     }
@@ -976,6 +1036,8 @@ static String txStatusJson() {
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;
+  snprintf(b, sizeof(b), "\"offset\":%s,\"olo\":%u,\"ohi\":%u,\"pick\":%.2f,", txOffsetOn ? "true" : "false", txRangeLo, txRangeHi, txPickHz);
+  out += b;
   snprintf(b, sizeof(b), "\"qso\":\"%s\",\"dx\":\"%s\",\"rpt_sent\":\"%s\",\"rpt_rcvd\":\"%s\",\"auto\":%u,\"auto_qsos\":%u,\"seq\":%lu,\"events\":[",
            qsoNames[qso], dxCall, rptSent, rptRcvd, autoMode, autoQsos, (unsigned long)txEventSeq);
   out += b;
@@ -1017,6 +1079,7 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
         snprintf(line, sizeof(line), "n %s %s", call.c_str(), grid.c_str());
         txWebPush(line);
       }
+      if (param("off").length()) { snprintf(line, sizeof(line), "O%ld %ld %ld", param("off").toInt() ? 1L : 0L, param("olo").toInt(), param("ohi").toInt()); txWebPush(line); }
       if (param("audio").length()) { snprintf(line, sizeof(line), "o%ld", param("audio").toInt()); txWebPush(line); }
       if (param("drv").length()) { snprintf(line, sizeof(line), "D%ld", param("drv").toInt()); txWebPush(line); }
       if (param("src").length()) { snprintf(line, sizeof(line), "S%ld", param("src").toInt()); txWebPush(line); }

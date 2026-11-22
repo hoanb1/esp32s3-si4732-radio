@@ -115,6 +115,8 @@ uint16_t ft8GetHiResBins();
 const uint8_t *ft8GetHiResRow(uint32_t rowNo);
 const uint8_t *ft8GetHiResMeta(uint32_t rowNo);   // [block index in FT8 slot or 255, slot of the hour 0..239]
 void ft8AddLog(const char *fmt, ...);
+// Audio frequencies (Hz) of the recently decoded signals, newest first; returns how many were stored
+int ft8RecentFreqs(uint16_t *out, int max);
 String ft8GetLogsJson();
 void ft8SetHiResEnabled(bool on);   // hi-res web waterfall rows (1.8 KB of heap while on)
 bool ft8HiResEnabled();

@@ -162,6 +162,11 @@ static void storeHiResRow(const uint8_t *mag, int numBins, uint32_t rowNo, uint8
 static FT8MessageEntry ft8Traffic[FT8_MAX_TRAFFIC];
 static int ft8TrafficCount = 0;
 static uint32_t ft8TotalDecoded = 0;
+int ft8RecentFreqs(uint16_t *out, int max) {
+  int n = ft8TrafficCount < max ? ft8TrafficCount : max;
+  for (int i = 0; i < n; i++) out[i] = ft8Traffic[i].freq;
+  return n;
+}
 
 // System diagnostic log ring buffer for Web UI (/api/logs) - fixed char array avoids heap fragmentation
 
