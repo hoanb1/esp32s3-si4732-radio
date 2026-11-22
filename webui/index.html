@@ -1014,7 +1014,7 @@ const logLines = [];
 let logPaused = false;
 
 function wsConnect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => { wsRetryMs = 2000; T('wsState', 'live'); if (webAudioOn) ws.send('audio=1'); };
   ws.onclose = () => { T('wsState', 'reconnecting…'); ws = null; setTimeout(wsConnect, wsRetryMs); wsRetryMs = Math.min(wsRetryMs * 2, 15000); };
@@ -1850,6 +1850,32 @@ loadBookmarks();
 optFetch();
 kick(0);
 wsConnect();
+
+// URL parameters (page is public: only these receive controls, never TX): band, mode, freq (kHz), bw, vol, audio=1
+// e.g. ?mode=usb&freq=14074&vol=40&audio=1
+(async function applyUrlParams() {
+  const q = new URLSearchParams(location.search);
+  if (![...q.keys()].length) return;
+  await new Promise(r => setTimeout(r, 1500));   // let the first status arrive
+  const band = (q.get('band') || '').toLowerCase();
+  if (band) { const i = BANDS.findIndex(t => t.split(' (')[0].toLowerCase() === band); if (i >= 0) await sendCtrl('band', { id: i }); }
+  const mode = (q.get('mode') || '').toUpperCase();
+  if (MODE_CMD[mode]) await selectRadioMode(mode);
+  const f = parseFloat(q.get('freq'));
+  if (f > 0 && f < 3e6) await sendCtrl('freq', mode === 'FM' ? { freq: (f / 1000).toFixed(2), unit: 'mhz' } : { freq: f, unit: 'khz' });
+  const bw = q.get('bw');
+  if (bw !== null && bw !== '') {
+    let idx = /^\d+$/.test(bw) ? +bw : -1;
+    if (idx < 0) { const g = mode === 'FM' ? 'FM' : mode === 'AM' ? 'AM' : 'SSB'; idx = BW_OPTIONS[g].indexOf(bw.toLowerCase()); }
+    if (idx >= 0) await sendCtrl('bw_set', { idx });
+  }
+  const v = parseInt(q.get('vol'));
+  if (v >= 0 && v <= 63) await sendCtrl('volume', { val: v });
+  if (q.get('audio') === '1' && !webAudioOn) {
+    toggleWebAudio();   // browsers keep the audio paused until a click on the page
+    document.addEventListener('click', () => { if (audioCtx && audioCtx.state !== 'running') audioCtx.resume(); }, { once: true });
+  }
+})();
 
 async function setAudIn(v) {
   if (!confirm('Switch the audio input and restart the radio?')) { audInSync(); return; }
