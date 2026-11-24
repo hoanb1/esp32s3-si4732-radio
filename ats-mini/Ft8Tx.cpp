@@ -1,9 +1,11 @@
 #include "Ft8Tx.h"
+#include "Si5351Ctl.h"
 #include "Common.h"
 #include "Utils.h"
 #include "Layout-FT8.h"
 #include "Menu.h"
 #include "Storage.h"
+#include "Wspr.h"
 
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
@@ -13,6 +15,7 @@
 #include <sys/time.h>
 #include <WiFi.h>
 #include <esp_timer.h>
+#include <esp_random.h>
 #include <esp_wifi.h>
 #include <esp_rom_gpio.h>
 #include <driver/gpio.h>
@@ -35,8 +38,13 @@ void ft8GetCurrentUTC(uint8_t *h, uint8_t *m, uint8_t *s, uint16_t *msOut);   //
 // Station and TX settings, saved in NVS ("ft8tx"); set by serial K commands or /api/ft8tx
 static char myCall[12] = "";
 static char myGrid[5] = "";
+static uint8_t txDrv = 0;             // Si5351 CLK2 drive 0..3 = 2/4/6/8 mA
+static uint8_t txSrc = 0;             // 0 = Si5351 CLK2 (needs the Si5351 active), 1 = ESP32 APLL on GPIO (txPin)
 static int8_t txPin = 0;              // 0 = I2S0 MCLK on GPIO0 (CLK_OUT1), else I2S0 BCK on this GPIO
 static uint16_t txAudioHz = 1500;     // tone 0 above the USB dial, as in WSJT-X
+static bool txOffsetOn = true;        // "TX offset": new random audio tone for every transmission
+static uint16_t txRangeLo = 300, txRangeHi = 2700;   // range of the random FT8 tone 0 (whole signal stays in 200..2900)
+static double txPickHz = 0;           // tone 0 chosen for the transmission in hand; 0 = none, use txAudioHz
 static int32_t txPpm10 = 0;           // ESP32 crystal error, 0.1 ppm (positive = crystal fast)
 // Debug only (not saved)
 static double txFreqHz = 0;           // RF frequency of tone 0; 0 = follow the dial (dial + txAudioHz)
@@ -88,10 +96,56 @@ static double xtalHz() { return TX_XTAL_HZ * (1.0 + txPpm10 * 1e-7); }
 // Find dividers that put one APLL step (or a whole number of steps) closest to 6.25 Hz at txFreqHz
 static double txWantHz() {
   if (txFreqHz > 0) return txFreqHz;
-  return currentFrequency * 1000.0 + txAudioHz;
+  return currentFrequency * 1000.0 + (txOffsetOn && txPickHz > 0 ? txPickHz : txAudioHz);
+}
+
+// Random tone 0 in [lo, hi] on the 6.25 Hz grid, never within 100 Hz of the previous pick and, when possible,
+// at least minSep Hz from every signal in avoid[] (decoded stations). rnd() returns a 32-bit random number.
+static double pickToneHz(uint16_t lo, uint16_t hi, double prev, double minSep, const uint16_t *avoid, int nAvoid, uint32_t (*rnd)()) {
+  uint32_t steps = (uint32_t)((hi - lo) / TX_TONE_HZ) + 1;
+  double best = lo, bestScore = -1;
+  for (int tries = 0; tries < 40; tries++) {
+    double f = lo + (rnd() % steps) * TX_TONE_HZ;
+    if (prev > 0 && fabs(f - prev) < 100.0) continue;
+    double sep = 1e9;
+    for (int i = 0; i < nAvoid; i++) sep = fmin(sep, fabs(f - avoid[i]));
+    if (sep >= minSep) return f;
+    if (sep > bestScore) { bestScore = sep; best = f; }   // nothing clear: keep the emptiest spot
+  }
+  return best;
+}
+
+// New FT8 tone 0 before a transmission (no-op when TX offset is off)
+static void txPickOffset() {
+  if (!txOffsetOn) { txPickHz = 0; return; }
+  uint16_t seen[FT8_MAX_TRAFFIC];
+  int n = ft8RecentFreqs(seen, FT8_MAX_TRAFFIC);
+  txPickHz = pickToneHz(txRangeLo, txRangeHi, txPickHz, 60.0, seen, n, esp_random);
+  Serial.printf("[TX] offset: audio tone %.2f Hz (%d decoded signals avoided)\r\n", txPickHz, n);
+  txEvent("TX offset %.1f Hz", txPickHz);
+}
+
+// With the Si5351 on the bus (it is the SI4732 reference) CLK2 makes the tones: any frequency, exact 6.25 Hz steps
+static bool txSi() { return txSrc == 0 && extRefActive(); }
+
+// T/R relay module (S = signal, active high): COM = antenna, NO = PA (transmit), NC = SI4732 (receive, relay off)
+#define TX_RELAY_PIN 26
+#define TX_RELAY_SETTLE_MS 15
+static void txRelay(bool tx) {
+  static bool init = false;
+  if (!init) { digitalWrite(TX_RELAY_PIN, LOW); pinMode(TX_RELAY_PIN, OUTPUT); init = true; }
+  digitalWrite(TX_RELAY_PIN, tx ? HIGH : LOW);
 }
 
 static bool txPlan() {
+  if (txSi()) {
+    plan = {};
+    plan.baseHz = txWantHz();
+    plan.stepHz = TX_TONE_HZ;
+    plan.stepsPerTone = 1;
+    return plan.baseHz >= 4000.0 && plan.baseHz <= 100e6;
+  }
+  if (txSrc == 0) return false;   // Si5351 chosen but not active
   const double xt = xtalHz();
   const double wantHz = txWantHz();
   double bestErr = 1e9;
@@ -134,6 +188,10 @@ static bool txPlan() {
 }
 
 static void txPrintPlan() {
+  if (txSi()) {
+    Serial.printf("[TX] Si5351 CLK%d: tone 0 = %.2f Hz, step %.2f Hz\r\n", SI5351_TX_CLK, plan.baseHz, plan.stepHz);
+    return;
+  }
   double spacing = plan.stepHz * plan.stepsPerTone;
   Serial.printf("[TX] %s: base %.2f Hz (asked %.0f), VCO %.3f MHz, odiv=%lu mclk/%lu bck/%lu, step %.4f Hz x%lu = %.4f Hz/tone (tone 7 off by %+.2f Hz), sdm=%lu.%lu.%lu, ppm %+.1f\r\n",
                 txPin == 0 ? "GPIO0 MCLK" : "BCK pin", plan.baseHz, txWantHz(), plan.vcoHz / 1e6,
@@ -146,6 +204,10 @@ static void txPrintPlan() {
 }
 
 static inline void txSetTone(uint8_t tone) {
+  if (txSi()) {
+    si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((plan.baseHz + tone * TX_TONE_HZ) * 100.0));
+    return;
+  }
   REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM0, (plan.sdm & 0xFF) + tone * plan.stepsPerTone);
   if (txLatchSdm) {
     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_SDM_STOP, 1);
@@ -158,6 +220,7 @@ static inline void txSetTone(uint8_t tone) {
 static bool radioDown = false;
 
 static void txRadioOff() {
+  if (txSi()) return;   // Si5351 CLK2 makes the tones: the SI4732 keeps receiving (and hears the TX)
   if (radioDown) return;
   digitalWrite(RESET_PIN, LOW);
   radioDown = true;
@@ -167,7 +230,8 @@ static void txRadioOn() {
   Serial.println("[RX] restart: reset high");
   digitalWrite(RESET_PIN, HIGH);
   Serial.println("[RX] restart: rx.setup");
-  rx.setup(RESET_PIN, MW_BAND_TYPE);
+  rx.setup(RESET_PIN, 0, MW_BAND_TYPE, audioDigitalOn() ? 0b00001011 : SI473X_ANALOG_AUDIO, extRefActive() ? XOSCEN_RCLK : XOSCEN_CRYSTAL, 0);
+  delay(250);
   Serial.println("[RX] restart: unloadSSB/ssbPpmLoad");
   unloadSSB();
   ssbPpmLoad();
@@ -181,6 +245,14 @@ static void txRadioOn() {
 
 static void txStart() {
   if (txOn) return;
+  if (txSi()) {
+    txRelay(true);                          // antenna to the PA first, then RF
+    vTaskDelay(pdMS_TO_TICKS(TX_RELAY_SETTLE_MS));
+    si5351Drive(SI5351_TX_CLK, txDrv);
+    si5351Enable(SI5351_TX_CLK, true);
+    txOn = true;
+    return;
+  }
   txRadioOff();
   periph_module_enable(PERIPH_I2S0_MODULE);
   rtc_clk_apll_enable(true);
@@ -213,6 +285,13 @@ static void txStart() {
 
 static void txStop() {
   if (!txOn) return;
+  if (txSi()) {
+    si5351Enable(SI5351_TX_CLK, false);     // RF off first, then the antenna back to the SI4732
+    vTaskDelay(pdMS_TO_TICKS(5));
+    txRelay(false);
+    txOn = false;
+    return;
+  }
   if (txPin == 0) {
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0_GPIO0);
     gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
@@ -272,6 +351,77 @@ static void txMessageTask(void *) {
   vTaskDelete(NULL);
 }
 
+// ---- WSPR: 162 symbols from the Si5351, started 1 s into an even UTC minute ----
+// Band centre: dial 14.0956 MHz USB + 1500 Hz; the four tones span 4.4 Hz around it.
+#define WSPR_CENTER_HZ 14097100.0
+static uint8_t wsprSym[WSPR_NN];
+static int wsprDbm = 10;
+static int wsprCount = 1;
+
+static void wsprWaitUntil(int64_t t) { txWaitUntil(t); }
+
+static void txWsprTask(void *) {
+  const double base = WSPR_CENTER_HZ - 1.5 * WSPR_TONE_HZ;
+  for (int n = 0; n < wsprCount && !txAbort; n++) {
+    uint8_t h, m, s;
+    uint16_t ms;
+    ft8GetCurrentUTC(&h, &m, &s, &ms);
+    uint32_t into = ((m % 2) * 60UL + s) * 1000UL + ms;   // ms into this even/odd minute pair
+    int64_t wait = 120000LL - into + 1000;
+    if (wait > 120000) wait -= 120000;                      // still before 1 s of this even minute
+    int64_t t0 = esp_timer_get_time() + wait * 1000;
+    Serial.printf("[WSPR] %d/%d '%s %s %d' starts in %.1f s\r\n", n + 1, wsprCount, myCall, myGrid, wsprDbm, wait / 1000.0);
+    wsprWaitUntil(t0 - 100000);
+    if (txAbort) break;
+    // +-60 Hz around the 1500 Hz centre (band is 1400..1600 Hz), new every transmission
+    double wsprBase = base;
+    if (txOffsetOn) {
+      double off = ((int32_t)(esp_random() % 1201) - 600) / 10.0;
+      wsprBase += off;
+      Serial.printf("[WSPR] offset %+.1f Hz: tone 0 = %.2f Hz (audio %.1f Hz)\r\n", off, wsprBase, 1500.0 - 1.5 * WSPR_TONE_HZ + off);
+      txEvent("WSPR offset %+.1f Hz", off);
+    }
+    plan = {};
+    plan.baseHz = wsprBase;
+    plan.stepHz = WSPR_TONE_HZ;
+    plan.stepsPerTone = 1;
+    si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((wsprBase + wsprSym[0] * WSPR_TONE_HZ) * 100.0));
+    wsprWaitUntil(t0);
+    if (txAbort) break;
+    txStart();
+    for (int i = 0; i < WSPR_NN && !txAbort; i++) {
+      wsprWaitUntil(t0 + llround(i * 682666.6667));
+      si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((wsprBase + wsprSym[i] * WSPR_TONE_HZ) * 100.0));
+    }
+    wsprWaitUntil(t0 + llround(WSPR_NN * 682666.6667));
+    txStop();
+    planForHz = 0;   // force a re-plan for FT8 afterwards
+    if (n + 1 < wsprCount && !txAbort) wsprWaitUntil(esp_timer_get_time() + 100000);
+    // skip one slot (about 25 % duty, as is usual for WSPR): next loop starts at the following even minute
+    if (n + 1 < wsprCount && !txAbort) {
+      int64_t tNext = esp_timer_get_time() + 2LL * 60 * 1000000 - 5000000;
+      wsprWaitUntil(tNext);
+    }
+  }
+  Serial.printf("[WSPR] %s\r\n", txAbort ? "aborted" : "done");
+  txTask = NULL;
+  vTaskDelete(NULL);
+}
+
+// Relay only, no RF: 5 x (closed 5 s, open 5 s)
+static void txRelayTestTask(void *) {
+  for (int i = 1; i <= 5; i++) {
+    Serial.printf("[TX] relay test %d/5: closed\r\n", i);
+    txRelay(true);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    txRelay(false);
+    Serial.printf("[TX] relay test %d/5: open\r\n", i);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+  txTask = NULL;
+  vTaskDelete(NULL);
+}
+
 static void txToneTestTask(void *) {
   // Tones 0..7 for 2 s each, so a waterfall shows the 8-step ladder
   txSetTone(0);
@@ -295,6 +445,7 @@ static bool txReplan() {
   planOk = currentMode == USB && txPlan();
   planUs = micros() - t0;
   if (currentMode != USB) Serial.println("[TX] Radio must be in USB / FT8 mode to transmit");
+  else if (!planOk && txSrc == 0) Serial.println("[TX] Si5351 is not active (External reference off or chip missing): choose ESP32 GPIO or enable it");
   else if (!planOk) Serial.printf("[TX] No APLL setting for %.0f Hz (only ~3.5-5 MHz, 80 m FT8 at 3573 kHz)\r\n", planForHz);
   else txPrintPlan();
   return planOk;
@@ -312,7 +463,12 @@ static void txSave() {
   p.putString("call", myCall);
   p.putString("grid", myGrid);
   p.putChar("pin", txPin);
+  p.putUChar("src", txSrc);
+  p.putUChar("drv", txDrv);
   p.putUShort("audio", txAudioHz);
+  p.putBool("off", txOffsetOn);
+  p.putUShort("olo", txRangeLo);
+  p.putUShort("ohi", txRangeHi);
   p.putInt("ppm10", txPpm10);
   p.end();
 }
@@ -326,7 +482,12 @@ static void txLoad() {
   strlcpy(myCall, p.getString("call", "").c_str(), sizeof(myCall));
   strlcpy(myGrid, p.getString("grid", "").c_str(), sizeof(myGrid));
   txPin = p.getChar("pin", 0);
+  txSrc = p.getUChar("src", 0);
+  txDrv = p.getUChar("drv", 0); if (txDrv > 3) txDrv = 0;
   txAudioHz = p.getUShort("audio", 1500);
+  txOffsetOn = p.getBool("off", true);
+  txRangeLo = constrain(p.getUShort("olo", 300), 200, 2850);
+  txRangeHi = constrain(p.getUShort("ohi", 2700), txRangeLo, 2850);
   txPpm10 = p.getInt("ppm10", 0);
   p.end();
 }
@@ -375,6 +536,7 @@ static bool txQueue(const char *text) {
     Serial.println("[TX] Set the station callsign first (Kn<call> <grid>)");
     return false;
   }
+  txPickOffset();
   if (!txPlanReady()) return false;
   ftx_message_t msg;
   ftx_message_rc_t rc = ftx_message_encode(&msg, NULL, text);
@@ -649,6 +811,32 @@ void ft8TxCommand(const char *args) {
       txSave();
       txReplan();
       break;
+    case 'O':   // KO<0|1> [lo hi]: random audio offset per transmission, range of FT8 tone 0 (saved)
+    {
+      int on = 1, lo = txRangeLo, hi = txRangeHi;
+      int n = sscanf(args, "%d %d %d", &on, &lo, &hi);
+      if (n >= 1) txOffsetOn = on != 0;
+      if (n == 3) {
+        txRangeLo = constrain(lo, 200, 2850);
+        txRangeHi = constrain(hi, txRangeLo, 2850);
+      }
+      txPickHz = 0;
+      txSave();
+      txReplan();
+      Serial.printf("[TX] offset %s, range %u..%u Hz\r\n", txOffsetOn ? "ON" : "off", txRangeLo, txRangeHi);
+      break;
+    }
+    case 'D':   // KD<0..3>: Si5351 CLK2 drive 2/4/6/8 mA (saved)
+      txStop();
+      txDrv = constrain(atoi(args), 0, 3);
+      txSave();
+      break;
+    case 'S':   // KS<0|1>: TX source, 0 = Si5351 CLK2, 1 = ESP32 GPIO/APLL (saved)
+      txStop();
+      txSrc = atoi(args) ? 1 : 0;
+      txSave();
+      txReplan();
+      break;
     case 'p':   // Kp<gpio>: 0 = GPIO0 MCLK, else BCK on that GPIO (saved)
       txStop();
       txPin = (int8_t)atoi(args);
@@ -672,6 +860,10 @@ void ft8TxCommand(const char *args) {
       txWifiOff = atoi(args) != 0;
       Serial.printf("[TX] WiFi off during TX: %s\r\n", txWifiOff ? "yes" : "no");
       break;
+    case 'L':   // KL: relay test, 5 x 5 s closed, no RF
+      if (txTask || txOn) { Serial.println("[TX] Busy"); break; }
+      xTaskCreatePinnedToCore(txRelayTestTask, "relaytest", 3072, NULL, 5, &txTask, 1);
+      break;
     case 'R':   // KR: test the SI4732 off/on cycle used around TX, without transmitting
       txRadioOff();
       delay(2000);
@@ -691,6 +883,21 @@ void ft8TxCommand(const char *args) {
       txStop();
       xTaskCreatePinnedToCore(txToneTestTask, "ft8tx", 4096, NULL, 20, &txTask, 1);
       break;
+    case 'W':   // KW<dBm> [count]: WSPR on 14.0971 MHz centre (dial 14.0956 USB + 1500 Hz), one every 4 minutes
+    {
+      if (!txAllowed()) break;
+      if (!txSi()) { Serial.println("[WSPR] needs the Si5351 on the bus (external reference enabled)"); break; }
+      if (!myCall[0] || !myGrid[0]) { Serial.println("[WSPR] set the station first: Kn<call> <grid>"); break; }
+      int dbm = 10, cnt = 1;
+      sscanf(args, "%d %d", &dbm, &cnt);
+      if (!wsprEncode(myCall, myGrid, dbm, wsprSym)) { Serial.println("[WSPR] call/grid/power not valid for a type 1 message"); break; }
+      wsprDbm = dbm;
+      wsprCount = constrain(cnt, 1, 30);
+      txStop();
+      txAbort = false;
+      xTaskCreatePinnedToCore(txWsprTask, "wspr", 4096, NULL, 20, &txTask, 1);
+      break;
+    }
     case 'm':   // Km<message>: send one FT8 message in the next slot
       txQueue(args);
       break;
@@ -737,7 +944,7 @@ void ft8TxCommand(const char *args) {
                     (long)tv.tv_sec, (long)(tv.tv_usec / 1000));
       if (!planOk) txReplan();
       else txPrintPlan();
-      Serial.printf("[TX] %s, latch %d, WiFi off %d. Commands: Ke<0|1> Kn<call> <grid> Kq Ka[call] Kx Km<msg> K0 Kc<tone> Kt Ko<audio Hz> Kp<gpio> Ku<0.1ppm> Kf<Hz> Kv<MHz> Kl Kw\r\n",
+      Serial.printf("[TX] %s, latch %d, WiFi off %d. Commands: Ke<0|1> Kn<call> <grid> Kq Ka[call] Kx Km<msg> K0 Kc<tone> Kt Ko<audio Hz> KO<0|1> [lo hi] Kp<gpio> Ku<0.1ppm> Kf<Hz> Kv<MHz> Kl Kw\r\n",
                     txOn ? "ON" : "off", txLatchSdm, txWifiOff);
       break;
     }
@@ -768,6 +975,8 @@ bool ft8TxRadioDown() { return radioDown; }
 
 void ft8TxPoll() {
   txLoad();
+  static bool relayInit = false;
+  if (!relayInit && txSi()) { txRelay(false); relayInit = true; }   // relay released (receive) from boot on
   if (radioDown && !txOn) txRadioOn();
   // Keep the plan in step with the dial so the web page shows whether this frequency can be sent
   static uint32_t lastCheck = 0;
@@ -790,8 +999,28 @@ void ft8TxPoll() {
   }
 }
 
+// WSPR spots decoded off-radio (tools/wspr_rx.py posts them): newest kept for the web card
+#define WSPR_RX_MAX 10
+static char wsprRx[WSPR_RX_MAX][60];
+static uint8_t wsprRxHead = 0, wsprRxCount = 0;
+static void wsprRxAdd(const String &line) {
+  char b[60];
+  size_t n = 0;
+  for (size_t i = 0; i < line.length() && n < sizeof(b) - 1; i++) {
+    char c = line[i];
+    if (isalnum((unsigned char)c) || c == ' ' || c == '/' || c == '.' || c == ':' || c == '+' || c == '-' || c == '<' || c == '>') b[n++] = c;
+  }
+  b[n] = 0;
+  if (!n) return;
+  portENTER_CRITICAL(&txWebMux);
+  strlcpy(wsprRx[wsprRxHead], b, sizeof(wsprRx[0]));
+  wsprRxHead = (wsprRxHead + 1) % WSPR_RX_MAX;
+  if (wsprRxCount < WSPR_RX_MAX) wsprRxCount++;
+  portEXIT_CRITICAL(&txWebMux);
+}
+
 static String txStatusJson() {
-  char b[200];
+  char b[260];
   bool here = planOk && planForHz == txWantHz() && currentMode == USB;
   double spacing = plan.stepHz * plan.stepsPerTone;
   snprintf(b, sizeof(b),
@@ -801,10 +1030,13 @@ static String txStatusJson() {
   String out;
   out.reserve(160 + TX_EVENTS * 68);   // one allocation: the heap is tight while pages load
   out = b;
-  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
-           here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0, txEnabled ? "true" : "false",
+  snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"src\":%u,\"drv\":%u,\"si_ok\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
+           here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0,
+           txSi() ? "true" : "false", (unsigned)txSrc, (unsigned)txDrv, extRefActive() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
+  out += b;
+  snprintf(b, sizeof(b), "\"offset\":%s,\"olo\":%u,\"ohi\":%u,\"pick\":%.2f,", txOffsetOn ? "true" : "false", txRangeLo, txRangeHi, txPickHz);
   out += b;
   snprintf(b, sizeof(b), "\"qso\":\"%s\",\"dx\":\"%s\",\"rpt_sent\":\"%s\",\"rpt_rcvd\":\"%s\",\"auto\":%u,\"auto_qsos\":%u,\"seq\":%lu,\"events\":[",
            qsoNames[qso], dxCall, rptSent, rptRcvd, autoMode, autoQsos, (unsigned long)txEventSeq);
@@ -815,7 +1047,18 @@ static String txStatusJson() {
     out += txEvents[k];
     out += "\"";
   }
-  out += "]}";
+  out += "]";
+  if (wsprRxCount) {
+    out += ",\"wspr_rx\":[";
+    for (uint8_t i = 0; i < wsprRxCount; i++) {
+      uint8_t k = (wsprRxHead + WSPR_RX_MAX - 1 - i) % WSPR_RX_MAX;   // newest first
+      out += i ? ",\"" : "\"";
+      out += wsprRx[k];
+      out += "\"";
+    }
+    out += "]";
+  }
+  out += "}";
   return out;
 }
 
@@ -836,9 +1079,14 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
         snprintf(line, sizeof(line), "n %s %s", call.c_str(), grid.c_str());
         txWebPush(line);
       }
+      if (param("off").length()) { snprintf(line, sizeof(line), "O%ld %ld %ld", param("off").toInt() ? 1L : 0L, param("olo").toInt(), param("ohi").toInt()); txWebPush(line); }
       if (param("audio").length()) { snprintf(line, sizeof(line), "o%ld", param("audio").toInt()); txWebPush(line); }
+      if (param("drv").length()) { snprintf(line, sizeof(line), "D%ld", param("drv").toInt()); txWebPush(line); }
+      if (param("src").length()) { snprintf(line, sizeof(line), "S%ld", param("src").toInt()); txWebPush(line); }
       if (param("pin").length()) { snprintf(line, sizeof(line), "p%ld", param("pin").toInt()); txWebPush(line); }
       if (param("ppm").length()) { snprintf(line, sizeof(line), "u%ld", lroundf(param("ppm").toFloat() * 10)); txWebPush(line); }
+    } else if (action == "relaytest") {
+      txWebPush("L");
     } else if (action == "cq") {
       txWebPush("q");
     } else if (action == "answer") {
@@ -849,6 +1097,11 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
     } else if (action == "auto") {
       snprintf(line, sizeof(line), "z%u", (unsigned)constrain(param("mode").toInt(), 0, 2));
       txWebPush(line);
+    } else if (action == "wspr") {
+      snprintf(line, sizeof(line), "W%ld %ld", param("dbm").length() ? param("dbm").toInt() : 10, param("count").length() ? param("count").toInt() : 1);
+      txWebPush(line);
+    } else if (action == "wsprspot") {
+      wsprRxAdd(param("s"));
     } else if (action == "stop") {
       txWebPush("x");
       txWebPush("0");

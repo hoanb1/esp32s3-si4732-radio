@@ -73,6 +73,13 @@ int ft8NearestBand(uint32_t khz);
 
 // Apply SI4732 volume + speaker amplifier state for the current mode/mute/sleep state
 void ft8ApplyAudio();
+bool audioDigitalWanted();          // saved setting
+bool audioDigitalOn();              // wanted and the Si5351 reference clock is active
+void audioDigitalSet(bool on);
+bool audioDigitalRunning();
+uint32_t audioDigitalFrames();
+int audioDigitalPeak(bool clear);
+void audioDigitalDiag(char *out, size_t n);
 void ft8SetAdcVolume(uint8_t v);
 void ft8SetAdcManual(uint8_t v);
 void ft8SetAdcAuto(bool on);
@@ -108,6 +115,8 @@ uint16_t ft8GetHiResBins();
 const uint8_t *ft8GetHiResRow(uint32_t rowNo);
 const uint8_t *ft8GetHiResMeta(uint32_t rowNo);   // [block index in FT8 slot or 255, slot of the hour 0..239]
 void ft8AddLog(const char *fmt, ...);
+// Audio frequencies (Hz) of the recently decoded signals, newest first; returns how many were stored
+int ft8RecentFreqs(uint16_t *out, int max);
 String ft8GetLogsJson();
 void ft8SetHiResEnabled(bool on);   // hi-res web waterfall rows (1.8 KB of heap while on)
 bool ft8HiResEnabled();

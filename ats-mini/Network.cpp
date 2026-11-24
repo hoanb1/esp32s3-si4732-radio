@@ -6,6 +6,7 @@
 #include "Draw.h"
 #include "Layout-FT8.h"
 #include "Ft8Tx.h"
+#include "Si5351Ctl.h"
 #include "PskReporter.h"
 #include "Options.h"
 #include "WebUI.h"
@@ -16,9 +17,15 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ping/ping_sock.h>
+extern "C" {
+#include <lwip/tcp.h>
+#include <lwip/priv/tcp_priv.h>
+#include <lwip/tcpip.h>
+}
 #include <NTPClient.h>
 #include <ESPmDNS.h>
 #include <esp_sntp.h>
+#include <esp_system.h>
 #include <sys/time.h>
 
 #define CONNECT_TIME    1500  // Delay before connecting WiFi after request
@@ -59,8 +66,70 @@ static int lastScannedCount = 0;
 String loginUsername = "";
 String loginPassword = "";
 
+//
+// Load shedding. Only ~19 KB of byte-addressable heap is left after boot (~12 KB with one page
+// open, largest block ~5 KB), and a few browsers pulling the page, /map.svg and /ws at once
+// drain it to a few hundred bytes; the next `new` in the AsyncTCP task then aborts, or
+// lwIP/WiFi starves and the radio drops off the network.
+// Moderate lows get a 503 the page retries (HTTP_MIN_BLOCK middleware); only below the floor
+// here are new connections reset at accept (no request object, no TIME_WAIT).
+//
+#define NET_ACCEPT_MIN_FREE    6000    // free 8-bit heap needed to take a new connection
+#define NET_ACCEPT_MIN_BLOCK   2048    // and largest free block (below HTTP_MIN_BLOCK)
+static volatile uint32_t netRefused = 0, netBusy = 0;   // since the last [NET] line
+static volatile int flashRespActive = 0;                // FlashResponse (page, map) sends running
+
+// lwIP TCP state for the [NET] line: connections by state and the bytes they still hold in
+// unsent/unacked segments (heap that only a peer's ACK or a reset gives back)
+static void netTcpStats(char *out, size_t cap)
+{
+  unsigned act = 0, est = 0, fin = 0, tw = 0, unsent = 0, unacked = 0;
+  LOCK_TCPIP_CORE();
+  for (tcp_pcb *p = tcp_active_pcbs; p; p = p->next) {
+    act++;
+    if (p->state == ESTABLISHED) est++; else fin++;
+    if (p->unsent) unsent += p->unsent->p->tot_len;
+    for (tcp_seg *g = p->unacked; g; g = g->next) unacked += g->len;
+  }
+  for (tcp_pcb *p = tcp_tw_pcbs; p; p = p->next) tw++;
+  UNLOCK_TCPIP_CORE();
+  snprintf(out, cap, "tcp act %u (est %u, closing %u) tw %u, unsent %u B, unacked %u B", act, est, fin, tw, unsent, unacked);
+}
+
+static bool netHeapLow(size_t freeMin, size_t blockMin)
+{
+  return heap_caps_get_free_size(MALLOC_CAP_8BIT) < freeMin ||
+         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < blockMin;
+}
+
+class GuardedWebServer : public AsyncWebServer
+{
+  public:
+    explicit GuardedWebServer(uint16_t port) : AsyncWebServer(port)
+    {
+      // Same as the library's accept callback, with the heap check in front
+      _server.onClient([] (void *s, AsyncClient *c) {
+        if (!c) return;
+        c->setRxTimeout(3);
+        if (netHeapLow(NET_ACCEPT_MIN_FREE, NET_ACCEPT_MIN_BLOCK) ||
+            !AsyncWebServerRequest::create((AsyncWebServer *)s, c)) {   // the request owns itself
+          netRefused++;
+          // Reset, not close: no FIN/TIME_WAIT state left behind. The abort queues an error
+          // event for this client, so it is deleted from that event, not here.
+          c->onDisconnect([] (void *, AsyncClient *c) { delete c; });
+          c->abort();
+          return;
+        }
+        // The library answers an ACK timeout with a graceful close; with the peer gone that FIN is
+        // never acked either, and the connection keeps its request and unsent segments in heap for
+        // minutes of retransmits. Reset it instead (the error event deletes the request).
+        c->onTimeout([] (void *, AsyncClient *c, uint32_t) { c->abort(); }, nullptr);
+      }, this);
+    }
+};
+
 // AsyncWebServer object on port 80
-AsyncWebServer server(80);
+GuardedWebServer server(80);
 
 //
 // /ws: one WebSocket per open page carries everything the page watches, so it does not
@@ -88,13 +157,22 @@ static void wsTick();
 // A request that arrives with less than this in one free block gets a bare 503: building a JSON or
 // streaming a page then could fail inside operator new, and a failed new aborts the radio
 #define HTTP_MIN_BLOCK  3072
+#define WS_STALL_MS     8000   // a page whose send queue is stuck this long is dropped
 #define WS_AUDIO_MAX    2400   // 400 ms per frame at most; a page further behind skips ahead
-#define WS_WF_ROWS_MAX  12     // waterfall rows per frame (1.4 KB); a new page catches up over a few ticks
-static bool wsHeapOk(size_t bytes)
+#define WS_WF_ROWS_MAX  6      // waterfall rows per frame (0.7 KB, hi-res ~2x that): a new page catches up over a few ticks; bigger frames starved WiFi of heap
+static bool wsHeapOk(size_t bytes, size_t reserve = WS_HEAP_RESERVE, size_t slack = 1024)
 {
-  return heap_caps_get_free_size(MALLOC_CAP_8BIT) > WS_HEAP_RESERVE + bytes &&
-         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) > bytes + 1024;
+  return heap_caps_get_free_size(MALLOC_CAP_8BIT) > reserve + bytes &&
+         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) > bytes + slack;
 }
+// Status and 120-column waterfall frames are what a page is for: they get a slightly lower reserve
+// than the rest and shrink to the block that is there. Not much lower: WiFi itself allocates from
+// this heap, and at ~1 KB left the link dies (seen with a 4 KB reserve). The big hi-res frame keeps
+// the full reserve.
+#define WS_HEAP_RESERVE_LIVE 7000
+#define WS_SLACK_LIVE        512
+#define WS_HEAP_RESERVE_STATUS 2500   // status frame = heartbeat: nearly always sent
+#define WS_SLACK_STATUS        256
 
 // NTP Client to get UTC time
 WiFiUDP ntpUDP;
@@ -216,11 +294,58 @@ void netRequestConnect()
 //
 #define GW_PING_INTERVAL_MS 20000
 #define GW_DEAD_MS          65000
+#define GW_DEAD_RESTARTS    3      // dead periods in a row before restarting
+static void netRestart(const char *why);
 static esp_ping_handle_t gwPing = NULL;
 static uint32_t gwPingTarget = 0;
 static volatile uint32_t gwLastReplyMs = 0;
 
 static void gwPingOk(esp_ping_handle_t hdl, void *args) { gwLastReplyMs = millis(); }
+
+//
+// Weak-link roam. On a mesh the node this radio joined can be far weaker than another node of the
+// same SSID. While connected below ROAM_RSSI for ROAM_LOW_S, scan for the SSID in the background
+// (async: FT8 and the web keep running) and move to a BSSID that is ROAM_GAIN_DB stronger.
+//
+#define ROAM_RSSI      (-72)
+#define ROAM_LOW_S     60
+#define ROAM_GAP_S     180      // between scans
+#define ROAM_GAIN_DB   8
+static void roamTick()
+{
+  static uint32_t lowSince = 0, lastScanMs = 0;
+  static bool scanning = false;
+  if (scanning) {
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_RUNNING) return;
+    scanning = false;
+    if (n > 0 && WiFi.status() == WL_CONNECTED) {
+      int cur = WiFi.RSSI(), best = -1000, bi = -1;
+      String curB = WiFi.BSSIDstr();
+      for (int i = 0; i < n; i++)
+        if (WiFi.RSSI(i) > best && WiFi.BSSIDstr(i) != curB) { best = WiFi.RSSI(i); bi = i; }
+      if (bi >= 0 && best >= cur + ROAM_GAIN_DB) {
+        Serial.printf("[WiFi] Roam %s %d -> %s %d\r\n", curB.c_str(), cur, WiFi.BSSIDstr(bi).c_str(), best);
+        String ssid = WiFi.SSID(), psk = WiFi.psk();
+        uint8_t bssid[6];
+        memcpy(bssid, WiFi.BSSID(bi), 6);
+        int ch = WiFi.channel(bi);
+        WiFi.scanDelete();
+        WiFi.begin(ssid.c_str(), psk.c_str(), ch, bssid);
+        lowSince = 0;
+        return;
+      }
+    }
+    WiFi.scanDelete();
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED || !(WiFi.getMode() & WIFI_STA) || WiFi.RSSI() >= ROAM_RSSI) { lowSince = 0; return; }
+  if (!lowSince) lowSince = millis();
+  if (millis() - lowSince < ROAM_LOW_S * 1000UL || (lastScanMs && millis() - lastScanMs < ROAM_GAP_S * 1000UL)) return;
+  if (ft8TxBusy() || WiFi.scanComplete() == WIFI_SCAN_RUNNING) return;
+  lastScanMs = millis();
+  scanning = WiFi.scanNetworks(true, false, false, 300, 0, WiFi.SSID().c_str()) == WIFI_SCAN_RUNNING;
+}
 
 static void gatewayWatchdog()
 {
@@ -246,11 +371,57 @@ static void gatewayWatchdog()
     return;
   }
 
+  static uint8_t gwDeadCount = 0;
+  if (millis() - gwLastReplyMs < GW_PING_INTERVAL_MS * 2) gwDeadCount = 0;
   if (millis() - gwLastReplyMs > GW_DEAD_MS) {
     Serial.printf("[WiFi] Gateway %s silent for %lu s while 'connected': reconnecting\r\n",
                   WiFi.gatewayIP().toString().c_str(), (unsigned long)((millis() - gwLastReplyMs) / 1000));
     gwLastReplyMs = millis();
+    // Reconnecting did not bring it back (seen once with the heap drained): start over
+    if (++gwDeadCount >= GW_DEAD_RESTARTS) netRestart("gateway unreachable after 3 reconnects");
     WiFi.disconnect(false, false);   // keep the config; the watchdog below reconnects
+  }
+}
+
+//
+// Last resort: restart, keeping the reason across the reset for the boot log
+//
+#define NET_WHY_MAGIC 0x4E455457
+RTC_NOINIT_ATTR static uint32_t netWhyMagic;
+RTC_NOINIT_ATTR static char netWhy[64];
+
+static void netRestart(const char *why)
+{
+  Serial.printf("[NET] Restarting: %s (8-bit heap %u, largest %u)\r\n", why,
+                heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+  snprintf(netWhy, sizeof(netWhy), "%s", why);
+  netWhyMagic = NET_WHY_MAGIC;
+  Serial.flush();
+  delay(100);
+  esp_restart();
+}
+
+//
+// Heap watchdog: the load shedding above should keep the heap off the floor; if something
+// still pins it there, drop the web clients, then restart.
+//
+#define HEAP_WD_LOW         2500   // free 8-bit heap counted as "near zero"
+#define HEAP_WD_LOW_BLOCK   1024   // or largest free block
+#define HEAP_WD_CLOSE_S     15     // seconds that low before closing every web connection
+#define HEAP_WD_RESTART_S   60     // and before restarting
+static void heapWatchdog()
+{
+  static uint32_t lastMs = 0;
+  static uint16_t lowSecs = 0;
+  if (millis() - lastMs < 1000) return;
+  lastMs = millis();
+  if (!netHeapLow(HEAP_WD_LOW, HEAP_WD_LOW_BLOCK)) { lowSecs = 0; return; }
+  if (++lowSecs == HEAP_WD_CLOSE_S) {
+    Serial.printf("[NET] Heap near zero for %u s (%u free): closing web clients\r\n", lowSecs,
+                  heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    ws.closeAll(1013, "radio low on memory");
+  } else if (lowSecs >= HEAP_WD_RESTART_S) {
+    netRestart("heap near zero for 60 s");
   }
 }
 
@@ -276,6 +447,8 @@ void netTickTime()
 
   // Auto-reconnect watchdog if STA drops connection, with automatic fallback to Open Hotspot AP
   gatewayWatchdog();
+  roamTick();
+  heapWatchdog();
   static uint32_t lastWifiCheckMs = 0;
   static uint8_t disconnectTicks = 0;
   if (millis() - lastWifiCheckMs >= 6000) {
@@ -283,9 +456,14 @@ void netTickTime()
     static uint8_t netLogTicks = 0;
     if (++netLogTicks >= 10) {   // once a minute, for the web log card
       netLogTicks = 0;
-      Serial.printf("[NET] RSSI %d dBm, 8-bit heap %u (min %u, largest %u), web clients %u\r\n", (int)WiFi.RSSI(),
-                    heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-                    heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)ws.count());
+      char tcpStats[96];
+      netTcpStats(tcpStats, sizeof(tcpStats));
+      Serial.printf("[NET] %s\r\n", tcpStats);
+      Serial.printf("[NET] RSSI %d dBm, 8-bit heap %u (min %u, largest %u), web clients %u, refused %lu, busy %lu\r\n",
+                    (int)WiFi.RSSI(), heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                    heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                    (unsigned)ws.count(), (unsigned long)netRefused, (unsigned long)netBusy);
+      netRefused = netBusy = 0;
     }
     if (wifiModeIdx > NET_AP_ONLY) {
       if (WiFi.status() != WL_CONNECTED) {
@@ -307,6 +485,8 @@ void netTickTime()
           WiFi.mode(WIFI_STA);
         }
         WiFi.setSleep(false);
+        WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+        WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
         WiFi.reconnect();
       } else {
         if (disconnectTicks > 0) {
@@ -489,6 +669,12 @@ static bool wifiConnect()
   }
   prefs.end();
 
+  // The default FAST_SCAN joins the first matching AP it hears, which on a mesh is often not the
+  // strongest node (seen at -81 dBm with a -50 dBm node next to it): scan every channel and take the
+  // strongest. The same stored config serves WiFi.reconnect() and the auto-reconnect.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+
   // First try Slot #1 (HH-1301) directly for fast boot without scan delay
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
@@ -553,8 +739,9 @@ static bool wifiConnect()
     WiFi.setAutoReconnect(true);
     WiFi.setTxPower(WIFI_POWER_19_5dBm);
     sntpStart();
-    Serial.printf("[WiFi] CONNECTED to '%s' | IP: %s | RSSI: %d dBm\r\n",
-                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+    Serial.printf("[WiFi] CONNECTED to '%s' | IP: %s | RSSI: %d dBm | BSSID %s ch %d\r\n",
+                  WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI(),
+                  WiFi.BSSIDstr().c_str(), (int)WiFi.channel());
     ft8AddLog("[INFO] Connected to Wi-Fi '%s' - IP: %s (%d dBm)",
               WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
     drawScreen(
@@ -633,6 +820,30 @@ static void runControlAction(const ControlRequest &cr)
       ssbPpmSave();
       rxSetFrequency(currentFrequency);
       if (isSSB()) applySSBBfo();
+    } else if (action == "si5351") {
+      // Bench test: si5351&clk=2&hz=32768 (hz=0 = off); no clk = only scan the bus and init
+      if (getParamStr("clk").length()) si5351Set((uint8_t)getParamStr("clk").toInt(), (uint32_t)getParamStr("hz").toInt());
+      else si5351Probe();
+    } else if (action == "ext_ref") {
+      // Si5351 CLK2 as the SI4732 reference clock (crystal removed): saved, applied by a restart
+      extRefEnable(getParamStr("val").toInt() != 0);
+      Serial.println("[SI5351] external RCLK setting saved, restarting");
+      delay(300);
+      ESP.restart();
+    } else if (action == "pin34") {
+      // Probe GPIO34 (Si4732 pin 16 / DOUT): average voltage and the share of high samples over 4000 reads
+      int hi = 0; uint32_t mv = 0;
+      for (int i = 0; i < 4000; i++) hi += gpio_get_level((gpio_num_t)34);
+      for (int i = 0; i < 16; i++) mv += analogReadMilliVolts(34);
+      int lo = 4095, hi2 = 0;
+      for (int i = 0; i < 2000; i++) { int v = analogRead(34); if (v < lo) lo = v; if (v > hi2) hi2 = v; }
+      ft8AddLog("[PIN34] high %d of 4000 reads, average %u mV, ADC min %d max %d", hi, (unsigned)(mv / 16), lo, hi2);
+    } else if (action == "audio_in") {
+      // Audio input: val=1 Si4732 digital I2S (needs the Si5351 reference + wires DCLK/DFS/DOUT), val=0 analog ADC; saved, restart
+      audioDigitalSet(getParamStr("val").toInt() != 0);
+      Serial.println("[AUDIO] input setting saved, restarting");
+      delay(300);
+      ESP.restart();
     } else if (action == "adc_auto") {
       ft8SetAdcAuto(getParamStr("val").toInt() != 0);
     } else if (action == "mode") {
@@ -1003,8 +1214,11 @@ static void processControlQueue()
 // failed tcp_write (ERR_MEM under low heap) and silently drops a whole 2920
 // byte chunk, which corrupts the gzipped page and larger API payloads.
 // A stalled send is retried from the next ACK or the ~500 ms client poll.
+// The body is queued by reference (it lives in flash for good), so lwIP keeps no heap copy of
+// the unacknowledged bytes; only the headers are copied.
 //
 #define FLASH_RESP_MAX_IN_FLIGHT 2920
+#define FLASH_RESP_MAX_ACTIVE    1      // more at once gets a 503: each holds a request and a TCP send window
 
 class FlashResponse : public AsyncWebServerResponse
 {
@@ -1015,7 +1229,9 @@ class FlashResponse : public AsyncWebServerResponse
       _contentType = type;
       _contentLength = len;
       addHeader("Connection", "close", false);
+      flashRespActive++;
     }
+    ~FlashResponse() { flashRespActive--; }
 
     bool _sourceValid() const override { return true; }
 
@@ -1053,7 +1269,7 @@ class FlashResponse : public AsyncWebServerResponse
         size_t inFlight = _writtenLength - _ackedLength;
         if (inFlight >= FLASH_RESP_MAX_IN_FLIGHT) break;
         if (left > FLASH_RESP_MAX_IN_FLIGHT - inFlight) left = FLASH_RESP_MAX_IN_FLIGHT - inFlight;
-        size_t n = client->add(src, left);
+        size_t n = client->add(src, left, _state == RESPONSE_HEADERS ? ASYNC_WRITE_FLAG_COPY : 0);
         if (!n) break;
         if (_state == RESPONSE_HEADERS) _headSent += n; else _sentLength += n;
         _writtenLength += n;
@@ -1071,6 +1287,35 @@ class FlashResponse : public AsyncWebServerResponse
     size_t _headSent = 0;
 };
 
+
+// 503 that a page reloads by itself (meta refresh) and a fetch() retries (Retry-After)
+static void sendBusy(AsyncWebServerRequest *request)
+{
+  netBusy++;
+  AsyncWebServerResponse *response = request->beginResponse(503, "text/html",
+    "<meta http-equiv=refresh content=2>Radio busy, retrying...");
+  response->addHeader("Retry-After", "2");
+  request->send(response);
+}
+
+static void sendFlashGz(AsyncWebServerRequest *request, const char *type, const uint8_t *data, size_t len,
+                        const char *etag)
+{
+  AsyncWebServerResponse *response;
+  if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == etag) {
+    response = request->beginResponse(304);
+  } else if (flashRespActive >= FLASH_RESP_MAX_ACTIVE) {
+    // Busy: a page reloads itself, a fetch() retries
+    sendBusy(request);
+    return;
+  } else {
+    response = new FlashResponse(200, type, data, len);
+    response->addHeader("Content-Encoding", "gzip");
+  }
+  response->addHeader("ETag", etag);
+  response->addHeader("Cache-Control", "no-cache");
+  request->send(response);
+}
 
 //
 // Radio status JSON for /api/status and the /ws push (callers own the buffer: two tasks build it)
@@ -1130,8 +1375,8 @@ static int buildStatusJson(char *json, size_t cap)
     "\"lcd_layout\":%u,\"lcd_view\":%u,\"is_ap\":%s,\"ip\":\"%s\",\"ssid\":\"%s\","
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
-    "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"msg_count\":%lu,"
-    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u}",
+    "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"heap_largest\":%u,\"heap_min\":%u,\"msg_count\":%lu,"
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1148,8 +1393,11 @@ static int buildStatusJson(char *json, size_t cap)
     ft8WebAudioActive() ? "true" : "false",
     ft8GetAdcAuto() ? "true" : "false", ssbPpmCal10 / 10.0f,
     ft8GetAudioLevel(), (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned int)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
     (unsigned long)ft8GetTotalDecoded(),
-    (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail
+    (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail,
+    audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
+    (unsigned long)audioDigitalFrames(), audioDigitalPeak(true)
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;
@@ -1175,12 +1423,17 @@ static void wsOnEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
       }
     }
     portEXIT_CRITICAL(&wsMux);
+    Serial.printf("[WS] +%u %s (heap %u, largest %u)\r\n", (unsigned)client->id(), added ? "page" : "refused: too many pages",
+                  heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     if (!added) client->close(1013, "too many pages");
   } else if (type == WS_EVT_DISCONNECT) {
+    Serial.printf("[WS] -%u\r\n", (unsigned)client->id());
     portENTER_CRITICAL(&wsMux);
     for (int i = 0; i < WS_MAX_PAGES; i++)
       if (wsPages[i].id == client->id()) wsPages[i].id = 0;
     portEXIT_CRITICAL(&wsMux);
+  } else if (type == WS_EVT_ERROR) {
+    Serial.printf("[WS] err %u\r\n", (unsigned)client->id());
   } else if (type == WS_EVT_DATA) {
     AwsFrameInfo *info = (AwsFrameInfo *)arg;
     if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT && len >= 7 &&
@@ -1239,22 +1492,42 @@ static void wsTick()
   // Status JSON and new waterfall rows, every 500 ms
   if (now - lastStatusMs >= 500) {
     lastStatusMs = now;
-    static char json[960];
+    static char json[1024];
     int len = buildStatusJson(json, sizeof(json));
-    if (!wsHeapOk(len)) return;
-    auto status = std::make_shared<std::vector<uint8_t>>((uint8_t *)json, (uint8_t *)json + len);
+    // The status frame doubles as the page's heartbeat: a page that misses it falls back to HTTP polling,
+    // which costs far more heap than the frame. So it gets a much lower reserve than the waterfall, and a
+    // one-byte '.' heartbeat goes out when even that does not fit
+    bool statusOk = wsHeapOk(len, WS_HEAP_RESERVE_STATUS, WS_SLACK_STATUS);
+    static std::shared_ptr<std::vector<uint8_t>> beat;
+    if (!statusOk && !beat && wsHeapOk(1, 1500, 128)) beat = std::make_shared<std::vector<uint8_t>>(1, (uint8_t)'.');
+    // (without statusOk only the rows/logs below go out)
+    std::shared_ptr<std::vector<uint8_t>> status;
+    if (statusOk) status = std::make_shared<std::vector<uint8_t>>((uint8_t *)json, (uint8_t *)json + len);
     uint32_t wfHead = ft8GetWebWaterfallRowCount();
     const uint8_t *wf = ft8GetWebWaterfallBuffer();
     for (int i = 0; i < WS_MAX_PAGES; i++) {
       if (!pages[i].id) continue;
       AsyncWebSocketClient *c = ws.client(pages[i].id);
+      // A page whose queue does not drain for WS_STALL_MS is gone (or on a dead link): its queued
+      // frames and pcb would sit in heap through the TCP retransmit timeouts, so reset it
+      static uint32_t stallId[WS_MAX_PAGES], stallAt[WS_MAX_PAGES];
+      if (c && c->queueLen() > 0) {
+        if (stallId[i] != pages[i].id) { stallId[i] = pages[i].id; stallAt[i] = now; }
+        else if (now - stallAt[i] > WS_STALL_MS) {
+          Serial.printf("[NET] ws page %u stalled (queue %u): reset\r\n", (unsigned)pages[i].id, (unsigned)c->queueLen());
+          c->client()->abort();
+          continue;
+        }
+      } else stallId[i] = 0;
       if (!c || !c->canSend() || c->queueLen() > 0) continue;   // still sending the last tick: it gets the next one
-      c->text(status);
+      if (status) c->text(status);
+      else if (beat) c->text(beat);
       uint32_t behind = wfHead - pages[i].wfSeq;
       if (behind > 36) behind = 36;
       uint32_t rows = behind > WS_WF_ROWS_MAX ? WS_WF_ROWS_MAX : behind;
       if (!optionWebWaterfall()) rows = 0;   // switched off in Options
-      if (rows && !wsHeapOk(2 + rows * 120)) rows = 0;   // the page catches up on a later tick
+      // Fewer rows when the largest block is small instead of none; the page catches up on later ticks
+      while (rows && !wsHeapOk(2 + rows * 120, WS_HEAP_RESERVE_LIVE, WS_SLACK_LIVE)) rows = rows > 3 ? rows / 2 : 0;
       if (rows) {
         auto buf = std::make_shared<std::vector<uint8_t>>(2 + rows * 120);
         (*buf)[0] = 'W';
@@ -1318,42 +1591,19 @@ static void webInit()
   // Low on heap: refuse at once (the page retries) rather than crash half-way through a response
   server.addMiddleware([] (AsyncWebServerRequest *request, ArMiddlewareNext next) {
     if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTP_MIN_BLOCK) {
-      request->send(503);
+      sendBusy(request);
       return;
     }
     next();
   });
 
-  // Main Web UI page - pre-gzipped in flash (zero heap copy), revalidated by ETag
+  // Main Web UI page and the world map for the station map (Natural Earth 1:110m SVG):
+  // pre-gzipped in flash (zero heap copy), revalidated by ETag
   server.on("/", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == WEBUI_ETAG) {
-      AsyncWebServerResponse *response = request->beginResponse(304);
-      response->addHeader("ETag", WEBUI_ETAG);
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-      return;
-    }
-    AsyncWebServerResponse *response = new FlashResponse(200, "text/html; charset=utf-8", WEBUI_HTML_GZ, WEBUI_HTML_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("ETag", WEBUI_ETAG);
-    response->addHeader("Cache-Control", "no-cache");
-    request->send(response);
+    sendFlashGz(request, "text/html; charset=utf-8", WEBUI_HTML_GZ, WEBUI_HTML_GZ_LEN, WEBUI_ETAG);
   });
-
-  // World map for the web UI station map (Natural Earth 1:110m SVG, gzipped in flash), revalidated by ETag
   server.on("/map.svg", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    if (request->hasHeader("If-None-Match") && request->header("If-None-Match") == WORLDMAP_ETAG) {
-      AsyncWebServerResponse *response = request->beginResponse(304);
-      response->addHeader("ETag", WORLDMAP_ETAG);
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-      return;
-    }
-    AsyncWebServerResponse *response = new FlashResponse(200, "image/svg+xml", WORLDMAP_SVG_GZ, WORLDMAP_SVG_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("ETag", WORLDMAP_ETAG);
-    response->addHeader("Cache-Control", "no-cache");
-    request->send(response);
+    sendFlashGz(request, "image/svg+xml", WORLDMAP_SVG_GZ, WORLDMAP_SVG_GZ_LEN, WORLDMAP_ETAG);
   });
 
   // Legacy status / memory / config pages
@@ -1376,7 +1626,7 @@ static void webInit()
 
   // /api/status - Real-time radio, FT8 slot, and WiFi status
   server.on("/api/status", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    static char json[960];
+    static char json[1024];
     int len = buildStatusJson(json, sizeof(json));
     AsyncWebServerResponse *response = new FlashResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
     response->addHeader("Cache-Control", "no-store");
@@ -1471,7 +1721,7 @@ static void webInit()
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
-  // /api/screenshot.bmp - Stream 320x170 16-bit RGB565 BMP from the (8-bit) sprite
+  // /api/screenshot.bmp - Stream 320x170 16-bit RGB565 BMP from the (half-height 8-bit) sprite, one band at a time
   server.on("/api/screenshot.bmp", HTTP_GET, [] (AsyncWebServerRequest *request) {
     const uint32_t width = 320;
     const uint32_t height = 170;
@@ -1481,45 +1731,50 @@ static void webInit()
 
     AsyncWebServerResponse *response = request->beginResponse("image/bmp", fileSize,
       [width, height, hdrSize, imgBytes, fileSize](uint8_t *buffer, size_t maxLen, size_t index) -> size_t {
-        if (index >= fileSize) return 0;
+        if (index >= fileSize) { screenshotDone(); return 0; }
 
+        uint8_t hdr[66] = {0};
+        hdr[0] = 'B'; hdr[1] = 'M';
+        memcpy(&hdr[2], &fileSize, 4);
+        memcpy(&hdr[10], &hdrSize, 4);
+        uint32_t dibSize = 40;
+        memcpy(&hdr[14], &dibSize, 4);
+        memcpy(&hdr[18], &width, 4);
+        memcpy(&hdr[22], &height, 4);
+        uint16_t planes = 1, bpp = 16;
+        memcpy(&hdr[26], &planes, 2);
+        memcpy(&hdr[28], &bpp, 2);
+        uint32_t comp = 3; // BI_BITFIELDS
+        memcpy(&hdr[30], &comp, 4);
+        memcpy(&hdr[34], &imgBytes, 4);
+        uint32_t rMask = 0xF800, gMask = 0x07E0, bMask = 0x001F;
+        memcpy(&hdr[54], &rMask, 4);
+        memcpy(&hdr[58], &gMask, 4);
+        memcpy(&hdr[62], &bMask, 4);
+
+        // Byte by byte: maxLen follows the TCP window and may be smaller than a row,
+        // and returning 0 would end the response
         size_t written = 0;
-        if (index == 0) {
-          uint8_t hdr[66] = {0};
-          hdr[0] = 'B'; hdr[1] = 'M';
-          memcpy(&hdr[2], &fileSize, 4);
-          memcpy(&hdr[10], &hdrSize, 4);
-          uint32_t dibSize = 40;
-          memcpy(&hdr[14], &dibSize, 4);
-          memcpy(&hdr[18], &width, 4);
-          memcpy(&hdr[22], &height, 4);
-          uint16_t planes = 1, bpp = 16;
-          memcpy(&hdr[26], &planes, 2);
-          memcpy(&hdr[28], &bpp, 2);
-          uint32_t comp = 3; // BI_BITFIELDS
-          memcpy(&hdr[30], &comp, 4);
-          memcpy(&hdr[34], &imgBytes, 4);
-          uint32_t rMask = 0xF800, gMask = 0x07E0, bMask = 0x001F;
-          memcpy(&hdr[54], &rMask, 4);
-          memcpy(&hdr[58], &gMask, 4);
-          memcpy(&hdr[62], &bMask, 4);
-
-          memcpy(buffer, hdr, hdrSize);
-          written += hdrSize;
-          index += hdrSize;
-        }
-
-        while (written + width * 2 <= maxLen && index < fileSize) {
-          uint32_t pixOffset = (index - hdrSize) / 2;
-          int rowFromBottom = pixOffset / width;
-          int y = (height - 1) - rowFromBottom;
-          if (y < 0) break;
-          uint16_t *dst = (uint16_t *)(buffer + written);
-          for (uint32_t x = 0; x < width; x++) {
-            dst[x] = spr.readPixel(x, y);
+        int band = -1;
+        while (written < maxLen && index < fileSize) {
+          if (index < hdrSize) { buffer[written++] = hdr[index++]; continue; }
+          uint32_t pix = (index - hdrSize) / 2;
+          int y = (height - 1) - pix / width;
+          int x = pix % width;
+          // The sprite holds one half of the screen at a time: the LCD loop renders the band we need
+          // (wait for it here: this library closes the connection on RESPONSE_TRY_AGAIN)
+          if (y / SPR_BAND_H != band) {
+            band = y / SPR_BAND_H;
+            bool ready = screenshotBand(band);
+            for (int t = 0; !ready && t < 150; t++) {
+              delay(2);
+              ready = screenshotBand(band);
+            }
+            if (!ready) { screenshotDone(); return written; }
           }
-          written += width * 2;
-          index += width * 2;
+          uint16_t px = spr.readPixel(x, y % SPR_BAND_H);
+          buffer[written++] = ((index - hdrSize) & 1) ? (px >> 8) : (px & 0xFF);
+          index++;
         }
         return written;
       }
@@ -1615,6 +1870,11 @@ static void webInit()
   ws.onEvent(wsOnEvent);
   server.addHandler(&ws);
   server.begin();
+  if (netWhyMagic == NET_WHY_MAGIC) {
+    netWhy[sizeof(netWhy) - 1] = 0;
+    Serial.printf("[NET] Last restart by the network watchdog: %s\r\n", netWhy);
+    netWhyMagic = 0;
+  }
   Serial.printf("[Web] HTTP server started on port 80 (free_heap=%u, free_8bit=%u, max_alloc=%u)\r\n",
                 (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),

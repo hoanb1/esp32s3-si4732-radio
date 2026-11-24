@@ -305,13 +305,18 @@ td.act button:hover{background:var(--red);color:#fff}
   </div>
   <div class="col">
    <div class="card" id="txCard">
-    <div class="ch"><h2>QSO / Transmit</h2><span class="row"><span class="badge" id="txBadge">loading…</span><span class="badge" id="txArmBadge" title="Enable TX in Settings">TX off</span></span></div>
+    <div class="ch"><h2>QSO / Transmit</h2><span class="row"><span class="badge" id="txBadge">loading…</span></span></div>
     <div class="plan" id="txPlan">Loading transmitter status…</div>
     <div class="row">
       <button class="pri" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">Call CQ</button>
       <button class="dng" onclick="txAction('stop')" title="Stop the QSO and any transmission now">Stop</button>
-      <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto off</span></label>
+      <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto QSO</span></label>
+      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable2" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText2">Enable TX</span></label>
       <span class="note" id="txNote"></span>
+    </div>
+    <div class="row" id="txBands" title="FT8 calling frequencies (USB). Tuning is checked after each change.">
+      <span class="note">Band</span>
+      <button onclick="txBand(7074)">40</button><button onclick="txBand(10136)">30</button><button onclick="txBand(14074)">20</button><button onclick="txBand(18100)">17</button><button onclick="txBand(21074)">15</button><button onclick="txBand(24915)">12</button><button onclick="txBand(28074)">10</button>
     </div>
     <div class="row">
       <input type="text" id="txMsg" class="f1" maxlength="37" placeholder="free message for the next slot" style="text-transform:uppercase" onkeydown="if(event.key==='Enter')$('txSendBtn').click()">
@@ -319,6 +324,22 @@ td.act button:hover{background:var(--red);color:#fff}
     </div>
     <div class="note">Or press Answer on a CQ in the decoded list.</div>
     <div class="logs mono" id="txEvents" style="min-height:44px;max-height:130px">No transmissions yet</div>
+   </div>
+   <div class="card" id="wsprCard">
+    <div class="ch"><h2>WSPR transmit</h2><span class="row"><span class="badge" id="wsprBadge">idle</span></span></div>
+    <div class="plan" id="wsprPlan">Loading…</div>
+    <div class="row">
+      <span class="note">Power</span>
+      <select id="wsprDbm"><option value="0">0 dBm</option><option value="7">7 dBm</option><option value="10" selected>10 dBm</option><option value="13">13 dBm</option><option value="17">17 dBm</option><option value="20">20 dBm</option><option value="23">23 dBm</option></select>
+      <span class="note">Times</span>
+      <input type="number" id="wsprCount" min="1" max="30" value="3" style="width:60px">
+      <button class="pri" id="wsprBtn" disabled onclick="wsprSend()" title="One transmission starts 1 s into each even UTC minute, every 4 minutes">Start</button>
+      <button class="dng" onclick="txAction('stop')">Stop</button>
+      <span class="note" id="wsprNote"></span>
+    </div>
+    <div class="row"><button onclick="wsprTune()" title="Dial 14096 kHz USB: WSPR appears at about 1100 Hz">Tune 20 m WSPR (receive)</button><span class="note">receive decoder: tools/wspr_rx.py</span></div>
+    <div class="logs mono" id="wsprRx" style="min-height:44px;max-height:150px">No WSPR spots received yet (time, SNR, dT, kHz, call, grid, dBm)</div>
+    <div class="note">20 m WSPR: centre 14.0971 MHz (dial 14.0956 USB + 1500 Hz). Needs the Si5351, the T/R relay and a low-pass filter. Each message is about 111 s; spots appear on <a href="https://wsprnet.org/drupal/wsprnet/spots" target="_blank" rel="noopener">wsprnet.org</a> a few minutes later.</div>
    </div>
    <div class="card">
     <div class="ch"><h2>PSKReporter: heard me</h2><span class="row"><span class="badge" id="heardBadge">not checked</span><a class="note" href="https://pskreporter.info/pskmap.html" target="_blank" rel="noopener">pskreporter.info</a></span></div>
@@ -365,6 +386,9 @@ td.act button:hover{background:var(--red);color:#fff}
       <button onclick="sendCtrl('save_cal')" title="Store the current BFO offset as this band's calibration">Save BFO as band cal</button>
       <span class="note">Cal <b id="calVal" class="mono">0 Hz</b></span></div>
     <div class="fr"><span class="lb" title="SI4732 crystal correction (same as serial J)">RX crystal</span><input type="number" id="rxPpm" step="0.1" min="-1500" max="1500"> ppm <button onclick="sendCtrl('rx_ppm',{val:$('rxPpm').value})">Set</button></div>
+    <div class="fr"><span class="lb">Audio from Si4732</span>
+      <select id="audIn" class="f1" onchange="setAudIn(this.value)"><option value="0">Analog – line out → ADC GPIO34</option><option value="1">Digital – I2S (DCLK 19, DFS 22, DOUT → 34)</option></select></div>
+    <div class="fr"><span class="lb"></span><span id="audInMsg" class="f1" style="font-size:12px;opacity:.7"></span></div>
     <div class="note">AGC / attenuation is in the Quick row on the main page.</div>
    </div>
 
@@ -386,13 +410,23 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="lb" style="flex-basis:auto">Grid</span><input type="text" id="txGrid" maxlength="4" placeholder="AA00" style="width:70px;text-transform:uppercase"></div>
     <div class="fr"><span class="lb">Audio</span><input type="number" id="txAudio" min="200" max="2900" step="10"> Hz
       <span class="lb" style="flex-basis:auto">Crystal</span><input type="number" id="txPpm" step="0.1"> ppm</div>
-    <div class="fr"><span class="lb">Output pin</span>
+    <div class="fr"><span class="lb">TX offset</span><select id="txOff"><option value="1">On (random each TX)</option><option value="0">Off (fixed Audio)</option></select>
+      <input type="number" id="txOLo" min="200" max="2850" step="10" style="width:70px"> – <input type="number" id="txOHi" min="200" max="2850" step="10" style="width:70px"> Hz
+      <span class="note" id="txPick"></span></div>
+    <div class="fr"><span class="lb">TX source</span>
+      <select id="txSrc" class="f1" onchange="renderTx(txState)"><option value="0">Si5351 CLK2 – any band, with PA + relay</option><option value="1">ESP32 GPIO (APLL) – 80 m bench</option></select></div>
+    <div class="fr" id="txDrvRow"><span class="lb">TX power</span>
+      <select id="txDrv" class="f1"><option value="0">Low – 2 mA (≈1 mW, for the PA)</option><option value="1">Medium – 4 mA (≈2.5 mW)</option><option value="2">High – 6 mA (≈5 mW)</option><option value="3">Max – 8 mA (≈10 mW)</option></select></div>
+    <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
       <select id="txPin" class="f1"><option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option><option value="16">GPIO16 – BCK, backlight wire (bench tests)</option></select></div>
     <div class="fr">
-      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">TX off</span></label>
+      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">Enable TX</span></label>
       <button class="pri" onclick="txSave()">Save station</button>
     </div>
-    <div class="note">80 m only; square wave output needs a low-pass filter before an antenna.</div>
+    <div class="fr" id="txSiRow" style="display:none"><span class="lb">Si5351 + relay</span>
+      <button onclick="txRelayTest()" title="Closes the T/R relay 5 times for 5 s, no RF. Receive is cut while it is closed.">Test relay (5 x 5 s)</button>
+      <span class="note" id="txRelayMsg"></span></div>
+    <div class="note" id="txOutNote">Tones come from Si5351 CLK2 (any band 1.8-30 MHz): CLK2 &rarr; LPF &rarr; PA &rarr; T/R relay (GPIO26) &rarr; antenna. A low-pass filter after the PA is required.</div>
    </div>
 
    <div class="card">
@@ -689,7 +723,8 @@ scaleCanvas.addEventListener('click', e => {
   if (isFm) sendCtrl('freq', { freq: (Math.round(f / 10) * 10 / 100).toFixed(2), unit: 'mhz' });
   else sendCtrl('freq', { freq: f, unit: 'khz' });
 });
-function isDigital() { return curStatus.mode === 'FT8' || curStatus.mode === 'FT4'; }
+function isWspr() { const f = parseFloat(curStatus.freq_khz); return curStatus.mode === 'USB' && f >= 14095 && f <= 14097; }
+function isDigital() { return curStatus.mode === 'FT8' || curStatus.mode === 'FT4' || isWspr(); }
 
 function setOnline(ok) {
   if (ok) failCount = 0;
@@ -708,7 +743,8 @@ function applyStatus(d) {
   curStatus = d;
   const mode = d.mode || 'FM';
   const isFt4 = mode === 'FT4', dig = mode === 'FT8' || isFt4;
-  document.body.classList.toggle('dig', dig);
+  const wsprView = mode === 'USB' && parseFloat(d.freq_khz) >= 14095 && parseFloat(d.freq_khz) <= 14097;   // WSPR 20 m: keep the transmit section
+  document.body.classList.toggle('dig', dig || wsprView);
 
   T('boxLocalTime', d.local_time || '--:--');
   T('hdrSum', `${d.freq_khz} ${d.unit || 'kHz'} · ${mode}`);
@@ -780,7 +816,8 @@ function applyStatus(d) {
   S('slotFill', 'width', Math.min(100, Math.round(slotCur / slotMax * 100)) + '%');
   C('slotFill', d.decoding ? 'slot-fill dec' : 'slot-fill');
   T('decodeStatusBadge', dig ? (d.decoding ? `Decoding ${lbl}…` : `Listening ${lbl} · ${d.freq_khz} kHz`) : 'Idle');
-  if (dig !== wasDig) { wasDig = dig; if (dig) { lastMsgCount = -1; fetchTx(); pskrFetch(); renderHeard(); } }
+  const live = dig || wsprView;
+  if (live !== wasDig) { wasDig = live; if (live) { lastMsgCount = -1; fetchTx(); pskrFetch(); renderHeard(); } }
   if (d.last_duration_ms > 0) T('lastDurText', `last ${d.last_duration_ms} ms`);
 }
 
@@ -966,18 +1003,24 @@ for (let i = 0; i < 256; i++) {
   ULAW[i] = (u & 0x80 ? -m : m) / 32768;
 }
 let audSeq = 0, audNext = 0, ws = null, wsLastStatus = 0;
-const wsLive = () => ws && ws.readyState === 1 && Date.now() - wsLastStatus < 2500;
+// The radio skips a status frame when its heap is low (it sends a '.' heartbeat instead), so tolerate gaps;
+// while the socket is open never poll the waterfall and poll /api/status only every 5 s: HTTP polling
+// costs the radio far more heap than the frames it replaces and makes things worse
+const wsUp = () => ws && ws.readyState === 1;
+const wsLive = () => wsUp() && Date.now() - wsLastStatus < 8000;
+let wsRetryMs = 2000, lastStatusFetch = 0;
 const wfBuf = new Uint8Array(WF_ROWS * 120);
 const logLines = [];
 let logPaused = false;
 
 function wsConnect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { T('wsState', 'live'); if (webAudioOn) ws.send('audio=1'); };
-  ws.onclose = () => { T('wsState', 'reconnecting…'); ws = null; setTimeout(wsConnect, 2000); };
+  ws.onopen = () => { wsRetryMs = 2000; T('wsState', 'live'); if (webAudioOn) ws.send('audio=1'); };
+  ws.onclose = () => { T('wsState', 'reconnecting…'); ws = null; setTimeout(wsConnect, wsRetryMs); wsRetryMs = Math.min(wsRetryMs * 2, 15000); };
   ws.onmessage = ev => {
     if (typeof ev.data === 'string') {
+      if (ev.data === '.') { wsLastStatus = Date.now(); return; }   // heartbeat
       if (ev.data[0] === '{') {
         try { applyStatus(JSON.parse(ev.data)); wsLastStatus = Date.now(); } catch (e) {}
       } else addLogLine(ev.data);
@@ -1514,38 +1557,73 @@ function renderTx(st) {
   txState = st;
   if (enabledChanged) renderTrafficTable();   // its Answer buttons follow the TX switch
   if (!txFormLoaded && !txDirty) {
-    $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio;
-    $('txPin').value = String(st.pin); $('txPpm').value = st.ppm;
+    $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio; $('txOff').value = st.offset ? '1' : '0'; $('txOLo').value = st.olo; $('txOHi').value = st.ohi;
+    $('txPin').value = String(st.pin); $('txSrc').value = String(st.src); $('txDrv').value = String(st.drv); $('txPpm').value = st.ppm;
     txFormLoaded = true;
   }
+  T('txPick', st.offset && st.pick ? 'last ' + st.pick.toFixed(1) + ' Hz' : '');
   const busy = st.on || st.qso !== 'idle';
   C('txBadge', st.on ? 'badge err' : busy ? 'badge warn' : st.enabled ? 'badge ok' : 'badge');
   T('txBadge', st.on ? 'on air: ' + st.text : st.qso !== 'idle' ? st.qso + (st.dx ? ' · ' + st.dx : '') : st.enabled ? 'ready' : 'idle');
   if (document.activeElement !== $('txEnable')) $('txEnable').checked = !!st.enabled;
-  C('txArmBadge', st.enabled ? 'badge err' : 'badge');
-  T('txArmBadge', st.enabled ? 'TX enabled' : 'TX off');
-  T('txArmText', st.enabled ? 'TX enabled' : 'TX off');
+  T('txArmText', 'Enable TX');
+  if (document.activeElement !== $('txEnable2')) $('txEnable2').checked = !!st.enabled;
+  T('txArmText2', 'Enable TX');
 
   let plan, ok = false;
   if (!st.call || !st.grid) plan = 'Enter your callsign and grid in Settings > FT8 transmit station, then Save. Nothing is sent without a callsign.';
   else if (!st.usb) plan = 'Switch the radio to FT8 (USB) to transmit.';
-  else if (!st.plan) plan = `${(st.rf / 1e6).toFixed(4)} MHz is out of reach: exact 6.25 Hz FT8 tones only work around 3.5–5 MHz. Tune to 80 m FT8 (3573 kHz) to transmit.`;
+  else if (st.src === 0 && !st.si_ok) plan = 'Si5351 is not active (External reference off or chip missing). Pick ESP32 GPIO under Settings > TX source, or enable the Si5351.';
+  else if (!st.plan && !st.si) plan = `${(st.rf / 1e6).toFixed(4)} MHz is out of reach: exact 6.25 Hz FT8 tones only work around 3.5–5 MHz. Tune to 80 m FT8 (3573 kHz) to transmit.`;
   else {
     ok = true;
-    plan = `${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone error ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz` +
-      (st.enabled ? '' : ' · enable TX in Settings to transmit');
+    plan = st.si
+      ? `${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz via Si5351 CLK2 · T/R relay ${st.relay ? 'TX' : 'RX'}`
+      : `${st.call} ${st.grid} · ${(st.rf / 1e3).toFixed(3)} kHz on GPIO${st.pin} · tone error ${st.tone_err >= 0 ? '+' : ''}${st.tone_err.toFixed(2)} Hz`;
+    plan +=
+      (st.enabled ? '' : ' · turn Enable TX on to transmit');
   }
   T('txPlan', plan);
   C('txPlan', ok ? 'plan' : 'plan warn');
+  const siSel = $('txSrc').value === '0';
+  $('txPinRow').style.display = siSel ? 'none' : '';
+  $('txDrvRow').style.display = siSel ? '' : 'none';
+  $('txSiRow').style.display = siSel ? '' : 'none';
+  $('txOutNote').style.display = siSel ? '' : 'none';
   const canSend = ok && st.enabled;
   $('txCqBtn').disabled = !canSend || busy;
   $('txSendBtn').disabled = !canSend || !!st.busy;
   const auto = st.auto || 0;
   if (document.activeElement !== $('txAuto')) $('txAuto').checked = auto > 0;
   $('txAuto').disabled = !canSend;
-  T('txAutoText', auto ? `Auto on · ${st.auto_qsos}/10 QSO` : 'Auto off');
+  T('txAutoText', auto ? `Auto QSO · ${st.auto_qsos}/10` : 'Auto QSO');
   const ev = (st.events || []).join('\n') || 'No transmissions yet';
   if ($('txEvents').textContent !== ev) $('txEvents').textContent = ev;
+  wsprRender(st);
+}
+function wsprRender(st) {
+  const ok = !!(st.call && st.grid && st.si && st.si_ok);
+  const busy = !!(st.on || st.busy);
+  C('wsprBadge', st.on ? 'badge err' : busy ? 'badge warn' : st.enabled ? 'badge ok' : 'badge');
+  T('wsprBadge', st.on ? 'on air' : busy ? 'waiting for the minute' : st.enabled ? 'ready' : 'idle');
+  T('wsprPlan', !st.call || !st.grid ? 'Set your callsign and grid in Settings first.'
+    : !ok ? 'Needs the Si5351 on the bus (External reference on).'
+    : `${st.call} ${st.grid} · 14.0971 MHz · T/R relay ${st.relay ? 'TX' : 'RX'}` + (st.enabled ? '' : ' · turn Enable TX on'));
+  C('wsprPlan', ok ? 'plan' : 'plan warn');
+  $('wsprBtn').disabled = !ok || !st.enabled || busy;
+  const rx = (st.wspr_rx || []).join('\n') || 'No WSPR spots received yet (time, SNR, dT, kHz, call, grid, dBm)';
+  if ($('wsprRx').textContent !== rx) $('wsprRx').textContent = rx;
+}
+async function wsprTune() {
+  T('wsprNote', 'tuning...');
+  await sendCtrl('freq', { freq: 14096, unit: 'khz' });
+  setTimeout(() => T('wsprNote', ''), 3000);
+}
+async function wsprSend() {
+  if (!txState.enabled) { T('wsprNote', 'Turn Enable TX on first'); setTimeout(() => T('wsprNote', ''), 2500); return; }
+  await txAction('wspr', { dbm: $('wsprDbm').value, count: $('wsprCount').value });
+  T('wsprNote', 'queued');
+  setTimeout(() => T('wsprNote', ''), 4000);
 }
 // Status loop only in FT8/FT4 mode; one fetch when the drawer needs the form values
 async function fetchTx() {
@@ -1553,15 +1631,31 @@ async function fetchTx() {
   if (document.hidden) return;
   if (isDigital()) {
     try { await txFetch(); } catch (e) { T('txPlan', 'Could not reach the transmitter status, retrying…'); C('txPlan', 'plan warn'); }
-    txTimer = setTimeout(fetchTx, txState.on || (txState.qso && txState.qso !== 'idle') ? 1000 : 3000);
+    txTimer = setTimeout(fetchTx, txState.on || (txState.qso && txState.qso !== 'idle') ? 2500 : 8000);   // each poll costs the radio a request's worth of heap
   } else if (drawerOpen && !txFormLoaded) {
     try { await txFetch(); } catch (e) {}
   }
 }
+async function txBand(khz) {
+  if (txState.on || (txState.qso && txState.qso !== 'idle')) { T('txNote', 'Stop first'); setTimeout(() => T('txNote', ''), 2500); return; }
+  T('txNote', 'tuning ' + khz + ' kHz...');
+  await sendCtrl('freq', { freq: khz, unit: 'khz' });
+  await new Promise(r => setTimeout(r, 2500));
+  try { await txFetch(); } catch (e) {}
+  const ok = txState.offset ? (txState.rf || 0) > khz * 1000 : Math.abs((txState.rf || 0) - (khz * 1000 + (parseInt($('txAudio').value) || 1500))) < 1;
+  T('txNote', ok ? khz + ' kHz ready' : 'tune failed, check the radio');
+  setTimeout(() => T('txNote', ''), 4000);
+}
+async function txRelayTest() {
+  if (txState.on || (txState.qso && txState.qso !== 'idle')) { T('txRelayMsg', 'busy'); return; }
+  T('txRelayMsg', 'testing for 50 s...');
+  await txAction('relaytest');
+  setTimeout(() => T('txRelayMsg', ''), 52000);
+}
 function setAuto(on) { txAction('auto', { mode: on ? 2 : 0 }); }
 async function txAction(action, params = {}) {
   if (['cq', 'answer', 'send', 'auto'].includes(action) && !txState.enabled) {
-    T('txNote', 'Enable TX in Settings first');
+    T('txNote', 'Turn Enable TX on first');
     setTimeout(() => T('txNote', ''), 2500);
     return;
   }
@@ -1574,12 +1668,12 @@ async function txAction(action, params = {}) {
   } catch (e) {}
   setTimeout(fetchTx, 400);
 }
-['txCall', 'txGrid', 'txAudio', 'txPin', 'txPpm'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
+['txCall', 'txGrid', 'txAudio', 'txOff', 'txOLo', 'txOHi', 'txPin', 'txPpm', 'txSrc', 'txDrv'].forEach(id => $(id).addEventListener('input', () => { txDirty = true; T('txSaveMsg', 'unsaved'); }));
 async function txSave() {
   const call = $('txCall').value.trim().toUpperCase(), grid = $('txGrid').value.trim().toUpperCase();
   if (!/^[A-Z0-9/]{3,10}$/.test(call) || !/\d/.test(call)) { T('txSaveMsg', 'Callsign looks wrong'); return; }
   if (!/^[A-R]{2}\d\d$/.test(grid)) { T('txSaveMsg', 'Grid must be like OL21'); return; }
-  await txAction('save', { call, grid, audio: $('txAudio').value, pin: $('txPin').value, ppm: $('txPpm').value });
+  await txAction('save', { call, grid, audio: $('txAudio').value, off: $('txOff').value, olo: $('txOLo').value, ohi: $('txOHi').value, pin: $('txPin').value, src: $('txSrc').value, drv: $('txDrv').value, ppm: $('txPpm').value });
   txDirty = false; txFormLoaded = false;
   T('txSaveMsg', 'Saved');
   setTimeout(() => T('txSaveMsg', ''), 2500);
@@ -1689,16 +1783,16 @@ setInterval(() => {
   T('heardNext', w > 0 ? `next check in ${Math.floor(w / 60000)}:${String(Math.floor(w / 1000) % 60).padStart(2, '0')}` : heardAutoAt ? `auto check in ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : '');
   $('heardBtn').disabled = w > 0 || heardBusy;
 }, 1000);
-setInterval(() => { if (isDigital() && !document.hidden) { pskrFetch(); renderHeard(); } }, 10000);
+setInterval(() => { if (isDigital() && !document.hidden) { pskrFetch(); renderHeard(); } }, 30000);
 
 // Poll loop: one request at a time, paused while the tab is hidden
 async function poll() {
   if (document.hidden) return;
   polling = true;
   try {
-    if (!wsLive()) await fetchStatus();   // the /ws push replaces status and waterfall polling
+    if (!wsLive() && (!wsUp() || Date.now() - lastStatusFetch >= 5000)) { lastStatusFetch = Date.now(); await fetchStatus(); }   // the /ws push replaces status and waterfall polling
     if (online) {
-      if (!wsLive() && wfVisible && wfOn) await fetchWaterfall();
+      if (!wsUp() && wfVisible && wfOn) await fetchWaterfall();
       if (isDigital() && curStatus.msg_count !== lastMsgCount) {
         lastMsgCount = curStatus.msg_count;
         await fetchTraffic();
@@ -1756,6 +1850,51 @@ loadBookmarks();
 optFetch();
 kick(0);
 wsConnect();
+
+// URL parameters (page is public: only these receive controls, never TX): band, mode, freq (kHz), bw, vol, audio=1
+// e.g. ?mode=usb&freq=14074&vol=40&audio=1
+(async function applyUrlParams() {
+  const q = new URLSearchParams(location.search);
+  if (![...q.keys()].length) return;
+  await new Promise(r => setTimeout(r, 1500));   // let the first status arrive
+  const band = (q.get('band') || '').toLowerCase();
+  if (band) { const i = BANDS.findIndex(t => t.split(' (')[0].toLowerCase() === band); if (i >= 0) await sendCtrl('band', { id: i }); }
+  const mode = (q.get('mode') || '').toUpperCase();
+  if (MODE_CMD[mode]) await selectRadioMode(mode);
+  const fm = /^\s*([0-9]*\.?[0-9]+)\s*(hz|khz|k|mhz|m)?\s*$/i.exec(q.get('freq') || '');
+  if (fm) {   // unit: suffix, else >= 1e6 means Hz, otherwise kHz; the radio picks the band itself
+    const u = (fm[2] || '').toLowerCase(), n = parseFloat(fm[1]);
+    const hz = Math.round(u === 'hz' ? n : u[0] === 'm' ? n * 1e6 : u[0] === 'k' ? n * 1e3 : n >= 1e6 ? n : n * 1e3);
+    if (hz >= 150e3 && hz <= 108e6) await sendCtrl('freq', { freq: hz, unit: 'hz' });
+  }
+  const bw = q.get('bw');
+  if (bw !== null && bw !== '') {
+    let idx = /^\d+$/.test(bw) ? +bw : -1;
+    if (idx < 0) { const g = mode === 'FM' ? 'FM' : mode === 'AM' ? 'AM' : 'SSB'; idx = BW_OPTIONS[g].indexOf(bw.toLowerCase()); }
+    if (idx >= 0) await sendCtrl('bw_set', { idx });
+  }
+  const v = parseInt(q.get('vol'));
+  if (v >= 0 && v <= 63) await sendCtrl('volume', { val: v });
+  if (q.get('audio') === '1' && !webAudioOn) {
+    toggleWebAudio();   // browsers keep the audio paused until a click on the page
+    document.addEventListener('click', () => { if (audioCtx && audioCtx.state !== 'running') audioCtx.resume(); }, { once: true });
+  }
+})();
+
+async function setAudIn(v) {
+  if (!confirm('Switch the audio input and restart the radio?')) { audInSync(); return; }
+  try { await fetch('/api/control?action=audio_in&val=' + v); } catch (e) {}
+  T('audInMsg', 'restarting…');
+}
+async function audInSync() {
+  try {
+    const r = await (await fetch('/api/status')).json();
+    $('audIn').value = r.dig_want ? '1' : '0';
+    T('audInMsg', r.dig_run ? ('digital input running, ' + r.dig_frames + ' frames, peak ' + r.dig_peak)
+                  : (r.dig_want ? 'digital selected but not running (needs the Si5351 reference clock)' : 'analog ADC'));
+  } catch (e) {}
+}
+audInSync(); setInterval(audInSync, 5000);
 </script>
 </body>
 </html>
