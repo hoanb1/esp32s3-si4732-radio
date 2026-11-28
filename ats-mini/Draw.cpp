@@ -129,8 +129,8 @@ bool drawWiFiStatus(const char *statusLine1, const char *statusLine2, int x, int
 }
 
 //
-// Render the screen through the half-height sprite: render() draws the whole 320x170 screen,
-// the sprite origin shifts so that one band at a time lands in it, and each band is pushed
+// Render the screen through the sprite: render() draws the whole 320x170 screen, the sprite
+// origin shifts so that one band at a time lands in it (one full band on V3S), and each is pushed
 //
 static void drawScreenContent(const char *statusLine1, const char *statusLine2);
 int sprBandY = 0;
@@ -157,7 +157,7 @@ void drawBands(const std::function<void()> &render)
   if(shotState == 2 && (millis() - shotTime) < 3000) return;
   shotState = 0;
 
-  for(int band = 0 ; band < 2 ; band++)
+  for(int band = 0 ; band < SPR_BANDS ; band++)
   {
     renderBand(band, render);
     spr.pushSprite(0, sprBandY);
@@ -413,6 +413,27 @@ void drawScale(uint32_t freq)
 //
 // Draw stereo indicator
 //
+//
+// Draw S-meter
+//
+void drawSMeter(int strength, int x, int y)
+{
+  spr.drawTriangle(x + 1, y + 1, x + 11, y + 1, x + 6, y + 6, TH.smeter_icon);
+  spr.drawLine(x + 6, y + 1, x + 6, y + 14, TH.smeter_icon);
+
+  for(int i=0 ; i<strength ; i++)
+    spr.fillRect(15 + x + i * 4, 2 + y, 2, 12, i < 10 ? TH.smeter_bar : TH.smeter_bar_plus);
+}
+
+//
+// Draw stereo indicator
+//
+void drawStereoIndicator(int x, int y, bool stereo)
+{
+  // Split S-meter into two rows
+  if(stereo) spr.fillRect(15 + x, 7 + y, 4 * 17 - 2, 2, TH.bg);
+}
+
 //
 // Draw RDS station name (also CB channel, etc)
 //

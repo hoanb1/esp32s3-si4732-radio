@@ -5,6 +5,65 @@
 #include "Draw.h"
 #include "Layout-FT8.h"
 
+#if defined(BOARD_V3S)
+
+// The upstream ATS-Mini default screen
+void drawLayoutDefault(const char *statusLine1, const char *statusLine2)
+{
+  // Preferences save, BLE, battery and WiFi indicators
+  drawSaveIndicator(SAVE_OFFSET_X, SAVE_OFFSET_Y);
+  drawBleIndicator(BLE_OFFSET_X, BLE_OFFSET_Y);
+  bool has_voltage = drawBattery(BATT_OFFSET_X, BATT_OFFSET_Y);
+  drawWiFiIndicator(has_voltage ? WIFI_OFFSET_X : BATT_OFFSET_X - 13, WIFI_OFFSET_Y);
+
+  // Band and mode
+  spr.setFreeFont(&Orbitron_Light_24);
+  drawBandAndMode(getCurrentBand()->bandName, ft8GetDisplayModeDesc(), BAND_OFFSET_X, BAND_OFFSET_Y);
+
+  if(switchThemeEditor())
+  {
+    spr.setTextDatum(TR_DATUM);
+    spr.setTextColor(TH.text_warn);
+    spr.drawString(TH.name, 319, BATT_OFFSET_Y + 17, 2);
+  }
+
+  // Frequency, units, and optionally a highlighted digit
+  drawFrequency(
+    currentFrequency,
+    FREQ_OFFSET_X, FREQ_OFFSET_Y,
+    FUNIT_OFFSET_X, FUNIT_OFFSET_Y,
+    currentCmd == CMD_FREQ ? getFreqInputPos() + (pushAndRotate ? 0x80 : 0) : 100
+  );
+
+  // Station or channel name, if present
+  if(*getStationName() == 0xFF)
+    drawLongStationName(getStationName() + 1, MENU_OFFSET_X + 1 + 76 + MENU_DELTA_X + 2, RDS_OFFSET_Y);
+  else if(*getStationName())
+    drawStationName(getStationName(), RDS_OFFSET_X, RDS_OFFSET_Y);
+
+  // Left-side menu/info bar
+  drawSideBar(currentCmd, MENU_OFFSET_X, MENU_OFFSET_Y, MENU_DELTA_X);
+
+  // S-meter and FM pilot
+  drawSMeter(getStrength(rssi), METER_OFFSET_X, METER_OFFSET_Y);
+  drawStereoIndicator(METER_OFFSET_X, METER_OFFSET_Y, (currentMode==FM) && rx.getCurrentPilot());
+
+  if(currentCmd == CMD_SCAN)
+  {
+    drawScanGraphs(isSSB()? (currentFrequency + currentBFO/1000) : currentFrequency);
+  }
+  else if(!drawWiFiStatus(statusLine1, statusLine2, STATUS_OFFSET_X, STATUS_OFFSET_Y))
+  {
+    // Show radio text if present, else show frequency scale
+    if(*getRadioText() || *getProgramInfo())
+      drawRadioText(STATUS_OFFSET_Y, STATUS_OFFSET_Y + 25);
+    else
+      drawScale(isSSB()? (currentFrequency + currentBFO/1000) : currentFrequency);
+  }
+}
+
+#else // Classic ESP32 layout
+
 // Positions specific to this layout (the S-meter layout keeps the classic ones from Draw.h)
 #define TOPBAR_H        18    // Status bar height
 #define DEF_FREQ_Y      56    // Frequency vertical center
@@ -97,3 +156,5 @@ void drawLayoutDefault(const char *statusLine1, const char *statusLine2)
       drawScale(isSSB()? (currentFrequency + currentBFO/1000) : currentFrequency);
   }
 }
+
+#endif

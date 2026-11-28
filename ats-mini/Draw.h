@@ -2,9 +2,18 @@
 #define DRAW_H
 
 #include <functional>
+#include "Board.h"
 
-// The 320x170 screen is drawn through a 320x85 sprite, twice per frame (top and bottom band)
+// V3S has PSRAM: one full-screen 16-bit sprite, as in upstream ATS-Mini. The classic ESP32 has none:
+// the 320x170 screen is drawn through a 320x85 8-bit sprite, twice per frame (top and bottom band)
+#if defined(BOARD_V3S)
+#define SPR_BAND_H     170
+#define SPR_DEPTH       16
+#else
 #define SPR_BAND_H      85
+#define SPR_DEPTH        8
+#endif
+#define SPR_BANDS      (170 / SPR_BAND_H)
 
 // Display position control
 #define MENU_OFFSET_X    0    // Menu horizontal offset
@@ -12,6 +21,8 @@
 #define ALT_MENU_OFFSET_X    0    // Menu horizontal offset
 #define ALT_MENU_OFFSET_Y    0    // Menu vertical offset
 #define MENU_DELTA_X    10    // Menu width delta
+#define METER_OFFSET_X   0    // Meter horizontal offset
+#define METER_OFFSET_Y   0    // Meter vertical offset
 #define ALT_METER_OFFSET_X  75    // Meter horizontal offset
 #define ALT_METER_OFFSET_Y 136    // Meter vertical offset
 #define SAVE_OFFSET_X   90    // Preferences save icon horizontal offset
@@ -43,7 +54,7 @@ uint16_t panelColor();
 int drawChip(const char *text, int x, int y, uint16_t fg, uint16_t bg, bool filled);
 
 void drawBands(const std::function<void()> &render);
-extern int sprBandY;                 // Screen row of the band being rendered (0 or SPR_BAND_H)
+extern int sprBandY;                 // Screen row of the band being rendered (multiple of SPR_BAND_H)
 void drawScreenBand(int band);       // Render one band of the current screen into the sprite, no push
 bool screenshotPending();
 bool screenshotBand(int band);       // True when the sprite holds the given screen band
@@ -56,6 +67,8 @@ void drawScreen(const char *statusLine1 = 0, const char *statusLine2 = 0);
 void drawWiFiIndicator(int x, int y, int32_t bg = -1);
 void drawSaveIndicator(int x, int y);
 void drawBleIndicator(int x, int y);
+void drawSMeter(int strength, int x, int y);
+void drawStereoIndicator(int x, int y, bool stereo);
 void drawBandAndMode(const char *band, const char *mode, int x, int y);
 void drawFrequency(uint32_t freq, int x, int y, int ux, int uy, uint8_t hl);
 void drawLongStationName(const char *name, int x, int y);

@@ -1794,6 +1794,26 @@ void ft8PrintDiag() {
 }
 
 
+#if defined(BOARD_V3S)
+// FT8 screen colors come from the current theme, laid out like the main radio screen
+#define FT_BG       TH.bg
+#define FT_PANEL    TH.bg
+#define FT_STRIPE   panelColor()
+#define FT_GRID     TH.smeter_bar_empty
+#define FT_TEXT     TH.text
+#define FT_MUTED    TH.text_muted
+#define FT_DIM      TH.scan_grid
+#define FT_ACCENT   TH.smeter_bar
+#define FT_CQ       TH.rf_icon_conn
+#define FT_CQ_OLD   TH.scan_grid
+#define FT_CLOCK    TH.freq_hl_sel
+#define FT_SNR_LOW  TH.text_warn
+#define FT_DECODE   TH.freq_hl
+#define FT_WARN     TH.text_warn
+
+#define FT_TOP_H     38   // Header: S-meter, band & mode, indicators, frequency, clock
+#define FT_ROWS       7   // Message rows
+#else
 // FT8 screen palette, on the sprite's RGB332 grid
 #define FT_BG       C332(0, 0, 0)
 #define FT_PANEL    C332(1, 1, 1)
@@ -1804,12 +1824,17 @@ void ft8PrintDiag() {
 #define FT_DIM      C332(2, 2, 1)
 #define FT_ACCENT   C332(0, 6, 3)
 #define FT_CQ       C332(2, 7, 1)
+#define FT_CQ_OLD   C332(1, 4, 1)
 #define FT_CLOCK    C332(7, 7, 1)
+#define FT_SNR_LOW  C332(7, 4, 0)
 #define FT_DECODE   C332(7, 2, 3)
 #define FT_WARN     C332(7, 1, 0)
 
 #define FT_TOP_H     18   // Header bar
-#define FT_BODY_Y    21   // Body starts below the slot progress bar
+#define FT_ROWS       8   // Message rows
+#endif
+
+#define FT_BODY_Y    (FT_TOP_H + 3)   // Body starts below the slot progress bar
 #define FT_BOT_Y    154   // Footer bar
 #define FT_WF_HZ0   200   // Waterfall spans 200..2900 Hz
 #define FT_WF_HZ1  2900
@@ -1829,6 +1854,9 @@ static inline uint16_t wfColor(uint8_t v) {
 // Waterfall block: webWf rows (newest first) scaled into [x0, x0 + w) x [y0, y0 + rows * rowH)
 static void ft8DrawWaterfall(int x0, int w, int y0, int rows, int rowH) {
   uint8_t *fb = (spr.getColorDepth() == 8) ? (uint8_t *)spr.getPointer() : NULL;
+#if defined(BOARD_V3S)
+  spr.fillRect(x0, y0, w, rows * rowH, TFT_BLACK);   // The heat map needs black on light themes too
+#endif
   for (int r = 0; r < rows && r < LCD_WF_ROWS; r++) {
     const uint8_t *row = &webWf[r * 120];
     for (int c = 0; c < LCD_WF_COLS; c++) {
@@ -1892,7 +1920,7 @@ static void ft8DrawSpectrum(int x0, int w, int yTop, int yBase) {
 static uint16_t ft8SnrColor(int snr) {
   if (snr >= -10) return FT_CQ;
   if (snr >= -17) return FT_CLOCK;
-  return C332(7, 4, 0);
+  return FT_SNR_LOW;
 }
 
 // One decoded message row; fresh rows (latest slot) are bright, older ones dimmed
@@ -1920,7 +1948,7 @@ static void ft8DrawMessageRow(const FT8MessageEntry &e, int x, int y, int w, boo
     tx += 38;
   }
   spr.setTextDatum(TL_DATUM);
-  spr.setTextColor(fresh ? (e.isCQ ? FT_CQ : FT_TEXT) : (e.isCQ ? C332(1, 4, 1) : FT_MUTED));
+  spr.setTextColor(fresh ? (e.isCQ ? FT_CQ : FT_TEXT) : (e.isCQ ? FT_CQ_OLD : FT_MUTED));
   spr.drawString(e.msg, tx, y + 1, 2);
 }
 
@@ -1954,6 +1982,35 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
   spr.fillSprite(FT_BG);
   spr.setTextFont(1);   // numbered fonts below, not the radio layout's free font
 
+  uint32_t fHz = (uint32_t)currentFrequency * 1000UL + currentBFO;
+  snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(fHz / 1000000UL), (unsigned long)((fHz / 1000UL) % 1000UL));
+
+  uint8_t utcH = 0, utcM = 0, utcS = 0;
+  uint16_t utcMs = 0;
+  ft8GetCurrentUTC(&utcH, &utcM, &utcS, &utcMs);
+
+#if defined(BOARD_V3S)
+  // Header as on the radio screen: S-meter, band & mode, preferences save, WiFi and battery
+  drawSaveIndicator(SAVE_OFFSET_X, SAVE_OFFSET_Y);
+  bool hasVoltage = drawBattery(BATT_OFFSET_X, BATT_OFFSET_Y);
+  drawWiFiIndicator(hasVoltage ? WIFI_OFFSET_X : BATT_OFFSET_X - 13, WIFI_OFFSET_Y);
+  spr.setFreeFont(&Orbitron_Light_24);
+  drawBandAndMode(getCurrentBand()->bandName, ft8GetDisplayModeDesc(), BAND_OFFSET_X, BAND_OFFSET_Y);
+  spr.setTextFont(1);
+  drawSMeter(getStrength(rssi), METER_OFFSET_X, METER_OFFSET_Y);
+
+  // Dial frequency and UTC clock
+  spr.setTextDatum(TL_DATUM);
+  spr.setTextColor(TH.freq_text);
+  int x = 2 + spr.drawString(buf, 2, 18, 4);
+  spr.setTextColor(TH.funit_text);
+  spr.drawString("MHz", x + 4, 20, 2);
+
+  snprintf(buf, sizeof(buf), "%02u:%02u:%02u", utcH, utcM, utcS);
+  spr.setTextDatum(TR_DATUM);
+  spr.setTextColor(FT_CLOCK);
+  spr.drawString(buf, 318, 20, 2);
+#else
   // Header: mode chip, band, dial frequency, UTC clock, WiFi, battery
   spr.fillRect(0, 0, 320, FT_TOP_H, FT_PANEL);
   int x = 2;
@@ -1961,17 +2018,12 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
   x += drawChip(ft8GetDisplayModeDesc(), x, 1, FT_BG, ft4 ? C332(7, 4, 0) : FT_ACCENT, true) + 4;
   x += drawChip(getCurrentBand()->bandName, x, 1, FT_MUTED, FT_PANEL, false) + 6;
 
-  uint32_t fHz = (uint32_t)currentFrequency * 1000UL + currentBFO;
-  snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(fHz / 1000000UL), (unsigned long)((fHz / 1000UL) % 1000UL));
   spr.setTextDatum(ML_DATUM);
   spr.setTextColor(FT_TEXT);
   x += spr.drawString(buf, x, 9, 2);
   spr.setTextColor(FT_MUTED);
   spr.drawString(" MHz", x, 9, 2);
 
-  uint8_t utcH = 0, utcM = 0, utcS = 0;
-  uint16_t utcMs = 0;
-  ft8GetCurrentUTC(&utcH, &utcM, &utcS, &utcMs);
   snprintf(buf, sizeof(buf), "%02u:%02u:%02u", utcH, utcM, utcS);
   spr.setTextDatum(MR_DATUM);
   spr.setTextColor(FT_CLOCK);
@@ -1979,6 +2031,7 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
 
   bool hasVoltage = drawBattery(BATT_OFFSET_X, 1);
   drawWiFiIndicator(hasVoltage ? WIFI_OFFSET_X : BATT_OFFSET_X - 13, 1, FT_PANEL);
+#endif
 
   // Slot progress (15 s), magenta while the decoder runs
   uint32_t slotMs = (utcS % 15) * 1000UL + utcMs;
@@ -1987,21 +2040,24 @@ void drawLayoutFT8(const char *statusLine1, const char *statusLine2) {
 
   if (ft8ViewMode == FT8_VIEW_SPLIT) {
     // Left: spectrum + waterfall at 1 px per bin; right: decoded messages
-    ft8DrawSpectrum(0, 120, FT_BODY_Y, 45);
-    ft8DrawWaterfall(0, 120, 46, 36, 3);
+    ft8DrawSpectrum(0, 120, FT_BODY_Y, FT_BODY_Y + 24);
+    ft8DrawWaterfall(0, 120, FT_BODY_Y + 25, (FT_BOT_Y - FT_BODY_Y - 25) / 3, 3);
     spr.drawFastVLine(121, FT_BODY_Y, FT_BOT_Y - FT_BODY_Y, FT_PANEL);
-    if (ft8TrafficCount) ft8DrawMessages(123, FT_BODY_Y + 1, 197, 8, false);
-    else ft8DrawIdle(221, 44);
+    if (ft8TrafficCount) ft8DrawMessages(123, FT_BODY_Y + 1, 197, FT_ROWS, false);
+    else ft8DrawIdle(221, FT_BODY_Y + 23);
   } else if (ft8ViewMode == FT8_VIEW_WATERFALL) {
-    ft8DrawSpectrum(0, 320, FT_BODY_Y, 53);
-    ft8DrawWaterfall(0, 320, 54, 33, 3);
+    ft8DrawSpectrum(0, 320, FT_BODY_Y, FT_BODY_Y + 32);
+    ft8DrawWaterfall(0, 320, FT_BODY_Y + 33, (FT_BOT_Y - FT_BODY_Y - 33) / 3, 3);
   } else {
-    if (ft8TrafficCount) ft8DrawMessages(0, FT_BODY_Y + 1, 320, 8, true);
-    else ft8DrawIdle(160, 44);
+    if (ft8TrafficCount) ft8DrawMessages(0, FT_BODY_Y + 1, 320, FT_ROWS, true);
+    else ft8DrawIdle(160, FT_BODY_Y + 23);
   }
 
   // Footer: decode summary, audio level, speaker, IP (or a status message)
   spr.fillRect(0, FT_BOT_Y, 320, 170 - FT_BOT_Y, FT_PANEL);
+#if defined(BOARD_V3S)
+  spr.drawFastHLine(0, FT_BOT_Y, 320, FT_GRID);
+#endif
   spr.setTextDatum(ML_DATUM);
   if (statusLine1 && statusLine1[0]) {
     spr.setTextColor(FT_TEXT);

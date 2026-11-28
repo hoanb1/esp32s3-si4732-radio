@@ -154,13 +154,32 @@ void setup()
   tft.begin();
   tft.setRotation(3);
 
+#if defined(BOARD_V3S)
+  // Panel variants of the ATS-Mini display, told apart by the third ID byte (as upstream)
+  uint8_t did3 = tft.readcommand8(ST7789_RDDID, 3);
+  if(did3 == 0x93)
+  {
+    tft.invertDisplay(0);
+    tft.writecommand(TFT_MADCTL);
+    tft.writedata(TFT_MAD_MV | TFT_MAD_MX | TFT_MAD_MY | TFT_MAD_BGR);
+  }
+  else if(did3 == 0x85)
+  {
+    tft.writecommand(0x26);   // GAMSET
+    tft.writedata(8);
+    tft.writecommand(0x55);   // WRCACE
+    tft.writedata(0xB1);
+  }
+  Serial.printf("[BOOT] Display ID3 0x%02X\r\n", did3);
+#endif
+
   tft.fillScreen(TH.bg);
-  // 8-bit sprite of half the screen (27 KB), rendered twice per frame (see drawBands()): this board
-  // has no PSRAM, and a full 8-bit sprite (54 KB) leaves too little DRAM for WiFi and the web UI
-  spr.setColorDepth(8);
+  // V3S: full 16-bit screen sprite in PSRAM. Classic ESP32: 8-bit sprite of half the screen (27 KB),
+  // rendered twice per frame (see drawBands()), as there is no PSRAM
+  spr.setColorDepth(SPR_DEPTH);
   void *sprPtr = spr.createSprite(320, SPR_BAND_H);
-  Serial.printf("[BOOT] TFT Sprite 8-bit (320x%d band): %p, free_heap=%u (8bit=%u, max_alloc=%u)\r\n",
-                SPR_BAND_H, sprPtr, (unsigned int)ESP.getFreeHeap(),
+  Serial.printf("[BOOT] TFT Sprite %u-bit (320x%d): %p, free_heap=%u (8bit=%u, max_alloc=%u)\r\n",
+                SPR_DEPTH, SPR_BAND_H, sprPtr, (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                 (unsigned int)ESP.getMaxAllocHeap());
   spr.setTextDatum(MC_DATUM);

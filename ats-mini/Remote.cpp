@@ -26,7 +26,7 @@ static uint8_t char2nibble(char key)
 static void remoteCaptureScreen()
 {
   uint16_t width  = spr.width();
-  uint16_t height = 2 * SPR_BAND_H;   // The sprite holds one half of the screen at a time
+  uint16_t height = SPR_BANDS * SPR_BAND_H;   // The sprite holds one band of the screen at a time
 
   // 14 bytes of BMP header
   Serial.println("");
