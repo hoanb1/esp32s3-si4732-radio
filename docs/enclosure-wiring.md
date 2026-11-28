@@ -1,6 +1,6 @@
 # Enclosure wiring (tools/enclosure/handheld_box.scad)
 
-Harness routing and connections. Pin facts come from `docs/wiring-rework.md` and `ats-mini/Common.h`;
+Harness routing and connections. Pin facts come from `docs/wiring-rework.md` and `ats-mini/Board.h`;
 "(?)" = not verified on the board, check with a multimeter first.
 
 ## Where the wires go
@@ -20,7 +20,7 @@ Harness routing and connections. Pin facts come from `docs/wiring-rework.md` and
 | 1 | 2 x 18650 holder | power switch (front wall) -> ATS-Mini BAT connector | cells in PARALLEL (3.7 V). The board charges the cells itself (USB-C), no TP4056 |
 | 2 | ESP32 GPIO13 (SDA), GPIO14 (SCL) | Si5351 SDA/SCL | shared bus with the SI4732 |
 | 3 | ESP32 3V3, GND | Si5351 VIN, GND; relay logic | 10 uF + 100 nF at each module |
-| 4 | Si5351 CLK (TX output) | PA input -> 20 m LPF -> relay NO | CLK2 in the current firmware (?) |
+| 4 | Si5351 CLK (TX output) | PA input -> 20 m LPF -> relay NO | CLK2 (`SI5351_TX_CLK`) |
 | 5 | relay COM | SMA (antenna) | |
 | 6 | relay NC | SI4732 AMI input (via 47 ohm + back-to-back 1N4148) | receive path while idle |
 | 7 | ESP32 GPIO26 | relay driver (transistor + flyback diode) | HIGH = TX |

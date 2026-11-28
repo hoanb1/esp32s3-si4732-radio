@@ -12,6 +12,8 @@ Tested (2026-10-18) routing the ESP32 APLL via I2S0 MCLK to GPIO0:
 
 The Si5351 solves all three problems: ~0.01 Hz MultiSynth resolution, glitch-free tone transitions, and a dedicated 50 Ω output stage.
 
+Applies to the classic ESP32 board only; the V3S build is receive only. Pin numbers live in `ats-mini/Board.h`.
+
 ## 1. Hardware
 
 | Block | Recommendation | Notes |
@@ -30,22 +32,22 @@ The Si5351 solves all three problems: ~0.01 Hz MultiSynth resolution, glitch-fre
 | GPIO13 (SDA), GPIO14 (SCL) | Si5351 SDA/SCL | Shared I2C bus with SI4732 (SI4732 at `0x11`/`0x63`, no conflict with `0x60`) |
 | 3V3, GND | Si5351 VIN, GND | Add 10 µF + 100 nF decoupling capacitors close to the module |
 | GPIO26 | T/R relay driver transistor | `HIGH` = transmit |
-| GPIO19 | PA enable (high-side/bias MOSFET) | `HIGH` = PA enabled, default `LOW` at boot |
-| — | Si5351 CLK0 → PA → LPF → relay → antenna | Short coaxial jumpers |
+| (unassigned) | PA enable (high-side/bias MOSFET) | Not implemented in the firmware yet |
+| — | Si5351 CLK2 → PA → LPF → relay → antenna | Short coaxial jumpers |
 | — | Relay (NC) → SI4732 AMI | Connects antenna to receiver when idle |
-| (optional) | Si5351 CLK2 → SI4732 RCLK | Replaces high-drift 32.768 kHz crystal (~35 ppm/hour measured) |
+| (optional) | Si5351 CLK0 → SI4732 RCLK | Replaces high-drift 32.768 kHz crystal (~35 ppm/hour measured) |
 
-Avoid GPIO0, GPIO2, and GPIO12 as they are boot strapping pins. Available free pins: 19, 21, 22, 26.
+Avoid GPIO0, GPIO2, and GPIO12 as they are boot strapping pins. GPIO19 and GPIO22 are used by the optional digital audio wiring.
 
 ## 2. Firmware
 
-1. **Si5351 Driver**: Use the Etherkit Si5351 library or a minimal custom register driver. Lock the PLL (e.g. PLLA ~ 700–900 MHz) and update only the MultiSynth0 fractional registers on tone changes; each tone writes 8 registers over 400 kHz I2C (~0.3 ms).
+1. **Si5351 Driver**: Use the Etherkit Si5351 library or a minimal custom register driver. Lock the PLL (e.g. PLLA ~ 700–900 MHz) and update only the CLK2 MultiSynth fractional registers on tone changes; each tone writes 8 registers over 400 kHz I2C (~0.3 ms).
 2. **FT8 Transmitter (`Ft8Tx.cpp`)**:
    - Encode messages using `ftx_message_encode` + `ft8_encode` from `ft8_lib` (already integrated in firmware).
    - Start transmission at 0.5 s into the slot (DT = 0) using the synchronized SNTP system clock; step through 79 symbols × 160 ms via `esp_timer`.
    - Transmit frequency = dial frequency + selected audio offset (default 1500 Hz, or a clear frequency on the waterfall).
    - Avoid I2C bus contention with SI4732: serialize all I2C transactions on the same task or guard with a mutex.
-3. **T/R Sequence**: Mute RX audio / hold SI4732 → switch relay to TX → wait 10 ms → enable PA → enable CLK0 → transmit → disable CLK0 → disable PA → wait 10 ms → release relay to RX. The decoder skips the active transmit slot.
+3. **T/R Sequence**: Mute RX audio / hold SI4732 → switch relay to TX → wait 10 ms → enable PA → enable CLK2 → transmit → disable CLK2 → disable PA → wait 10 ms → release relay to RX. The decoder skips the active transmit slot.
 4. **Automated QSO**: State machine driven by decoded messages: CQ → (retry) → signal report → R-report → RR73 → 73. Includes a "Halt TX" button on LCD, Web UI, and Serial, plus a maximum retry count.
 5. **User Interface**: Web UI and LCD controls for Callsign + Grid Locator, CQ button, TX audio pitch selection, and live TX status indicator. Callsign is stored in NVS; transmission is blocked if no callsign is configured.
 6. **Calibration**: Si5351 frequency correction (ppm) measured against an RTL-SDR/OpenWebRX reference or derived from average frequency offsets of decoded FT8 stations.

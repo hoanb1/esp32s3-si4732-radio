@@ -2,7 +2,14 @@
 
 ![](docs/source/_static/esp32-si4732-ui-theme.jpg)
 
-This firmware is for use on the SI4732 (ESP32-S3) Mini/Pocket Receiver
+A fork of the ATS Mini firmware for SI4732 receivers, with FT8/FT4 decoding and a built-in web UI.
+
+| Build profile | Board | Notes |
+|---|---|---|
+| `v3s` | ESP32-S3 N16R8 (8 MB PSRAM, 16 MB flash) | receive only |
+| `classic` | ESP32-WROOM, 4 MB flash | receive, plus FT8/WSPR transmit with an external Si5351, PA, filter and relay (amateur licence required) |
+
+Wiring is defined in [`ats-mini/Board.h`](ats-mini/Board.h). Build with `arduino-cli compile --profile <profile> ats-mini`.
 
 Based on the following sources:
 
@@ -14,7 +21,7 @@ Based on the following sources:
 
 ## Releases
 
-Check out the [Releases](https://github.com/esp32-si4732/ats-mini/releases) page.
+Check out the [Releases](https://github.com/hoanb1/esp32s3-si4732-radio/releases) page.
 
 ## Documentation
 
