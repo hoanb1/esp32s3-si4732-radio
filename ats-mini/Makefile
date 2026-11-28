@@ -27,15 +27,8 @@ OPTIONS = \
 	--build-property "compiler.cpp.extra_flags=$(DEFINES)" \
 	--warnings all
 
-HEADERS = \
-	Board.h Common.h Themes.h Menu.h Storage.h tft_setup.h Rotary.h \
-	Utils.h Button.h EIBI.h SI4735-fixed.h patch_init.h
-
-SRC = \
-	$(INO) Utils.cpp Rotary.cpp Button.cpp Draw.cpp Menu.cpp \
-	Station.cpp Battery.cpp Storage.cpp Themes.cpp Remote.cpp \
-	Network.cpp EIBI.cpp Scan.cpp About.cpp Ble.cpp \
-	Layout-Default.cpp Layout-SMeter.cpp
+HEADERS = $(wildcard *.h)
+SRC = $(INO) $(wildcard *.cpp)
 
 all: build
 

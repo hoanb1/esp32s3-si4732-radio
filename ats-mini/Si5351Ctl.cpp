@@ -4,7 +4,6 @@
 #include <Preferences.h>
 #include <si5351.h>
 
-#define SI5351_ADDR 0x60
 
 // Si5351 output wired to the SI4732 RCLK pin (pin 13). The rework wire goes from the module pin "0".
 #define SI5351_REF_CLK 0

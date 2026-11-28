@@ -27,7 +27,7 @@ repos:
         files: '.*\.[c|cpp|h|ino]'
         args:
           - "--style={BasedOnStyle: llvm, ColumnLimit: 0}"
-        exclude: ats-mini/patch_init.h
+        exclude: ats-mini/patch_full.h
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.7
     hooks:

@@ -35,7 +35,6 @@ extern "C" {
 // Access Point (AP) mode settings
 //
 static const char *apSSID    = "ATS-Mini-Radio";
-static const char *apPWD     = 0;       // Open AP for easy access
 static const int   apChannel = 6;       // WiFi channel number (1..13)
 static const bool  apHideMe  = false;   // TRUE: disable SSID broadcast
 static const int   apClients = 4;       // Maximum simultaneous connected clients
