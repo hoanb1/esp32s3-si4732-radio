@@ -1150,7 +1150,7 @@ function playAudioChunk(ab) {
   if (!n) return;
   const now = audioCtx.currentTime;
   if (fade || audNext < now + 0.02) { audNext = now + 0.5; fade = true; }   // (re)fill the jitter buffer
-  else if (audNext - now > 2.0) return;   // clocks drifted, too much queued: drop this chunk
+  else if (audNext - now > 3.0) return;   // clocks drifted, too much queued: drop this chunk
   const buf = audioCtx.createBuffer(1, n, AUD_RATE), ch = buf.getChannelData(0), u8 = new Uint8Array(ab, 5);
   for (let i = 0; i < n; i++) ch[i] = ULAW[u8[i]];
   if (fade) for (let i = 0; i < Math.min(120, n); i++) ch[i] *= i / 120;

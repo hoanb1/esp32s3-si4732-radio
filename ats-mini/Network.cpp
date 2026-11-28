@@ -148,6 +148,7 @@ struct WsPage { uint32_t id; bool audio; uint32_t logSeq; uint32_t wfSeq; };
 static WsPage wsPages[WS_MAX_PAGES];
 static portMUX_TYPE wsMux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t wsAudSeq = 0;
+static uint32_t wsAudGapMaxMs = 0, wsAudSkipped = 0;  // longest wait between audio frames, samples never sent
 static void wsTick();
 
 // Frames are allocated on the heap; a failed allocation aborts (no exceptions), so only
@@ -158,7 +159,11 @@ static void wsTick();
 // streaming a page then could fail inside operator new, and a failed new aborts the radio
 #define HTTP_MIN_BLOCK  3072
 #define WS_STALL_MS     8000   // a page whose send queue is stuck this long is dropped
+#ifdef BOARD_V3S
+#define WS_AUDIO_MAX    12000  // 2 s: after a stalled main loop send the backlog instead of dropping it (PSRAM heap)
+#else
 #define WS_AUDIO_MAX    2400   // 400 ms per frame at most; a page further behind skips ahead
+#endif
 #define WS_WF_ROWS_MAX  6      // waterfall rows per frame (0.7 KB, hi-res ~2x that): a new page catches up over a few ticks; bigger frames starved WiFi of heap
 static bool wsHeapOk(size_t bytes, size_t reserve = WS_HEAP_RESERVE, size_t slack = 1024)
 {
@@ -1460,9 +1465,68 @@ static void wsOnEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
   }
 }
 
+
+static void wsSendAudio(const WsPage *pages, uint32_t now)
+{
+  static uint32_t lastAudioMs = 0;
+  static bool wasAudio = false;
+  // Audio: every 200 ms, the samples since the last send to every listening page.
+  // A page whose send queue is backed up skips a chunk (it sees the gap and rebuffers).
+  bool anyAudio = false;
+  for (int i = 0; i < WS_MAX_PAGES; i++) anyAudio |= pages[i].id && pages[i].audio;
+  if (!anyAudio) wasAudio = false;
+  if (anyAudio && now - lastAudioMs >= 200) {
+    if (wasAudio && now - lastAudioMs > wsAudGapMaxMs) wsAudGapMaxMs = now - lastAudioMs;
+    lastAudioMs = now;
+    uint32_t count = 0;
+    uint32_t start = ft8WebAudioBegin(wsAudSeq, &count);   // also keeps web audio switched on
+    uint32_t skip = (wasAudio && (int32_t)(start - wsAudSeq) > 0) ? start - wsAudSeq : 0;
+    wasAudio = true;
+    if (count > WS_AUDIO_MAX) {
+      skip += count - WS_AUDIO_MAX;
+      start += count - WS_AUDIO_MAX;
+      count = WS_AUDIO_MAX;
+    }
+    if (count && wsHeapOk(5 + count)) {
+      auto buf = std::make_shared<std::vector<uint8_t>>(5 + count);
+      uint8_t *b = buf->data();
+      b[0] = 'A'; b[1] = start; b[2] = start >> 8; b[3] = start >> 16; b[4] = start >> 24;
+      ft8WebAudioCopy(b + 5, start, count);
+      bool sent = false;
+      for (int i = 0; i < WS_MAX_PAGES; i++) {
+        if (!pages[i].id || !pages[i].audio) continue;
+        AsyncWebSocketClient *c = ws.client(pages[i].id);
+        if (c && c->canSend() && c->queueLen() < 4) { c->binary(buf); sent = true; }
+      }
+#ifdef BOARD_V3S
+      if (sent) {                            // nothing could take it: send the backlog next time
+        wsAudSeq = start + count;
+        wsAudSkipped += skip;
+      }
+#else
+      (void)sent;
+      wsAudSeq = start + count;
+      wsAudSkipped += skip;
+#endif
+    }
+  }
+}
+
+#ifdef BOARD_V3S
+void netPumpAudio()
+{
+  if (!ws.count()) return;
+  WsPage pages[WS_MAX_PAGES];
+  portENTER_CRITICAL(&wsMux);
+  memcpy(pages, wsPages, sizeof(pages));
+  portEXIT_CRITICAL(&wsMux);
+  wsSendAudio(pages, millis());
+}
+#endif
+
 static void wsTick()
 {
-  static uint32_t lastAudioMs = 0, lastLogMs = 0, lastCleanMs = 0, lastStatusMs = 0;
+  static uint32_t lastLogMs = 0, lastCleanMs = 0, lastStatusMs = 0;
   uint32_t now = millis();
   if (!ws.count()) return;
 
@@ -1476,31 +1540,7 @@ static void wsTick()
   memcpy(pages, wsPages, sizeof(pages));
   portEXIT_CRITICAL(&wsMux);
 
-  // Audio: every 200 ms, the samples since the last send to every listening page.
-  // A page whose send queue is backed up skips a chunk (it sees the gap and rebuffers).
-  bool anyAudio = false;
-  for (int i = 0; i < WS_MAX_PAGES; i++) anyAudio |= pages[i].id && pages[i].audio;
-  if (anyAudio && now - lastAudioMs >= 200) {
-    lastAudioMs = now;
-    uint32_t count = 0;
-    uint32_t start = ft8WebAudioBegin(wsAudSeq, &count);   // also keeps web audio switched on
-    if (count > WS_AUDIO_MAX) {
-      start += count - WS_AUDIO_MAX;
-      count = WS_AUDIO_MAX;
-    }
-    if (count && wsHeapOk(5 + count)) {
-      auto buf = std::make_shared<std::vector<uint8_t>>(5 + count);
-      uint8_t *b = buf->data();
-      b[0] = 'A'; b[1] = start; b[2] = start >> 8; b[3] = start >> 16; b[4] = start >> 24;
-      ft8WebAudioCopy(b + 5, start, count);
-      wsAudSeq = start + count;
-      for (int i = 0; i < WS_MAX_PAGES; i++) {
-        if (!pages[i].id || !pages[i].audio) continue;
-        AsyncWebSocketClient *c = ws.client(pages[i].id);
-        if (c && c->canSend() && c->queueLen() < 4) c->binary(buf);
-      }
-    }
-  }
+  wsSendAudio(pages, now);
 
   // Status JSON and new waterfall rows, every 500 ms
   if (now - lastStatusMs >= 500) {
@@ -1638,6 +1678,17 @@ static void webInit()
   server.on("/setconfig", HTTP_ANY, webSetConfig);
 
   // /api/status - Real-time radio, FT8 slot, and WiFi status
+#ifdef BOARD_V3S
+  // Capture and web-audio health counters (cumulative: read twice and subtract for rates)
+  server.on("/api/audio_diag", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    char cap[320], out[420];
+    ft8AudioDiagJson(cap, sizeof(cap));
+    snprintf(out, sizeof(out), "{%s,\"ws_gap_max_ms\":%lu,\"ws_skipped\":%lu}", cap,
+             (unsigned long)wsAudGapMaxMs, (unsigned long)wsAudSkipped);
+    request->send(200, "application/json", out);
+  });
+#endif
+
   server.on("/api/status", HTTP_GET, [] (AsyncWebServerRequest *request) {
     static char json[1280];
     int len = buildStatusJson(json, sizeof(json));

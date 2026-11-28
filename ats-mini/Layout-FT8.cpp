@@ -13,6 +13,7 @@
 #include <driver/i2s_std.h>
 #include <WiFi.h>
 #include <esp_timer.h>
+static volatile uint32_t adcOverruns = 0;       // times the resampler task fell a whole raw ring behind
 #if HAS_FT8_ADC
 #include <soc/sens_struct.h>
 #ifdef BOARD_V3S
@@ -21,6 +22,11 @@
 // ADC2 conversions the arbiter refused (WiFi owns the unit) or that were not finished in time
 static volatile uint32_t adcBadReads = 0;
 static volatile uint16_t adcLastGood = 0;
+#ifdef BOARD_V3S
+// Sample-interval histogram in microseconds (nominal 62.5): <50, 50-59, 60-65, 66-75, 76-125, >125
+static volatile uint32_t adcDtHist[6] = {0};
+static volatile uint32_t adcDtMax = 0;
+#endif
 #endif
 #endif
 #include <hal/misc.h>
@@ -384,6 +390,15 @@ static const uint32_t FT8_ADC2_CH = FT8_ADC_PIN - 11;   // ESP32-S3: GPIO11..20 
 static void IRAM_ATTR adcTimerIsr() {
 #if HAS_FT8_ADC
 #ifdef BOARD_V3S
+  static uint32_t lastUs = 0;
+  uint32_t us = (uint32_t)esp_timer_get_time();
+  if (lastUs) {
+    uint32_t dt = us - lastUs;
+    int bin = dt < 50 ? 0 : dt < 60 ? 1 : dt <= 65 ? 2 : dt <= 75 ? 3 : dt <= 125 ? 4 : 5;
+    adcDtHist[bin] = adcDtHist[bin] + 1;
+    if (dt > adcDtMax) adcDtMax = dt;
+  }
+  lastUs = us;
   // ADC2 is shared with WiFi: a refused or unfinished conversion repeats the previous sample
   uint32_t r = HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas2_ctrl2, meas2_data_sar);
   if (SENS.sar_meas2_ctrl2.meas2_done_sar && (r >> 14) == 0) adcLastGood = r & 0x0FFF;
@@ -466,7 +481,14 @@ static void adcTask(void *arg) {
       pendSlot = nowSlot;
       pendInIdx = head - msInto * (FT8_ADC_RATE / 1000);
     }
-    if (head - tail > FT8_RAW_RING - 64) tail = head - (FT8_RAW_RING - 64);   // overrun: skip ahead
+    if (head - tail > FT8_RAW_RING - 64) {   // overrun: skip ahead and restart the resampler there
+      tail = head - (FT8_RAW_RING - 64);
+      inBase = tail;
+      outIdx = 0;
+      histCount = 0;
+      histPos = 0;
+      adcOverruns = adcOverruns + 1;
+    }
 
     while (tail != head) {
       uint32_t rw = adcRaw[(tail & (FT8_RAW_RING - 1)) >> 1];
@@ -509,6 +531,11 @@ static void adcTask(void *arg) {
         uint8_t wBuf = adcWriteBlock;
         blkSet(wBuf, sampleIdx, (int32_t)lroundf(acc));
         uint8_t *ring = webAudRing;
+#ifdef BOARD_V3S
+        static bool webAudWas = false;
+        if (ring && !webAudWas) webAudDc = acc;   // start at the present DC level: no thump
+        webAudWas = ring != NULL;
+#endif
         if (ring) {
           webAudDc += (acc - webAudDc) * (1.0f / 2048.0f);
           ring[webAudHead & webAudMask] = linearToUlaw(lroundf((acc - webAudDc) * 32.0f));
@@ -870,6 +897,9 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
   ftx_candidate_t candidates[FT8_MAX_CANDIDATES];
   int numCandidates = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, candidates, FT8_MIN_SYNC_SCORE);
   uint32_t syncMs = millis() - t0;
+#ifdef BOARD_V3S
+  netPumpAudio();
+#endif
 
   uint16_t seenHashes[32];
   int numSeen = 0;
@@ -901,6 +931,9 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
     ftx_decode_status_t status;
 
     uint32_t tc0 = micros();
+#ifdef BOARD_V3S
+    netPumpAudio();   // decoding runs in the main loop for about a second: keep web audio flowing
+#endif
     bool ok = ftx_decode_candidate_ap(&mon->wf, cand, FT8_LDPC_ITERATIONS,
                                       cand->score >= FT8_AP_MIN_SCORE ? FT8_AP_MAX_ERRORS : 0, &msg, &status);
     uint32_t tc = micros() - tc0;
@@ -1538,6 +1571,18 @@ const uint8_t *ft8GetHiResRow(uint32_t rowNo) { return hrRows[rowNo % HR_ROWS]; 
 const uint8_t *ft8GetHiResMeta(uint32_t rowNo) { return hrMeta[rowNo % HR_ROWS]; }
 
 // Stream WAV audio (960 samples @ 6000 Hz, 16-bit PCM mono = 1964 bytes total) in chunks of any size
+#ifdef BOARD_V3S
+int ft8AudioDiagJson(char *out, size_t n) {
+  return snprintf(out, n, "\"ms\":%lu,\"samples\":%lu,\"bad\":%lu,\"spikes\":%lu,\"overruns\":%lu,"
+                  "\"dt_hist_us\":[%lu,%lu,%lu,%lu,%lu,%lu],\"dt_max_us\":%lu",
+                  (unsigned long)millis(), (unsigned long)adcRawHead, (unsigned long)adcBadReads,
+                  (unsigned long)adcSpikeSamples, (unsigned long)adcOverruns,
+                  (unsigned long)adcDtHist[0], (unsigned long)adcDtHist[1], (unsigned long)adcDtHist[2],
+                  (unsigned long)adcDtHist[3], (unsigned long)adcDtHist[4], (unsigned long)adcDtHist[5],
+                  (unsigned long)adcDtMax);
+}
+#endif
+
 uint32_t ft8WebAudioBegin(uint32_t from, uint32_t *count) {
   webAudLastReq = millis();
   webAudWanted = true;
