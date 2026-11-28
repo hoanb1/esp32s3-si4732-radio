@@ -31,10 +31,10 @@
 
 // ADC
 #define PIN_VBAT      4             // Battery voltage divider
-#define FT8_ADC_PIN   -1            // SI4732 audio is not wired to an ADC pin yet
+#define FT8_ADC_PIN   11            // SI4732 LOUT (pin 1) single-wire mod, ADC2_CH0 (unreliable with WiFi on)
 
 // Features
-#define HAS_FT8_ADC   0             // Audio capture for the FT8/FT4 decoder and web audio
+#define HAS_FT8_ADC   0             // Stays 0 until the audio wire is fitted: decoder and web audio off
 #define HAS_APLL_TX   0             // ESP32 APLL RF output (classic ESP32 only)
 #define HAS_TX        0             // Si5351 CLK2 / PA transmit path not fitted yet
 #define TX_RELAY_PIN  -1
