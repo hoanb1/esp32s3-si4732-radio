@@ -168,6 +168,22 @@ To reset the receiver settings (current band, frequency, favorite stations, down
 | 10M  | 28000 kHz     | 29700 kHz     | USB          |
 | CB   | 25000 kHz     | 28000 kHz     | AM           |
 
+## Web page URL parameters
+The page applies these query parameters once on load (in this order); unknown or invalid values are ignored. TX, enable, send and auto are never available through the URL.
+
+| param | meaning |
+|---|---|
+| `band` | band name before the bracket, case-insensitive, e.g. `20m ham` (`band=20m+ham`), `40m ham`, `vhf fm` |
+| `mode` | `usb`, `lsb`, `am`, `fm`, `cw`, `ft8`, `ft4` |
+| `freq` | frequency: plain number below 1000000 = kHz (`14074`, `15680.4`), 1000000 or more = Hz (`15680400`); or with a suffix `k`/`khz`, `m`/`mhz`, `hz` (`15.6804m`). The band is switched automatically. AM/FM round to whole kHz, SSB keeps the fraction |
+| `bw` | bandwidth index (0..) or label of the current mode, e.g. `2.2k` |
+| `vol` | 0..63 |
+| `audio` | `1` starts web audio; browsers keep it paused until the first click on the page |
+
+Example: `http://<radio-ip>/?band=20m+ham&mode=usb&freq=14074&vol=40&audio=1`
+
+Behind an HTTPS reverse proxy the page opens its WebSocket as `wss://`. The firmware has no login: do not expose it to the internet without access control.
+
 ## Serial interface
 
 A USB-serial interface is available to control and monitor the receiver. Use [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/latest.html) or Picocom to connect to the serial port.
