@@ -23,7 +23,7 @@ bool si5351Drive(uint8_t clk, uint8_t level);   // 0..3 = 2/4/6/8 mA
 // crystal. Needs the crystal (and C1) removed. Off by default; enabled in NVS, effective after a restart.
 // If a boot with it enabled never gets through rx.setup() (no clock reached the chip) the next boot
 // switches it off again.
-bool extRefBegin();            // before the SI4732 reset: starts CLK2 if enabled; false = use the crystal
+bool extRefBegin();            // before the SI4732 reset: starts CLK0 if enabled; false = use the crystal
 void extRefDone();             // after rx.setup() returned: this boot got through
 bool extRefActive();
 void extRefEnable(bool on);    // saved to NVS

@@ -116,6 +116,7 @@ void setup()
   webLogSetEnabled(true);   // optionsLoad() applies the saved choice later in setup
   delay(50);
   Serial.println("\r\n[BOOT] Starting ATS-Mini ESP32 + SI4732 Receiver...");
+  Serial.printf("[BOOT] reset reason %d\r\n", (int)esp_reset_reason());   // esp_reset_reason_t: 4 panic, 6/7 wdt, 9 brownout
 
   // Release unused Bluetooth controller DRAM (~36 KB) back to the heap
   esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);

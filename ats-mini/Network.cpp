@@ -73,6 +73,12 @@ String loginPassword = "";
 static volatile uint32_t netRefused = 0, netBusy = 0;   // since the last [NET] line
 static volatile int flashRespActive = 0;                // FlashResponse (page, map) sends running
 
+// Blanks the characters that would break a quoted JSON string
+static void jsonClean(char *s)
+{
+  for(; *s; s++) if(*s == '"' || *s == '\\' || (uint8_t)*s < 0x20) *s = ' ';
+}
+
 // lwIP TCP state for the [NET] line: connections by state and the bytes they still hold in
 // unsent/unacked segments (heap that only a peer's ACK or a reset gives back)
 static void netTcpStats(char *out, size_t cap)
@@ -789,7 +795,7 @@ static void runControlAction(const ControlRequest &cr)
       else si5351Probe();
 #endif
     } else if (action == "ext_ref") {
-      // Si5351 CLK2 as the SI4732 reference clock (crystal removed): saved, applied by a restart
+      // Si5351 CLK0 as the SI4732 reference clock (crystal removed): saved, applied by a restart
       extRefEnable(getParamStr("val").toInt() != 0);
       Serial.println("[SI5351] external RCLK setting saved, restarting");
       delay(300);
@@ -821,7 +827,8 @@ static void runControlAction(const ControlRequest &cr)
         prefsRequestSave(SAVE_ALL);
       }
     } else if (action == "dig_mode") {
-      int dm = getParamStr("val").toInt();
+      String v = getParamStr("val");
+      int dm = v.length() == 1 && isDigit(v[0]) ? v[0] - '0' : -1;   // toInt() would read "" as FT8
       if (dm >= 0 && dm <= 2) {
         changeDigitalMode((uint8_t)dm);
         prefsRequestSave(dm == FT8_DIG_FT8 || dm == FT8_DIG_FT4 ? SAVE_ALL : SAVE_SETTINGS);
@@ -1085,6 +1092,7 @@ static void runControlAction(const ControlRequest &cr)
       }
       strncpy(memories[slot].name, name.c_str(), 9);
       memories[slot].name[9] = '\0';
+      jsonClean(memories[slot].name);
       prefsRequestSave(SAVE_MEMORIES, true);
     } else if (action == "bookmark_del") {
       int slot = getParamStr("slot").toInt();
@@ -1620,10 +1628,10 @@ static void webInit()
 #ifdef BOARD_V3S
   // Capture and web-audio health counters (cumulative: read twice and subtract for rates)
   server.on("/api/audio_diag", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    char cap[320], out[420];
+    char cap[320], out[440];
     ft8AudioDiagJson(cap, sizeof(cap));
-    snprintf(out, sizeof(out), "{%s,\"ws_gap_max_ms\":%lu,\"ws_skipped\":%lu}", cap,
-             (unsigned long)wsAudGapMaxMs, (unsigned long)wsAudSkipped);
+    snprintf(out, sizeof(out), "{%s,\"ws_gap_max_ms\":%lu,\"ws_skipped\":%lu,\"reset_reason\":%d}", cap,
+             (unsigned long)wsAudGapMaxMs, (unsigned long)wsAudSkipped, (int)esp_reset_reason());
     request->send(200, "application/json", out);
   });
 #endif
@@ -1655,6 +1663,7 @@ static void webInit()
         uint8_t b = memories[i].band < getTotalBands() ? memories[i].band : 0;
         snprintf(nameBuf, sizeof(nameBuf), "%s #%d", bands[b].bandName, i + 1);
       }
+      jsonClean(nameBuf);
       uint8_t m = memories[i].mode <= 3 ? memories[i].mode : USB;
       uint8_t b = memories[i].band < getTotalBands() ? memories[i].band : 1;
       char item[160];
@@ -1682,11 +1691,17 @@ static void webInit()
     for (int i = 0; i < cnt; i++) {
       const FT8MessageEntry *e = ft8GetTrafficEntry(i);
       if (!e) continue;
-      if (i > 0) out += ",";
+      if (out.length() > 1) out += ",";
+      // The decoder rewrites entries from another task: work on a terminated copy
+      FT8MessageEntry c = *e;
+      c.timeStr[sizeof(c.timeStr) - 1] = c.call[sizeof(c.call) - 1] = c.msg[sizeof(c.msg) - 1] = '\0';
+      jsonClean(c.timeStr);
+      jsonClean(c.call);
+      jsonClean(c.msg);
       char item[192];
       snprintf(item, sizeof(item),
         "{\"time\":\"%s\",\"snr\":%d,\"dt\":%.1f,\"freq\":%u,\"call\":\"%s\",\"msg\":\"%s\"}",
-        e->timeStr, (int)e->snr, e->dt, e->freq, e->call, e->msg
+        c.timeStr, (int)c.snr, c.dt, c.freq, c.call, c.msg
       );
       out += item;
     }
@@ -1769,7 +1784,7 @@ static void webInit()
           if (y / SPR_BAND_H != band) {
             band = y / SPR_BAND_H;
             bool ready = screenshotBand(band);
-            for (int t = 0; !ready && t < 150; t++) {
+            for (int t = 0; !ready && t < 750; t++) {
               delay(2);
               ready = screenshotBand(band);
             }
