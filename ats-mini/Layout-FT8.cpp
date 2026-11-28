@@ -13,7 +13,9 @@
 #include <driver/i2s_std.h>
 #include <WiFi.h>
 #include <esp_timer.h>
+#if HAS_FT8_ADC
 #include <soc/sens_struct.h>
+#endif
 #include <hal/misc.h>
 #include <sys/time.h>
 #include <stdarg.h>
@@ -21,7 +23,6 @@
 #include <ft8_lib.h>
 #include <websdr_test1.h>
 
-#define FT8_ADC_PIN         34
 #define FT8_SAMPLE_RATE     6000
 #define FT8_ADC_RATE        16000 // GPIO34 sampled by a hardware timer (80 MHz / 5 / 1000), resampled 3/8 to 6 kHz
 #define FT8_RS_UP           3
@@ -365,6 +366,7 @@ static void rsDesign() {
 }
 
 static void IRAM_ATTR adcTimerIsr() {
+#if HAS_FT8_ADC
   uint16_t v = (uint16_t)HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas_start1, meas1_data_sar);
   SENS.sar_meas_start1.meas1_start_sar = 0;
   SENS.sar_meas_start1.meas1_start_sar = 1;
@@ -373,6 +375,7 @@ static void IRAM_ATTR adcTimerIsr() {
   volatile uint32_t *p = &adcRaw[(h & (FT8_RAW_RING - 1)) >> 1];
   *p = (h & 1) ? ((*p & 0x0000FFFFu) | ((uint32_t)v << 16)) : ((*p & 0xFFFF0000u) | v);
   adcRawHead = h + 1;
+#endif
 }
 
 // G.711 mu-law: 8 bits per sample with ~13-bit dynamic range
@@ -474,8 +477,6 @@ static void adcTask(void *arg) {
 // ESP32 drives DCLK (GPIO21) and DFS (GPIO22); DOUT (Si4732 pin 16) goes to GPIO34. Each 3 frames are averaged into one
 // 16 kHz sample (the Si4732 audio is already below 4 kHz) and written to the same raw ring as the SAR ADC ISR,
 // scaled to 12 bits with a 2048 offset, so the resampler and everything after it are unchanged.
-#define DIG_PIN_BCK 19
-#define DIG_PIN_WS  22
 #define DIG_RATE    48000
 static bool digWanted = false, digRunning = false;
 static i2s_chan_handle_t digChan = NULL;
@@ -489,7 +490,7 @@ bool audioDigitalWanted() {
   if (p.begin("radiocal", true)) { v = p.getBool("digin", false); p.end(); }
   return v;
 }
-bool audioDigitalOn() { return audioDigitalWanted() && extRefActive(); }
+bool audioDigitalOn() { return HAS_FT8_ADC && audioDigitalWanted() && extRefActive(); }
 void audioDigitalSet(bool on) {
   Preferences p;
   if (p.begin("radiocal", false)) { p.putBool("digin", on); p.end(); }
@@ -539,6 +540,9 @@ static bool digStart() {
 }
 
 static bool adcStart() {
+#if !HAS_FT8_ADC
+  return false;                                         // no audio wire on this board
+#else
   // One regular read configures ADC1 channel 6 (GPIO34), 0 dB attenuation and the RTC controller
   analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
   analogRead(FT8_ADC_PIN);
@@ -557,6 +561,7 @@ static bool adcStart() {
   timerAlarm(adcTimer, 16000000 / FT8_ADC_RATE - 1, true, 0);
   adcRunning = true;
   return true;
+#endif
 }
 
 void ft8Init() {
@@ -599,10 +604,10 @@ void ft8Init() {
 
   // Battery is read once before the ADC1 DMA driver takes over the unit
   analogReadResolution(12);
-  analogSetPinAttenuation(35, ADC_11db);
-  g_latestVbatRaw = (uint16_t)analogRead(35);
+  analogSetPinAttenuation(PIN_VBAT, ADC_11db);
+  g_latestVbatRaw = (uint16_t)analogRead(PIN_VBAT);
 
-  // Start crystal-timed capture of GPIO34 audio
+  // Start crystal-timed audio capture (stays off when HAS_FT8_ADC is 0)
   if (!adcBuf || !adcRaw) Serial.println("[FT8] ADC buffer allocation failed");
   rsDesign();
   digWanted = audioDigitalOn();
@@ -610,9 +615,9 @@ void ft8Init() {
   if (digWanted) { adcRunning = true; Serial.printf("[FT8] digital audio input %s (I2S1 %d Hz, BCK %d WS %d DIN %d)\r\n", adcOk ? "running" : "FAILED", DIG_RATE, DIG_PIN_BCK, DIG_PIN_WS, FT8_ADC_PIN); }
   xTaskCreatePinnedToCore(adcTask, "ft8_adc", 2560, NULL, 5, NULL, 1);   // peak use ~1 KB (serial Z)
   Serial.printf("[FT8] ADC capture %s (%d Hz timer, resample %d/%d -> %d Hz)\r\n",
-                adcOk ? "running" : "FAILED", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
+                adcOk ? "running" : HAS_FT8_ADC ? "FAILED" : "disabled (no audio input wired)", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
 
-  ft8AddLog("[INFO] FT8 DSP receiver started on GPIO34 (6000 Hz, 200..2900 Hz)");
+  ft8AddLog(HAS_FT8_ADC ? "[INFO] FT8 DSP receiver started on GPIO34 (6000 Hz, 200..2900 Hz)" : "[INFO] FT8 receiver off: no audio input wired on this board");
 }
 
 static int g_lastRowAvgMag = 0;

@@ -830,6 +830,7 @@ static void runControlAction(const ControlRequest &cr)
       Serial.println("[SI5351] external RCLK setting saved, restarting");
       delay(300);
       ESP.restart();
+#if HAS_FT8_ADC
     } else if (action == "pin34") {
       // Probe GPIO34 (Si4732 pin 16 / DOUT): average voltage and the share of high samples over 4000 reads
       int hi = 0; uint32_t mv = 0;
@@ -838,6 +839,7 @@ static void runControlAction(const ControlRequest &cr)
       int lo = 4095, hi2 = 0;
       for (int i = 0; i < 2000; i++) { int v = analogRead(34); if (v < lo) lo = v; if (v > hi2) hi2 = v; }
       ft8AddLog("[PIN34] high %d of 4000 reads, average %u mV, ADC min %d max %d", hi, (unsigned)(mv / 16), lo, hi2);
+#endif
     } else if (action == "audio_in") {
       // Audio input: val=1 Si4732 digital I2S (needs the Si5351 reference + wires DCLK/DFS/DOUT), val=0 analog ADC; saved, restart
       audioDigitalSet(getParamStr("val").toInt() != 0);

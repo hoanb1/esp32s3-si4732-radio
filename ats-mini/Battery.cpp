@@ -2,8 +2,6 @@
 #include "Themes.h"
 #include "Utils.h"
 
-#define VBAT_MON  35                // GPIO35 -- Battery Monitor PIN
-
 #define BATT_ADC_FACTOR      1.702  // ADC correction factor used for the battery monitor
 #define BATT_SOC_LEVEL1      3.680  // Battery SOC voltage for 25%
 #define BATT_SOC_LEVEL2      3.780  // Battery SOC voltage for 50%

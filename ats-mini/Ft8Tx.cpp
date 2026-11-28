@@ -19,6 +19,7 @@
 #include <esp_wifi.h>
 #include <esp_rom_gpio.h>
 #include <driver/gpio.h>
+#if HAS_APLL_TX
 #include <soc/rtc.h>
 #include <soc/i2s_struct.h>
 #include <soc/io_mux_reg.h>
@@ -26,6 +27,7 @@
 #include <soc/regi2c_apll.h>
 #include <esp_private/regi2c_ctrl.h>
 #include <esp_private/periph_ctrl.h>
+#endif
 #include <ft8_lib.h>
 
 void ft8GetCurrentUTC(uint8_t *h, uint8_t *m, uint8_t *s, uint16_t *msOut);   // Layout-FT8.cpp
@@ -86,6 +88,10 @@ static uint32_t txSlotNo = UINT32_MAX;   // slot of the last queued message
 static void txEvent(const char *fmt, ...);   // web page event log, below
 
 static bool txAllowed() {
+  if (!HAS_TX) {
+    Serial.println("[TX] No transmitter on this board");
+    return false;
+  }
   if (txEnabled) return true;
   Serial.println("[TX] Transmit is disabled (Ke1 or the Enable TX box on the web page)");
   return false;
@@ -129,15 +135,16 @@ static void txPickOffset() {
 static bool txSi() { return txSrc == 0 && extRefActive(); }
 
 // T/R relay module (S = signal, active high): COM = antenna, NO = PA (transmit), NC = SI4732 (receive, relay off)
-#define TX_RELAY_PIN 26
 #define TX_RELAY_SETTLE_MS 15
 static void txRelay(bool tx) {
+  if (TX_RELAY_PIN < 0) return;
   static bool init = false;
   if (!init) { digitalWrite(TX_RELAY_PIN, LOW); pinMode(TX_RELAY_PIN, OUTPUT); init = true; }
   digitalWrite(TX_RELAY_PIN, tx ? HIGH : LOW);
 }
 
 static bool txPlan() {
+  if (!HAS_TX) return false;
   if (txSi()) {
     plan = {};
     plan.baseHz = txWantHz();
@@ -208,11 +215,13 @@ static inline void txSetTone(uint8_t tone) {
     si5351SetCentiHz(SI5351_TX_CLK, (uint64_t)llround((plan.baseHz + tone * TX_TONE_HZ) * 100.0));
     return;
   }
+#if HAS_APLL_TX
   REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_DSDM0, (plan.sdm & 0xFF) + tone * plan.stepsPerTone);
   if (txLatchSdm) {
     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_SDM_STOP, 1);
     REGI2C_WRITE_MASK(I2C_APLL, I2C_APLL_SDM_STOP, 0);
   }
+#endif
 }
 
 // Receive is off while transmitting: the SI4732 is held in reset for the whole TX
@@ -244,7 +253,7 @@ static void txRadioOn() {
 }
 
 static void txStart() {
-  if (txOn) return;
+  if (txOn || !HAS_TX) return;
   if (txSi()) {
     txRelay(true);                          // antenna to the PA first, then RF
     vTaskDelay(pdMS_TO_TICKS(TX_RELAY_SETTLE_MS));
@@ -253,6 +262,7 @@ static void txStart() {
     txOn = true;
     return;
   }
+#if HAS_APLL_TX
   txRadioOff();
   periph_module_enable(PERIPH_I2S0_MODULE);
   rtc_clk_apll_enable(true);
@@ -281,6 +291,7 @@ static void txStart() {
     I2S0.conf.tx_start = 1;                // BCK runs while TX is started, even with an empty FIFO
   }
   txOn = true;
+#endif
 }
 
 static void txStop() {
@@ -292,6 +303,7 @@ static void txStop() {
     txOn = false;
     return;
   }
+#if HAS_APLL_TX
   if (txPin == 0) {
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0_GPIO0);
     gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
@@ -306,6 +318,7 @@ static void txStop() {
   }
   I2S0.clkm_conf.clk_en = 0;
   rtc_clk_apll_enable(false);
+#endif
   txOn = false;
 }
 
@@ -1032,7 +1045,7 @@ static String txStatusJson() {
   out = b;
   snprintf(b, sizeof(b), "\"rf\":%.1f,\"tone_err\":%.2f,\"si\":%s,\"src\":%u,\"drv\":%u,\"si_ok\":%s,\"relay\":%s,\"enabled\":%s,\"on\":%s,\"busy\":%s,\"text\":\"%s\",",
            here ? plan.baseHz : txWantHz(), here ? (spacing - TX_TONE_HZ) * 7.0 : 0.0,
-           txSi() ? "true" : "false", (unsigned)txSrc, (unsigned)txDrv, extRefActive() ? "true" : "false", digitalRead(TX_RELAY_PIN) ? "true" : "false", txEnabled ? "true" : "false",
+           txSi() ? "true" : "false", (unsigned)txSrc, (unsigned)txDrv, extRefActive() ? "true" : "false", (TX_RELAY_PIN >= 0 && digitalRead(TX_RELAY_PIN)) ? "true" : "false", txEnabled ? "true" : "false",
            txOn ? "true" : "false",
            txTask ? "true" : "false", txTask ? txText : "");
   out += b;

@@ -43,22 +43,8 @@
 #define SLEEP_UNLOCKED 1 // Do not lock the encoder
 #define SLEEP_LIGHT    2 // ESP32 light sleep
 
-// SI4732/5 PINs
-#define PIN_POWER_ON  -1            // No switchable SI4732 supply on this board
-#define RESET_PIN     27            // GPIO27   SI4732/5 Reset
-#define ESP32_I2C_SCL 14            // GPIO14   SI4732/5 Clock
-#define ESP32_I2C_SDA 13            // GPIO13   SI4732/5 Data
-#define AUDIO_MUTE    -1            // Hardware L/R mute disabled
-#define PIN_AMP_EN    15            // GPIO15   Speaker amplifier enable (1 = Enable); SI4732 line out to GPIO34 is unaffected
-
-// Display PINs
-#define PIN_LCD_BL    16            // GPIO16   LCD backlight (PWM brightness control)
-// All other pins are defined by the TFT_eSPI library (MOSI=23, SCLK=18, CS=5, DC=17, RST=4)
-
-// Rotary Encoder PINs (GPIO34 is SI4732 Audio ADC1_CH6, GPIO35 is VBAT_MON)
-#define ENCODER_PIN_A       33      // GPIO33
-#define ENCODER_PIN_B       32      // GPIO32
-#define ENCODER_PUSH_BUTTON 25      // GPIO25
+// Pins and board features
+#include "Board.h"
 
 // Compute number of items in an array
 #define ITEM_COUNT(array) (sizeof(array) / sizeof((array)[0]))
