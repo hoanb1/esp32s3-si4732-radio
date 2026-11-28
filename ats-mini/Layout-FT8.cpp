@@ -1388,7 +1388,9 @@ void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
         doAgc(0);
         doAvc(0);
         doBandwidth(0);
-        ft8SetDigitalMode(FT8_DIG_FT8);
+        // 1840 is in use by both modes: keep FT4 if it is already selected
+        bool keepFt4 = freqKhz == 1840 && ft8GetDigitalMode() == FT8_DIG_FT4;
+        ft8SetDigitalMode(keepFt4 ? FT8_DIG_FT4 : FT8_DIG_FT8);
         return;
       }
     }
@@ -1412,7 +1414,7 @@ void ft8CheckFrequencyDigitalMode(uint16_t freqKhz, uint8_t mode) {
 void ft8TuneBandDigitalFreq(int bId, uint8_t digMode) {
   static const uint16_t ft8Khz[9] = { 1840, 3573, 7074, 10136, 14074, 18100, 21074, 24915, 28074 };
   static const uint16_t ft4Khz[9] = { 1840, 3575, 7047, 10140, 14080, 18104, 21140, 24919, 28180 };
-  static const int16_t  ft4Bfo[9] = {    0,  500,  500,     0,     0,     0,     0,     0,     0 };
+  static const int16_t  ft4Bfo[9] = {    0,    0,  500,     0,     0,     0,     0,     0,     0 };
   if (bId < 18 || bId > 26) {
     bId = 24; // Default 15M (21.074 MHz) amateur band
   }

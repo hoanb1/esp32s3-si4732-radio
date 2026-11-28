@@ -152,7 +152,7 @@ void pskrOnDecode(const char *text, int snr, uint16_t audioHz) {
   const char *loc = "";
   if (n > ci + 1 && isGridTok(tok[n - 1])) loc = tok[n - 1];
 
-  uint32_t rf = (uint32_t)currentFrequency * 1000UL + audioHz;
+  uint32_t rf = (uint32_t)currentFrequency * 1000UL + currentBFO + audioHz;
   bool ft4 = ft8GetDigitalMode() == FT8_DIG_FT4;
   // The decode runs near the end of the slot it decoded, so step back half a period first
   uint32_t half = ft4 ? 15 : 30;                       // period in half-seconds
