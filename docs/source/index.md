@@ -18,7 +18,7 @@ changelog.md
 ![](_static/esp32-si4732-ui-theme.jpg)
 
 ```{hint}
-For a quick start, check out the [User Manual](manual.md) and the [Flashing Instructions](flash.md). The firmware releases are available on [GitHub](https://github.com/esp32-si4732/ats-mini/releases).
+For a quick start, check out the [User Manual](manual.md) and the [Flashing Instructions](flash.md). The firmware releases are available on [GitHub](https://github.com/hoanb1/esp32s3-si4732-radio/releases).
 ```
 
 The receiver was designed by a Chinese engineer. His nickname is Sunnygold and he open sourced both hardware (board, 3d-printed and cnc-machined cases) and software. Initially, he didn't knew that the receiver was sold on AliExpress and became popular on YouTube and other communities. Then another Chinese developer Zooc joined him to help improve the firmware.

@@ -8,18 +8,21 @@ Before proceeding, please check whether the receiver board has [BOOT & RESET but
 
 ## Firmware files
 
-```{hint}
-The firmware releases are available on [GitHub](https://github.com/esp32-si4732/ats-mini/releases). You'll need either OSPI or QSPI variant depending on the ESP32-S3 PSRAM type, see the following table:
+The firmware releases are available on [GitHub](https://github.com/hoanb1/esp32s3-si4732-radio/releases). Download the archive for your board:
 
-![](_static/esp32-psram-variants.png)
+| Archive suffix | Board | Chip | Bootloader address |
+|----------------|-------|------|--------------------|
+| `-v3s` | ESP32-S3-WROOM-1 N16R8 (receive only) | `esp32s3` | `0x0` |
+| `-classic` | ESP32-D0WD-V3, no PSRAM (receive and transmit) | `esp32` | `0x1000` |
 
-With the right firmware variant you should see a non-zero PSRAM amount on the Settings->About system info screen. Also check out the following discussion: [OSPI vs QSPI: How can I see what I have?](https://github.com/esp32-si4732/ats-mini/discussions/174).
+```{warning}
+These builds are for the two boards above. Their pinout differs from the original ATS-Mini receiver.
 ```
 
 A firmware archive contains the following files:
 
 1. `CHANGELOG.md` - a text file that describes what's new in each firmware version
-2. `ats-mini.ino.bootloader.bin` - a bootloader (should be flashed at address **`0x0`**)
+2. `ats-mini.ino.bootloader.bin` - a bootloader (flash it at the bootloader address from the table above)
 3. `ats-mini.ino.partitions.bin` - a partition table (should be flashed at address **`0x8000`**)
 4. `ats-mini.ino.bin` - a firmware itself (should be flashed at address **`0x10000`**)
 5. `ats-mini.ino.merged.bin` - the three previous files combined into one (should be flashed at address **`0x0`**)
@@ -63,7 +66,7 @@ Works on: Windows
 2. Connect your receiver to a computer using USB and power it on.
 3. A new serial port should appear, check the USB Serial COM port in the Windows Device Manager.
 4. Run the `flash_dowload_tool` executable file.
-5. Choose `Chip Type: ESP32-S3`, `WorkMode: Develop`, `LoadMode: UART`.
+5. Choose the `Chip Type` of your board (see the table above), `WorkMode: Develop`, `LoadMode: UART`.
 6. Add either the three separate firmware files at the [right addresses](#firmware-files), or the merged one at `0x0`. Enable the check boxes next to the file bars.
 7. Set the COM port and other settings.
 8. After checking all information is correct, press the `START` button.
@@ -80,12 +83,12 @@ Works on: Windows, macOS, Linux
 1. Install `uv` (Windows, macOS, Linux) <https://docs.astral.sh/uv/getting-started/installation/>
 2. Connect your receiver to a computer using USB and power it on.
 3. A new serial port should appear. On Windows check the USB Serial COM port in the Windows Device Manager, on macOS it will look like `/dev/tty.usbmodemXXXX`, on Linux like `/dev/ttyACMX`.
-3. Run **just one** of the two following commands (the first one uses three separate firmware files, the second one uses the single merged firmware file):
+3. Run **just one** of the two following commands (the first one uses three separate firmware files, the second one uses the single merged firmware file). These are for the V3S board; for the classic board use `--chip esp32` and flash the bootloader at `0x1000`:
    ```shell
-   uvx --from esptool esptool.py --chip esp32s3 --port SERIAL_PORT --baud 921600 --before default-reset --after hard-reset write_flash  -z --flash-mode keep --flash-freq keep --flash-size keep 0x0 ats-mini.ino.bootloader.bin 0x8000 ats-mini.ino.partitions.bin 0x10000 ats-mini.ino.bin
+   uvx --from esptool esptool.py --chip esp32s3 --port SERIAL_PORT --baud 921600 --before default-reset --after hard-reset write-flash -z --flash-mode keep --flash-freq keep --flash-size keep 0x0 ats-mini.ino.bootloader.bin 0x8000 ats-mini.ino.partitions.bin 0x10000 ats-mini.ino.bin
 
    # OR
 
-   uvx --from esptool esptool.py --chip esp32s3 --port SERIAL_PORT --baud 921600 --before default-reset --after hard-reset write-flash  -z --flash-mode keep --flash-freq keep --flash-size keep 0x0 ats-mini.ino.merged.bin
+   uvx --from esptool esptool.py --chip esp32s3 --port SERIAL_PORT --baud 921600 --before default-reset --after hard-reset write-flash -z --flash-mode keep --flash-freq keep --flash-size keep 0x0 ats-mini.ino.merged.bin
    ```
 4. Check out the firmware version in Menu -> Settings -> About on the receiver.

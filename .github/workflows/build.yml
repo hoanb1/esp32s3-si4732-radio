@@ -125,7 +125,7 @@ jobs:
       - name: Download the build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: 'ats-mini-*'
+          pattern: '${{ github.event.repository.name }}-*'
           merge-multiple: true
           path: artifact
       - name: Archive the build artifacts
@@ -140,7 +140,7 @@ jobs:
       - name: Upload release artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          FILENAMES: ${{ github.event.repository.name }}-${{ needs.build.outputs.slug }}-*.zip
+          FILENAMES: ats-mini-${{ needs.build.outputs.slug }}-*.zip
           SLUG: ${{ needs.build.outputs.slug }}
         run: |
           # shellcheck disable=SC2086
