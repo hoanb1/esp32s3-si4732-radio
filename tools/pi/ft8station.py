@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """FT8 station on a Raspberry Pi: RTL-SDR + jt9 receive, Ft8Pi (GPIO4) transmit.
 
-  ft8station config [--call XV5QH/P] [--grid OL31] [--dial 3573000] [--audio 1250] [--gain 40]
+  ft8station config [--call <CALL>] [--grid <GRID>] [--dial 3573000] [--audio 1250] [--gain 40]
   ft8station show
   ft8station cq                 call CQ and run the QSO with whoever answers
   ft8station answer [CALL]      wait for a CQ (from CALL, or anyone) and work that station
