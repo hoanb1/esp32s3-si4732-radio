@@ -144,9 +144,19 @@ GuardedWebServer server(80);
 //
 #define WS_MAX_PAGES 3
 static AsyncWebSocket ws("/ws");
-struct WsPage { uint32_t id; bool audio; uint32_t logSeq; uint32_t wfSeq; };
+struct WsPage { uint32_t id; AsyncWebSocketClient *client; bool audio; uint32_t logSeq; uint32_t wfSeq; };
 static WsPage wsPages[WS_MAX_PAGES];
 static portMUX_TYPE wsMux = portMUX_INITIALIZER_UNLOCKED;
+// The AsyncTCP task may destroy a client at any moment. The loop task uses a page's client pointer only
+// while holding this (recursive) lock, and the disconnect event, fired from the client's destructor, waits
+// for it. The wait is bounded: the event runs under the library's client list lock, which a send or abort
+// from the loop task may need to close its own client.
+#define WS_LOCK_WAIT_MS 200
+static SemaphoreHandle_t wsObjLock = NULL;
+struct WsGuard {
+  WsGuard()  { xSemaphoreTakeRecursive(wsObjLock, portMAX_DELAY); }
+  ~WsGuard() { xSemaphoreGiveRecursive(wsObjLock); }
+};
 static uint32_t wsAudSeq = 0;
 static uint32_t wsAudGapMaxMs = 0, wsAudSkipped = 0;  // longest wait between audio frames, samples never sent
 static void wsTick();
@@ -1401,7 +1411,7 @@ static void wsOnEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
         uint32_t head = webLogHead();
         uint32_t wf = ft8GetWebWaterfallRowCount();
         // Replay the recent log lines and the whole waterfall
-        wsPages[i] = { client->id(), false, head > WEBLOG_LINES ? head - WEBLOG_LINES : 0, wf > 36 ? wf - 36 : 0 };
+        wsPages[i] = { client->id(), client, false, head > WEBLOG_LINES ? head - WEBLOG_LINES : 0, wf > 36 ? wf - 36 : 0 };
         added = true;
       }
     }
@@ -1411,10 +1421,12 @@ static void wsOnEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
     if (!added) client->close(1013, "too many pages");
   } else if (type == WS_EVT_DISCONNECT) {
     Serial.printf("[WS] -%u\r\n", (unsigned)client->id());
+    bool locked = xSemaphoreTakeRecursive(wsObjLock, pdMS_TO_TICKS(WS_LOCK_WAIT_MS)) == pdTRUE;
     portENTER_CRITICAL(&wsMux);
     for (int i = 0; i < WS_MAX_PAGES; i++)
       if (wsPages[i].id == client->id()) wsPages[i].id = 0;
     portEXIT_CRITICAL(&wsMux);
+    if (locked) xSemaphoreGiveRecursive(wsObjLock);
   } else if (type == WS_EVT_ERROR) {
     Serial.printf("[WS] err %u\r\n", (unsigned)client->id());
   } else if (type == WS_EVT_DATA) {
@@ -1430,6 +1442,16 @@ static void wsOnEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
   }
 }
 
+
+// Client of page i if it is still the same connected one, else NULL. Call with a WsGuard held, and again
+// after every send: a send can close and destroy the client.
+static AsyncWebSocketClient *wsLive(int i, uint32_t id)
+{
+  portENTER_CRITICAL(&wsMux);
+  AsyncWebSocketClient *c = (id && wsPages[i].id == id) ? wsPages[i].client : NULL;
+  portEXIT_CRITICAL(&wsMux);
+  return c && c->status() == WS_CONNECTED ? c : NULL;
+}
 
 static void wsSendAudio(const WsPage *pages, uint32_t now)
 {
@@ -1460,7 +1482,8 @@ static void wsSendAudio(const WsPage *pages, uint32_t now)
       bool sent = false;
       for (int i = 0; i < WS_MAX_PAGES; i++) {
         if (!pages[i].id || !pages[i].audio) continue;
-        AsyncWebSocketClient *c = ws.client(pages[i].id);
+        WsGuard guard;
+        AsyncWebSocketClient *c = wsLive(i, pages[i].id);
         if (c && c->canSend() && c->queueLen() < 4) { c->binary(buf); sent = true; }
       }
 #ifdef BOARD_V3S
@@ -1525,7 +1548,8 @@ static void wsTick()
     const uint8_t *wf = ft8GetWebWaterfallBuffer();
     for (int i = 0; i < WS_MAX_PAGES; i++) {
       if (!pages[i].id) continue;
-      AsyncWebSocketClient *c = ws.client(pages[i].id);
+      WsGuard guard;
+      AsyncWebSocketClient *c = wsLive(i, pages[i].id);
       // A page whose queue does not drain for WS_STALL_MS is gone (or on a dead link): its queued
       // frames and pcb would sit in heap through the TCP retransmit timeouts, so reset it
       static uint32_t stallId[WS_MAX_PAGES], stallAt[WS_MAX_PAGES];
@@ -1533,13 +1557,14 @@ static void wsTick()
         if (stallId[i] != pages[i].id) { stallId[i] = pages[i].id; stallAt[i] = now; }
         else if (now - stallAt[i] > WS_STALL_MS) {
           Serial.printf("[NET] ws page %u stalled (queue %u): reset\r\n", (unsigned)pages[i].id, (unsigned)c->queueLen());
-          c->client()->abort();
+          if (AsyncClient *tcp = c->client()) tcp->abort();
           continue;
         }
       } else stallId[i] = 0;
       if (!c || !c->canSend() || c->queueLen() > 0) continue;   // still sending the last tick: it gets the next one
       if (status) c->text(status);
       else if (beat) c->text(beat);
+      if (!(c = wsLive(i, pages[i].id))) continue;
       uint32_t behind = wfHead - pages[i].wfSeq;
       if (behind > 36) behind = 36;
       uint32_t rows = behind > WS_WF_ROWS_MAX ? WS_WF_ROWS_MAX : behind;
@@ -1567,7 +1592,7 @@ static void wsTick()
           memcpy(dst, ft8GetHiResMeta(first + r), 2);
           memcpy(dst + 2, ft8GetHiResRow(first + r), rowBytes - 2);
         }
-        c->binary(hbuf);
+        if ((c = wsLive(i, pages[i].id))) c->binary(hbuf);
       }
       if (rows) {
         portENTER_CRITICAL(&wsMux);
@@ -1584,11 +1609,12 @@ static void wsTick()
     char line[WEBLOG_LINE_LEN];
     for (int i = 0; i < WS_MAX_PAGES; i++) {
       if (!pages[i].id || pages[i].logSeq == head) continue;
-      AsyncWebSocketClient *c = ws.client(pages[i].id);
+      WsGuard guard;
+      AsyncWebSocketClient *c = wsLive(i, pages[i].id);
       if (!c) continue;
       uint32_t seq = pages[i].logSeq;
       if (head - seq > WEBLOG_LINES) seq = head - WEBLOG_LINES;   // fell behind: skip the lost lines
-      for (int n = 0; n < 4 && seq != head && c->canSend() && c->queueLen() < 2; n++, seq++)
+      for (int n = 0; n < 4 && seq != head && (c = wsLive(i, pages[i].id)) && c->canSend() && c->queueLen() < 2; n++, seq++)
         if (wsHeapOk(WEBLOG_LINE_LEN) && webLogGet(seq, line, sizeof(line))) c->text(line);
       portENTER_CRITICAL(&wsMux);
       if (wsPages[i].id == pages[i].id) wsPages[i].logSeq = seq;
@@ -1605,6 +1631,7 @@ static void webInit()
   if (webServerStarted) return;
   webServerStarted = true;
   if (!controlMutex) controlMutex = xSemaphoreCreateMutex();
+  if (!wsObjLock) wsObjLock = xSemaphoreCreateRecursiveMutex();
 
   // Low on heap: refuse at once (the page retries) rather than crash half-way through a response
   server.addMiddleware([] (AsyncWebServerRequest *request, ArMiddlewareNext next) {
