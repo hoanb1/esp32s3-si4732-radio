@@ -1,5 +1,15 @@
 # Hardware mods
 
+## V3S audio wire to IO11
+
+The `v3s` firmware samples the receiver audio with the ESP32-S3 ADC. FT8/FT4 decoding, web audio and the web waterfall need this one wire:
+
+| From | To |
+|------|----|
+| SI4732-A10 `LOUT` (pin 1) | ESP32-S3-WROOM-1 `IO11` (module pin 19, otherwise unused) |
+
+Solder it with the power and the battery disconnected. Tuning and the speaker do not depend on it. The standalone sketch `tools/v3s-probe` prints the DC level and signal swing measured on IO11, which tells whether the wire carries audio.
+
 ## BOOT and RESET buttons
 
 Some of the ESP32-SI4732 receivers do not have the BOOT and RESET buttons soldered in. You will need these buttons if you want to recover a receiver that was bricked because of a failed flashing process.

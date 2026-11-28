@@ -9,7 +9,7 @@ The user manual is [here](https://github.com/hoanb1/esp32s3-si4732-radio/blob/ma
 
 ### Added
 
-- V3S board profile (ESP32-S3 N16R8, receive only): SI4732 audio capture on GPIO11 with spike filtering, FT8/FT4 decoding, audio streaming to the web page, and capture diagnostics at `/api/audio_diag`.
+- V3S board profile (ESP32-S3 N16R8, receive only): SI4732 audio capture on GPIO11 (needs one wire from SI4732 `LOUT`, see [hardware mods](https://github.com/hoanb1/esp32s3-si4732-radio/blob/main/docs/source/mods.md#v3s-audio-wire-to-io11)) with spike filtering, FT8/FT4 decoding, audio streaming to the web page, and capture diagnostics at `/api/audio_diag`.
 - New LCD screens (radio and FT8/FT4) on the V3S, and a compact receive-first web page in the same theme that fits a 390 px phone screen.
 
 
