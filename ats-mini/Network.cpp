@@ -1368,8 +1368,8 @@ static int buildStatusJson(char *json, size_t cap)
   uint32_t adcSlot, adcSlotRaw;
   uint16_t adcSlotTail;
   ft8GetAdcClock(&adcSlot, &adcSlotRaw, &adcSlotTail);
-  uint32_t adcSamples, adcBad;
-  ft8GetAdcCounters(&adcSamples, &adcBad);
+  uint32_t adcSamples, adcBad, adcSpikes;
+  ft8GetAdcCounters(&adcSamples, &adcBad, &adcSpikes);
   int adcMean, adcMin, adcMax;
   ft8GetAdcLevels(&adcMean, &adcMin, &adcMax);
 
@@ -1386,7 +1386,7 @@ static int buildStatusJson(char *json, size_t cap)
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
     "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"heap_largest\":%u,\"heap_min\":%u,\"msg_count\":%lu,"
-    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_raw\":[%d,%d,%d],\"tx\":%s,\"adc_pin\":%d,\"dig_ok\":%s}",
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_spikes\":%lu,\"adc_raw\":[%d,%d,%d],\"tx\":%s,\"adc_pin\":%d,\"dig_ok\":%s}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1408,7 +1408,7 @@ static int buildStatusJson(char *json, size_t cap)
     (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail,
     audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
     (unsigned long)audioDigitalFrames(), audioDigitalPeak(true),
-    (unsigned long)adcSamples, (unsigned long)adcBad, adcMean, adcMin, adcMax,
+    (unsigned long)adcSamples, (unsigned long)adcBad, (unsigned long)adcSpikes, adcMean, adcMin, adcMax,
     HAS_TX ? "true" : "false", (int)FT8_ADC_PIN, DIG_PIN_BCK >= 0 ? "true" : "false"
   );
   if (len < 0) len = 0;

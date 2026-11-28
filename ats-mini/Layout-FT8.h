@@ -93,7 +93,7 @@ void ft8ClearTraffic();
 void ft8ToggleAudioStream();
 bool ft8ToggleAdcTimer();
 void ft8GetAdcLevels(int *mean, int *minV, int *maxV);          // raw 12-bit values of the last block
-void ft8GetAdcCounters(uint32_t *samples, uint32_t *bad);   // raw samples taken, refused/late conversions (V3S)
+void ft8GetAdcCounters(uint32_t *samples, uint32_t *bad, uint32_t *spikes);  // raw samples, refused conversions and rejected spikes (V3S)
 
 // Print hardware/DSP diagnostic summary to Serial ('d' command)
 void ft8PrintDiag();

@@ -417,6 +417,29 @@ static uint8_t linearToUlaw(int32_t x) {
   return ~(sign | (exp << 4) | ((x >> (exp + 3)) & 0x0F));
 }
 
+#ifdef BOARD_V3S
+// WiFi activity corrupts some ADC2 conversions without flagging them (bursts about every beacon, 102 ms):
+// a sample far outside the recent signal level repeats the last good one. A change that lasts longer
+// than DESPIKE_MAX_HOLD samples is a real level change and is accepted.
+#define DESPIKE_MAX_HOLD 64                 // 4 ms at 16 kHz
+static volatile uint32_t adcSpikeSamples = 0;
+static float despikeRaw(float s) {
+  static float mean = 2048.0f, dev = 100.0f, good = 2048.0f;
+  static int held = 0;
+  float d = fabsf(s - mean);
+  if (d > fmaxf(6.0f * dev, 100.0f) && held < DESPIKE_MAX_HOLD) {
+    held++;
+    adcSpikeSamples = adcSpikeSamples + 1;
+    return good;
+  }
+  if (held >= DESPIKE_MAX_HOLD) { mean = s; d = 0.0f; }
+  held = 0;
+  mean += (s - mean) * (1.0f / 256.0f);
+  dev += (d - dev) * (1.0f / 1024.0f);
+  return good = s;
+}
+#endif
+
 static void adcTask(void *arg) {
   uint32_t tail = adcRawHead;           // next raw sample to consume (absolute index)
   uint32_t histCount = 0;
@@ -446,7 +469,11 @@ static void adcTask(void *arg) {
 
     while (tail != head) {
       uint32_t rw = adcRaw[(tail & (FT8_RAW_RING - 1)) >> 1];
-      rsHist[histPos] = (float)((tail & 1) ? (rw >> 16) : (rw & 0xFFFF));
+      float raw = (float)((tail & 1) ? (rw >> 16) : (rw & 0xFFFF));
+#ifdef BOARD_V3S
+      raw = despikeRaw(raw);
+#endif
+      rsHist[histPos] = raw;
       histPos = (histPos + 1) % FT8_RS_TAPS;
       if (histCount < FT8_RS_TAPS) histCount++;
       uint32_t newest = tail;
@@ -1435,12 +1462,14 @@ bool ft8IsSpeakerMuted() {
   return ft8SpeakerMuted;
 }
 
-void ft8GetAdcCounters(uint32_t *samples, uint32_t *bad) {
+void ft8GetAdcCounters(uint32_t *samples, uint32_t *bad, uint32_t *spikes) {
   *samples = adcRawHead;
 #if HAS_FT8_ADC && defined(BOARD_V3S)
   *bad = adcBadReads;
+  *spikes = adcSpikeSamples;
 #else
   *bad = 0;
+  *spikes = 0;
 #endif
 }
 
