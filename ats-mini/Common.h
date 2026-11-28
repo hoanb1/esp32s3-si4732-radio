@@ -60,9 +60,6 @@
 #define NET_AP_CONNECT 2 // Create access point, connect to a network normally, if possible
 #define NET_SYNC       4 // Connect to sync time, then disconnect
 
-// Bluetooth modes
-#define BLE_OFF        0 // Bluetooth is disabled
-
 //
 // Data Types
 //
@@ -148,7 +145,6 @@ extern int8_t SsbAvcIdx;
 extern int8_t AmSoftMuteIdx;
 extern int8_t SsbSoftMuteIdx;
 extern uint8_t rdsModeIdx;
-extern uint8_t bleModeIdx;
 extern uint8_t wifiModeIdx;
 extern uint8_t FmRegionIdx;
 
@@ -203,10 +199,6 @@ bool ntpSyncTime();
 void netRequestConnect();
 void netTickTime();
 
-// Ble.cpp
-int bleDoCommand(uint8_t bleModeIdx);
-void bleInit(uint8_t bleMode);
-int8_t getBleStatus();
 
 // Remote.c
 #define REMOTE_CHANGED   1

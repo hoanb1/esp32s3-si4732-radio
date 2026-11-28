@@ -291,7 +291,6 @@ void setup()
   netInit(wifiModeIdx);
 
   // Start Bluetooth LE, if necessary
-  bleInit(bleModeIdx);
   Serial.printf("[BOOT] Setup complete! Free heap: %u (8bit=%u, max_alloc=%u)\r\n",
                 (unsigned int)ESP.getFreeHeap(),
                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_8BIT),
@@ -875,8 +874,6 @@ void loop()
     encCountAccel = direction? direction : encCountAccel;
     if(revent & REMOTE_PREFS) prefsRequestSave(SAVE_ALL);
   }
-
-  int ble_event = bleDoCommand(bleModeIdx);
 
   // Process virtual encoder/button/seek commands from Web UI on main thread
   if(webEncDelta != 0)

@@ -43,8 +43,6 @@
 #define BATT_OFFSET_Y    0    // Battery meter y offset
 #define WIFI_OFFSET_X  237    // WiFi x offset
 #define WIFI_OFFSET_Y    0    // WiFi y offset
-#define BLE_OFFSET_X   104    // BLE x offset
-#define BLE_OFFSET_Y     0    // BLE y offset
 
 // Colors on the sprite's 8-bit RGB332 grid (r,g: 0..7, b: 0..3), so they render without dithering loss
 #define C332(r, g, b) ((uint16_t)(((r) << 13) | ((g) << 8) | ((b) << 3)))
@@ -66,7 +64,6 @@ void drawScreen(const char *statusLine1 = 0, const char *statusLine2 = 0);
 
 void drawWiFiIndicator(int x, int y, int32_t bg = -1);
 void drawSaveIndicator(int x, int y);
-void drawBleIndicator(int x, int y);
 void drawSMeter(int strength, int x, int y);
 void drawStereoIndicator(int x, int y, bool stereo);
 void drawBandAndMode(const char *band, const char *mode, int x, int y);

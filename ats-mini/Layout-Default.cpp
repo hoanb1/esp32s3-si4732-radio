@@ -10,9 +10,8 @@
 // The upstream ATS-Mini default screen
 void drawLayoutDefault(const char *statusLine1, const char *statusLine2)
 {
-  // Preferences save, BLE, battery and WiFi indicators
+  // Preferences save, battery and WiFi indicators
   drawSaveIndicator(SAVE_OFFSET_X, SAVE_OFFSET_Y);
-  drawBleIndicator(BLE_OFFSET_X, BLE_OFFSET_Y);
   bool has_voltage = drawBattery(BATT_OFFSET_X, BATT_OFFSET_Y);
   drawWiFiIndicator(has_voltage ? WIFI_OFFSET_X : BATT_OFFSET_X - 13, WIFI_OFFSET_Y);
 
@@ -99,7 +98,6 @@ void drawLayoutDefault(const char *statusLine1, const char *statusLine2)
 
   drawBarSMeter(getStrength(rssi), 1, 1, (currentMode==FM) && rx.getCurrentPilot(), panel);
   drawSaveIndicator(SAVE_OFFSET_X, 2);
-  drawBleIndicator(BLE_OFFSET_X, 2);
 
   int cx = CHIP_X;
   cx += drawChip(getCurrentBand()->bandName, cx, 1, panel, TH.band_text, true) + 4;
