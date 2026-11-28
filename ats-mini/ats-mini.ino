@@ -357,7 +357,7 @@ uint32_t consumeEncoderCounts()
 // SI4732 reference crystal error in 0.1 ppm (+ = receiver tunes high), corrected in AM and SSB.
 // Measured 2026-10-18 with the 10.000 MHz test carrier (serial Q10000): dial 9991 kHz USB gave a 683 Hz tone
 // with +61.2 ppm applied -> +892.9 ppm (21 kHz at 12m). Serial J<0.1ppm> sets it, saved to NVS.
-int16_t ssbPpmCal10 = 8929;
+int16_t ssbPpmCal10 = RX_PPM_CAL10_DEFAULT;
 
 // Whole kHz of the crystal correction go into the SI4732 tune frequency, because the SSB BFO only reaches
 // about +-16 kHz; the BFO takes the remainder (applySSBBfo)

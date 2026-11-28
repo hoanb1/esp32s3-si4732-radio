@@ -34,10 +34,13 @@
 #define FT8_ADC_PIN   11            // SI4732 LOUT (pin 1) single-wire mod, ADC2_CH0 (unreliable with WiFi on)
 
 // Features
-#define HAS_FT8_ADC   0             // Stays 0 until the audio wire is fitted: decoder and web audio off
+#define HAS_FT8_ADC   0             // Wire fitted; stays 0 until ESP32-S3 ADC capture is written
 #define HAS_APLL_TX   0             // ESP32 APLL RF output (classic ESP32 only)
 #define HAS_TX        0             // Si5351 CLK2 / PA transmit path not fitted yet
 #define TX_RELAY_PIN  -1
+
+// SI4732 crystal error default in 0.1 ppm: not measured on this board yet
+#define RX_PPM_CAL10_DEFAULT 0
 
 // Digital audio input (SI4732 DOUT): not wired
 #define DIG_PIN_BCK   -1
@@ -72,6 +75,9 @@
 #define HAS_APLL_TX   1
 #define HAS_TX        1
 #define TX_RELAY_PIN  26            // T/R relay module, active high
+
+// SI4732 crystal error default in 0.1 ppm, measured on this board (see ats-mini.ino)
+#define RX_PPM_CAL10_DEFAULT 8929
 
 // Digital audio input: SI4732 DCLK / DFS (DOUT goes to FT8_ADC_PIN)
 #define DIG_PIN_BCK   19
