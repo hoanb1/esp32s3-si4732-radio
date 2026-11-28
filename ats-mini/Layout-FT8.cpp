@@ -15,6 +15,14 @@
 #include <esp_timer.h>
 #if HAS_FT8_ADC
 #include <soc/sens_struct.h>
+#ifdef BOARD_V3S
+#include <hal/adc_ll.h>
+#include <esp_private/sar_periph_ctrl.h>
+#include <esp_memory_utils.h>
+// ADC2 conversions the arbiter refused (WiFi owns the unit) or that were not finished in time
+static volatile uint32_t adcBadReads = 0;
+static volatile uint16_t adcLastGood = 0;
+#endif
 #endif
 #include <hal/misc.h>
 #include <sys/time.h>
@@ -365,11 +373,28 @@ static void rsDesign() {
   for (int i = 0; i < n; i++) rsTaps[i % FT8_RS_UP][i / FT8_RS_UP] = proto[i] * FT8_RS_UP / sum;
 }
 
+#if HAS_FT8_ADC && defined(BOARD_V3S)
+static const uint32_t FT8_ADC2_CH = FT8_ADC_PIN - 11;   // ESP32-S3: GPIO11..20 are ADC2_CH0..9
+#endif
+
 static void IRAM_ATTR adcTimerIsr() {
 #if HAS_FT8_ADC
+#ifdef BOARD_V3S
+  // ADC2 is shared with WiFi: a refused or unfinished conversion repeats the previous sample
+  uint32_t r = HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas2_ctrl2, meas2_data_sar);
+  if (SENS.sar_meas2_ctrl2.meas2_done_sar && (r >> 14) == 0) adcLastGood = r & 0x0FFF;
+  else adcBadReads = adcBadReads + 1;
+  uint16_t v = adcLastGood;
+  // Reselect pin and 0 dB each time: other ADC users (battery reading, driver) clear the channel bitmap
+  SENS.sar_atten2 = SENS.sar_atten2 & ~(0x3u << (FT8_ADC2_CH * 2));
+  SENS.sar_meas2_ctrl2.sar2_en_pad = 1u << FT8_ADC2_CH;
+  SENS.sar_meas2_ctrl2.meas2_start_sar = 0;
+  SENS.sar_meas2_ctrl2.meas2_start_sar = 1;
+#else
   uint16_t v = (uint16_t)HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas_start1, meas1_data_sar);
   SENS.sar_meas_start1.meas1_start_sar = 0;
   SENS.sar_meas_start1.meas1_start_sar = 1;
+#endif
   uint32_t h = adcRawHead;
   // Two samples per word; the reader only reads words, so this read-modify-write cannot lose one
   volatile uint32_t *p = &adcRaw[(h & (FT8_RAW_RING - 1)) >> 1];
@@ -490,7 +515,7 @@ bool audioDigitalWanted() {
   if (p.begin("radiocal", true)) { v = p.getBool("digin", false); p.end(); }
   return v;
 }
-bool audioDigitalOn() { return HAS_FT8_ADC && audioDigitalWanted() && extRefActive(); }
+bool audioDigitalOn() { return HAS_FT8_ADC && DIG_PIN_BCK >= 0 && audioDigitalWanted() && extRefActive(); }
 void audioDigitalSet(bool on) {
   Preferences p;
   if (p.begin("radiocal", false)) { p.putBool("digin", on); p.end(); }
@@ -543,15 +568,20 @@ static bool adcStart() {
 #if !HAS_FT8_ADC
   return false;                                         // no audio wire on this board
 #else
-  // One regular read configures ADC1 channel 6 (GPIO34), 0 dB attenuation and the RTC controller
+  // One regular read configures the pin's ADC channel, 0 dB attenuation, calibration and the RTC controller
   analogSetPinAttenuation(FT8_ADC_PIN, ADC_0db);
   analogRead(FT8_ADC_PIN);
+#ifdef BOARD_V3S
+  sar_periph_ctrl_adc_oneshot_power_acquire();          // keep the SAR ADC powered and clocked
+  adc_ll_set_controller(ADC_UNIT_2, ADC_LL_CTRL_ARB);
+#else
   SENS.sar_meas_wait2.force_xpd_sar = 3;                // keep the SAR ADC powered
   SENS.sar_meas_start1.meas1_start_force = 1;
   SENS.sar_meas_start1.sar1_en_pad_force = 1;
   SENS.sar_meas_start1.sar1_en_pad = (1 << 6);          // ADC1_CH6
   SENS.sar_meas_start1.meas1_start_sar = 0;
   SENS.sar_meas_start1.meas1_start_sar = 1;
+#endif
 
   adcTimer = timerBegin(16000000);                      // 80 MHz / 5
   if (!adcTimer) return false;
@@ -617,7 +647,8 @@ void ft8Init() {
   Serial.printf("[FT8] ADC capture %s (%d Hz timer, resample %d/%d -> %d Hz)\r\n",
                 adcOk ? "running" : HAS_FT8_ADC ? "FAILED" : "disabled (no audio input wired)", FT8_ADC_RATE, FT8_RS_UP, FT8_RS_DOWN, FT8_SAMPLE_RATE);
 
-  ft8AddLog(HAS_FT8_ADC ? "[INFO] FT8 DSP receiver started on GPIO34 (6000 Hz, 200..2900 Hz)" : "[INFO] FT8 receiver off: no audio input wired on this board");
+  if (HAS_FT8_ADC) ft8AddLog("[INFO] FT8 DSP receiver started on GPIO%d (6000 Hz, 200..2900 Hz)", FT8_ADC_PIN);
+  else ft8AddLog("[INFO] FT8 receiver off: no audio input wired on this board");
 }
 
 static int g_lastRowAvgMag = 0;
@@ -954,7 +985,12 @@ static void webAudioService() {
     while (ring > size / 2) ring >>= 1;   // leave at least half of the rows to the waterfall
     uint8_t *mag = (uint8_t *)liveMon.wf.mag;
     // Needs byte-addressable DRAM (not 32-bit-only IRAM)
-    if (!mag || !row || ring < 4096 || (uint32_t)mag < 0x3FF80000UL || (uint32_t)mag >= 0x40000000UL) return;
+#if defined(BOARD_V3S)
+    bool usable = mag && esp_ptr_byte_accessible(mag);
+#else
+    bool usable = mag && (uint32_t)mag >= 0x3FF80000UL && (uint32_t)mag < 0x40000000UL;
+#endif
+    if (!usable || !row || ring < 4096) return;
     monitor_reset(&liveMon);
     webAudSavedMaxBlocks = liveMon.wf.max_blocks;
     liveMon.wf.max_blocks = (int)((size - ring) / row);   // the waterfall wraps over these rows
@@ -1328,10 +1364,25 @@ void ft8SetAdcAuto(bool on) {
 }
 
 uint8_t ft8GetAdcVolume() { return ft8AdcVolume; }
+
+void ft8GetAdcLevels(int *mean, int *minV, int *maxV) {
+  *mean = (int)lastAdcMean;
+  *minV = lastAdcMin;
+  *maxV = lastAdcMax;
+}
 bool ft8GetAdcAuto() { return ft8AdcAuto; }
 
 bool ft8IsSpeakerMuted() {
   return ft8SpeakerMuted;
+}
+
+void ft8GetAdcCounters(uint32_t *samples, uint32_t *bad) {
+  *samples = adcRawHead;
+#if HAS_FT8_ADC && defined(BOARD_V3S)
+  *bad = adcBadReads;
+#else
+  *bad = 0;
+#endif
 }
 
 bool ft8ToggleAdcTimer() {

@@ -830,7 +830,7 @@ static void runControlAction(const ControlRequest &cr)
       Serial.println("[SI5351] external RCLK setting saved, restarting");
       delay(300);
       ESP.restart();
-#if HAS_FT8_ADC
+#if HAS_FT8_ADC && !defined(BOARD_V3S)
     } else if (action == "pin34") {
       // Probe GPIO34 (Si4732 pin 16 / DOUT): average voltage and the share of high samples over 4000 reads
       int hi = 0; uint32_t mv = 0;
@@ -1364,6 +1364,10 @@ static int buildStatusJson(char *json, size_t cap)
   uint32_t adcSlot, adcSlotRaw;
   uint16_t adcSlotTail;
   ft8GetAdcClock(&adcSlot, &adcSlotRaw, &adcSlotTail);
+  uint32_t adcSamples, adcBad;
+  ft8GetAdcCounters(&adcSamples, &adcBad);
+  int adcMean, adcMin, adcMax;
+  ft8GetAdcLevels(&adcMean, &adcMin, &adcMax);
 
   int len = snprintf(json, cap,
     "{\"freq_khz\":\"%s\",\"raw_freq\":%u,\"unit\":\"%s\",\"band\":\"%s\",\"band_id\":%d,"
@@ -1378,7 +1382,7 @@ static int buildStatusJson(char *json, size_t cap)
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
     "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"heap_largest\":%u,\"heap_min\":%u,\"msg_count\":%lu,"
-    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d}",
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_raw\":[%d,%d,%d]}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1399,7 +1403,8 @@ static int buildStatusJson(char *json, size_t cap)
     (unsigned long)ft8GetTotalDecoded(),
     (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail,
     audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
-    (unsigned long)audioDigitalFrames(), audioDigitalPeak(true)
+    (unsigned long)audioDigitalFrames(), audioDigitalPeak(true),
+    (unsigned long)adcSamples, (unsigned long)adcBad, adcMean, adcMin, adcMax
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;

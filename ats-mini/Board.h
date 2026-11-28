@@ -31,10 +31,10 @@
 
 // ADC
 #define PIN_VBAT      4             // Battery voltage divider
-#define FT8_ADC_PIN   11            // SI4732 LOUT (pin 1) single-wire mod, ADC2_CH0 (unreliable with WiFi on)
+#define FT8_ADC_PIN   11            // SI4732 LOUT (pin 1) single-wire mod, ADC2_CH0
 
 // Features
-#define HAS_FT8_ADC   0             // Wire fitted; stays 0 until ESP32-S3 ADC capture is written
+#define HAS_FT8_ADC   1             // Capture on ADC2 (shared with WiFi; refused reads are counted in adc_bad)
 #define HAS_APLL_TX   0             // ESP32 APLL RF output (classic ESP32 only)
 #define HAS_TX        0             // Si5351 CLK2 / PA transmit path not fitted yet
 #define TX_RELAY_PIN  -1
