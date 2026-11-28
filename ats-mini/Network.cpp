@@ -31,12 +31,6 @@ extern "C" {
 #define CONNECT_TIME    1500  // Delay before connecting WiFi after request
 #define MAX_WIFI_SLOTS  8     // Support saving and scanning up to 8 WiFi networks
 
-// Default WiFi networks requested by user (HH-1301 primary on 192.168.3.65, HH-1301_IoT secondary)
-static const char *DEFAULT_WIFI_SSID_1 = "HH-1301";
-static const char *DEFAULT_WIFI_PASS_1 = "tutulala";
-static const char *DEFAULT_WIFI_SSID_2 = "HH-1301_IoT";
-static const char *DEFAULT_WIFI_PASS_2 = "tutulala";
-
 //
 // Access Point (AP) mode settings
 //
@@ -197,7 +191,6 @@ static bool wifiInitAP();
 static bool wifiConnect();
 static void webInit();
 static void processControlQueue();
-static void ensureDefaultWifiPrefs();
 static void performWifiScan();
 
 static void webSetConfig(AsyncWebServerRequest *request);
@@ -209,50 +202,6 @@ static const String webThemeSelector();
 static const String webRadioPage();
 static const String webMemoryPage();
 static const String webConfigPage();
-
-// Ensure HH-1301 and HH-1301_IoT (pass: tutulala) are present in NVS WiFi slots 1 & 2
-static void ensureDefaultWifiPrefs()
-{
-  prefs.begin("network", false, STORAGE_PARTITION);
-
-  String ssids[MAX_WIFI_SLOTS];
-  String passes[MAX_WIFI_SLOTS];
-
-  for (int i = 0; i < MAX_WIFI_SLOTS; i++) {
-    char kS[16], kP[16];
-    snprintf(kS, sizeof(kS), "wifissid%d", i + 1);
-    snprintf(kP, sizeof(kP), "wifipass%d", i + 1);
-    ssids[i] = prefs.getString(kS, "");
-    passes[i] = prefs.getString(kP, "");
-  }
-
-  if (ssids[0] != DEFAULT_WIFI_SSID_1 || passes[0] != DEFAULT_WIFI_PASS_1 ||
-      ssids[1] != DEFAULT_WIFI_SSID_2 || passes[1] != DEFAULT_WIFI_PASS_2) {
-    // Place HH-1301 in slot 1 and HH-1301_IoT in slot 2, preserving any other custom SSIDs in slots 3..8
-    String newSsids[MAX_WIFI_SLOTS];
-    String newPasses[MAX_WIFI_SLOTS];
-    newSsids[0] = DEFAULT_WIFI_SSID_1;
-    newPasses[0] = DEFAULT_WIFI_PASS_1;
-    newSsids[1] = DEFAULT_WIFI_SSID_2;
-    newPasses[1] = DEFAULT_WIFI_PASS_2;
-    int dst = 2;
-    for (int i = 0; i < MAX_WIFI_SLOTS && dst < MAX_WIFI_SLOTS; i++) {
-      if (ssids[i] != "" && ssids[i] != DEFAULT_WIFI_SSID_1 && ssids[i] != DEFAULT_WIFI_SSID_2) {
-        newSsids[dst] = ssids[i];
-        newPasses[dst] = passes[i];
-        dst++;
-      }
-    }
-    for (int i = 0; i < MAX_WIFI_SLOTS; i++) {
-      char kS[16], kP[16];
-      snprintf(kS, sizeof(kS), "wifissid%d", i + 1);
-      snprintf(kP, sizeof(kP), "wifipass%d", i + 1);
-      prefs.putString(kS, newSsids[i]);
-      prefs.putString(kP, newPasses[i]);
-    }
-  }
-  prefs.end();
-}
 
 static void performWifiScan()
 {
@@ -569,7 +518,6 @@ void netStop()
 //
 void netInit(uint8_t netMode, bool showStatus)
 {
-  ensureDefaultWifiPrefs();
   netStop();
 
   switch(netMode)
@@ -592,7 +540,7 @@ void netInit(uint8_t netMode, bool showStatus)
     webInit();
   }
 
-  // Initialize WiFi and try connecting to saved networks (HH-1301, HH-1301_IoT, etc.)
+  // Initialize WiFi and try connecting to saved networks
   if(netMode > NET_AP_ONLY && wifiConnect())
   {
     if(netMode != NET_SYNC && showStatus) delay(200);
@@ -663,11 +611,10 @@ static bool wifiInitAP()
 }
 
 //
-// Connect to saved WiFi networks (HH-1301 primary, HH-1301_IoT secondary, up to 8 slots)
+// Connect to saved WiFi networks (up to 8 slots)
 //
 static bool wifiConnect()
 {
-  ensureDefaultWifiPrefs();
 
   prefs.begin("network", true, STORAGE_PARTITION);
   loginUsername = prefs.getString("loginusername", "");
@@ -690,7 +637,7 @@ static bool wifiConnect()
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
   WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
 
-  // First try Slot #1 (HH-1301) directly for fast boot without scan delay
+  // First try Slot #1 directly for fast boot without scan delay
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
