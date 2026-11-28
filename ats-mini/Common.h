@@ -19,7 +19,7 @@
 #define AUTHORS_LINE3  "Goshante, G8PTN (Dave), R9UCL (Max Arnold),"
 #define AUTHORS_LINE4  "Marat Fayzullin"
 
-#define VER_APP        233  // Firmware version
+#define VER_APP        234  // Firmware version
 #define VER_SETTINGS   76   // Settings version
 #define VER_MEMORIES   76   // Memories version
 #define VER_BANDS      76   // Bands version

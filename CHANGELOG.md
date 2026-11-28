@@ -1,8 +1,35 @@
 # Changelog
 
-The user manual is available at <https://esp32-si4732.github.io/ats-mini/manual.html>. The firmware flashing instructions are available at <https://esp32-si4732.github.io/ats-mini/flash.html>
+The user manual is [here](https://github.com/hoanb1/esp32s3-si4732-radio/blob/main/docs/source/manual.md). The firmware flashing instructions are [here](https://github.com/hoanb1/esp32s3-si4732-radio/blob/main/docs/source/flash.md).
 
 <!-- towncrier release notes start -->
+
+## 2.34 (2026-11-28)
+
+
+### Added
+
+- V3S board profile (ESP32-S3 N16R8, receive only): SI4732 audio capture on GPIO11 with spike filtering, FT8/FT4 decoding, audio streaming to the web page, and capture diagnostics at `/api/audio_diag`.
+- New LCD screens (radio and FT8/FT4) on the V3S, and a compact receive-first web page in the same theme that fits a 390 px phone screen.
+
+
+### Changed
+
+- Build profiles are now `classic` (ESP32, receive and transmit) and `v3s` (receive only). The upstream ESP32-S3 OSPI/QSPI profiles were removed.
+- The firmware no longer ships default Wi-Fi credentials.
+
+
+### Fixed
+
+- Choosing a band or a mode now adjusts the other one instead of locking it.
+- 80 m FT4 dial frequency, FT4 on 1840 kHz, and PSK Reporter spot frequencies now include the BFO.
+- A web socket race in the network task, unescaped text in JSON replies, an empty digital mode request, and short screenshot timeouts.
+
+
+### Removed
+
+- The non-functional Bluetooth setting and other unused code.
+
 
 ## 2.33 (2025-09-22)
 

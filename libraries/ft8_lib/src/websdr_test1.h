@@ -1,4 +1,3 @@
-#line 1 "/home/hoan/DATA/esp32s3-si4732-radio/ats-mini/websdr_test1.h"
 #ifndef WEBSDR_TEST1_H
 #define WEBSDR_TEST1_H
 #include <Arduino.h>
