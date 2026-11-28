@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'ats-mini/**'
+      - 'libraries/**'
       - 'changelog/**'
       - 'CHANGELOG.md'
       - '.github/workflows/build.yml'
@@ -17,6 +18,7 @@ on:
     #   - main
     paths:
       - 'ats-mini/**'
+      - 'libraries/**'
       - 'changelog/**'
       - 'CHANGELOG.md'
       - '.github/workflows/build.yml'
@@ -37,14 +39,16 @@ jobs:
       fail-fast: true
       matrix:
         board:
-          - profile: esp32s3-ospi
+          - profile: classic
             # If you change this line, change it in sketch.yaml as well
-            fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PSRAM=opi,CPUFreq=80,USBMode=hwcdc,FlashMode=qio,PartitionScheme=custom,DebugLevel=none
-            artifact-suffix: ospi
-          - profile: esp32s3-qspi
+            fqbn: esp32:esp32:esp32:PartitionScheme=huge_app
+            artifact-suffix: classic
+            build-dir: esp32.esp32.esp32
+          - profile: v3s
             # If you change this line, change it in sketch.yaml as well
-            fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=8M,PSRAM=enabled,CPUFreq=80,USBMode=hwcdc,FlashMode=qio,PartitionScheme=custom,DebugLevel=none
-            artifact-suffix: qspi
+            fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PSRAM=opi,FlashSize=16M,FlashMode=qio,PartitionScheme=custom,DebugLevel=none
+            artifact-suffix: v3s
+            build-dir: esp32.esp32.esp32s3
 
     outputs:
       slug: ${{ steps.slug.outputs.slug }}
@@ -99,7 +103,7 @@ jobs:
       - name: Prepare compiled artifact
         run: |
           mkdir -p artifact/ats-mini-${{ steps.slug.outputs.slug }}-${{ matrix.board.artifact-suffix }}
-          mv ats-mini/build/esp32.esp32.esp32s3/*.ino.bin ats-mini/build/esp32.esp32.esp32s3/*.ino.*.bin artifact/ats-mini-${{ steps.slug.outputs.slug }}-${{ matrix.board.artifact-suffix }}/
+          mv ats-mini/build/${{ matrix.board.build-dir }}/*.ino.bin ats-mini/build/${{ matrix.board.build-dir }}/*.ino.*.bin artifact/ats-mini-${{ steps.slug.outputs.slug }}-${{ matrix.board.artifact-suffix }}/
           cp CHANGELOG.md artifact/ats-mini-${{ steps.slug.outputs.slug }}-${{ matrix.board.artifact-suffix }}/
 
       - name: Upload compiled artifact
@@ -131,7 +135,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           SLUG: ${{ needs.build.outputs.slug }}
         run: >-
-          python -c 'import os,re; t=open(f"""artifact/ats-mini-{os.environ["SLUG"]}-ospi/CHANGELOG.md""").read(); r=re.search(f"""(^## {os.environ["SLUG"][1:].replace(".", "\\.")} .*?)(?=^## \\d|\\Z)""", t, re.MULTILINE | re.DOTALL); print(r.group(0) if r else "")' |
+          python -c 'import os,re; t=open(f"""artifact/ats-mini-{os.environ["SLUG"]}-classic/CHANGELOG.md""").read(); r=re.search(f"""(^## {os.environ["SLUG"][1:].replace(".", "\\.")} .*?)(?=^## \\d|\\Z)""", t, re.MULTILINE | re.DOTALL); print(r.group(0) if r else "")' |
           gh release create "$SLUG" --repo '${{ github.repository }}' --notes-file -
       - name: Upload release artifacts
         env:

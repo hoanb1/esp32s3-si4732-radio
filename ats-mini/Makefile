@@ -1,10 +1,16 @@
 ARDUINO_CLI := arduino-cli
 
-PROFILE	= esp32s3-ospi
+# Board profile from sketch.yaml: classic or v3s
+PROFILE	?= classic
+ifeq ($(PROFILE),v3s)
 FQBN	= esp32.esp32.esp32s3
+PORT	?= /dev/ttyACM0
+else
+FQBN	= esp32.esp32.esp32
+PORT	?= /dev/ttyUSB0
+endif
 INO	= ats-mini.ino
 ELF	= ./build/$(FQBN)/$(INO).elf
-PORT	?= /dev/cu.usbmodem1101
 
 DEBUG_LEVEL ?= 0
 
@@ -18,12 +24,11 @@ ifdef HALF_STEP
 endif
 
 OPTIONS = \
-	--library ../libraries/ft8_lib \
 	--build-property "compiler.cpp.extra_flags=$(DEFINES)" \
 	--warnings all
 
 HEADERS = \
-	Common.h Themes.h Menu.h Storage.h tft_setup.h Rotary.h \
+	Board.h Common.h Themes.h Menu.h Storage.h tft_setup.h Rotary.h \
 	Utils.h Button.h EIBI.h SI4735-fixed.h patch_init.h
 
 SRC = \
@@ -37,7 +42,8 @@ all: build
 help:
 	@echo 'Run this command to upload the firmware to your radio:'
 	@echo
-	@echo '  make upload PORT=/dev/cu.usbmodem1101'
+	@echo '  make upload PROFILE=classic PORT=/dev/ttyUSB0'
+	@echo '  make upload PROFILE=v3s PORT=/dev/ttyACM0'
 	@echo
 
 build: $(ELF)
