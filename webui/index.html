@@ -230,7 +230,7 @@ td.act button:hover{background:var(--red);color:#fff}
     </div>
     <div class="row">
       <button id="muteBtn" class="f1" onclick="sendCtrl('mute')">Speaker on</button>
-      <button id="webAudioBtn" class="f1" onclick="toggleWebAudio()" title="Listen in this browser (pauses FT8 decoding)">Web audio: off</button>
+      <button id="webAudioBtn" class="f1" onclick="toggleWebAudio()" title="Listen in this browser">Web audio: off</button>
     </div>
    </div>
 
@@ -792,7 +792,8 @@ function applyStatus(d) {
   if (d.theme_name) T('themeNameTxt', d.theme_name);
 
   T('volLbl', dig ? 'Decoder level (GPIO' + adcPin + ')' : 'Volume');
-  T('volNote', dig && d.web_audio ? 'decoding paused (web audio) ·' : '');
+  T('volNote', dig && d.web_audio && d.wa_pause !== false ? 'decoding paused (web audio) ·' : '');
+  $('webAudioBtn').title = 'Listen in this browser' + (d.wa_pause !== false ? ' (pauses FT8 decoding)' : '');
   V('volSlider', d.volume);
   if ($('volSlider') !== document.activeElement) T('volText', d.volume);
   window.adcAutoOn = !!d.adc_auto;

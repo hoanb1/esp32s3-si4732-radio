@@ -18,7 +18,6 @@
 #ifdef BOARD_V3S
 #include <hal/adc_ll.h>
 #include <esp_private/sar_periph_ctrl.h>
-#include <esp_memory_utils.h>
 // ADC2 conversions the arbiter refused (WiFi owns the unit) or that were not finished in time
 static volatile uint32_t adcBadReads = 0;
 static volatile uint16_t adcLastGood = 0;
@@ -105,6 +104,7 @@ static uint32_t lastBiasRecoverSlot = 0;                    // slot of the last 
 // stalls below ~40 KB free), so while someone listens the ring borrows the tail of the FT8
 // waterfall magnitude buffer: the waterfall keeps running on the rows left in front of it, and
 // FT8 decoding (which needs all 79 symbols) pauses until WEB_AUD_IDLE_MS after the last request.
+// The V3S has PSRAM: its ring is separate and decoding keeps running while someone listens.
 #define WEB_AUD_RING_MAX    16384 // 2.7 s
 #define WEB_AUD_IDLE_MS     3000
 static uint8_t *volatile webAudRing = NULL;
@@ -113,6 +113,7 @@ static volatile uint32_t webAudHead = 0;                    // total samples wri
 static volatile uint32_t webAudLastReq = 0;                 // millis() of the last /api/audio request
 static volatile bool webAudWanted = false;
 static int webAudSavedMaxBlocks = 0;                         // liveMon.wf.max_blocks while the ring is borrowed
+static bool webAudBorrowed = false;                          // the ring sits in the waterfall: no decoding
 static float webAudDc = 950.0f;
 
 // Live ADC signal statistics
@@ -1015,6 +1016,21 @@ void ft8RequestRedraw() {
 // Lend the tail of the FT8 waterfall buffer to web audio while someone listens, and take it back when they stop
 static void webAudioService() {
   bool listening = webAudWanted && millis() - webAudLastReq < WEB_AUD_IDLE_MS;
+#if !FT8_WEB_AUDIO_BORROWS
+  static uint8_t *own = NULL;
+  if (listening && !webAudRing) {
+    if (!own) own = (uint8_t *)ps_malloc(WEB_AUD_RING_MAX);
+    if (!own) return;
+    memset(own, 0xFF, WEB_AUD_RING_MAX);  // mu-law silence
+    webAudMask = WEB_AUD_RING_MAX - 1;
+    webAudRing = own;
+    Serial.println("[AUD] Web audio on");
+  } else if (!listening && webAudRing) {
+    webAudRing = NULL;                    // the buffer stays allocated: the capture task may still hold it
+    webAudWanted = false;
+    Serial.println("[AUD] Web audio off");
+  }
+#else
   if (listening && !webAudRing) {
     const size_t row = (size_t)liveMon.wf.block_stride * sizeof(liveMon.wf.mag[0]);
     const size_t size = (size_t)liveMon.wf.max_blocks * row;
@@ -1022,11 +1038,7 @@ static void webAudioService() {
     while (ring > size / 2) ring >>= 1;   // leave at least half of the rows to the waterfall
     uint8_t *mag = (uint8_t *)liveMon.wf.mag;
     // Needs byte-addressable DRAM (not 32-bit-only IRAM)
-#if defined(BOARD_V3S)
-    bool usable = mag && esp_ptr_byte_accessible(mag);
-#else
     bool usable = mag && (uint32_t)mag >= 0x3FF80000UL && (uint32_t)mag < 0x40000000UL;
-#endif
     if (!usable || !row || ring < 4096) return;
     monitor_reset(&liveMon);
     webAudSavedMaxBlocks = liveMon.wf.max_blocks;
@@ -1035,16 +1047,19 @@ static void webAudioService() {
     memset(tail, 0xFF, ring);             // mu-law silence
     webAudMask = ring - 1;
     webAudRing = tail;
+    webAudBorrowed = true;
     Serial.printf("[AUD] Web audio on (%u-sample ring, waterfall on %d rows): FT8 decoding paused\r\n",
                   (unsigned)ring, liveMon.wf.max_blocks);
   } else if (!listening && webAudRing) {
     webAudRing = NULL;
+    webAudBorrowed = false;
     webAudWanted = false;
     liveMon.wf.max_blocks = webAudSavedMaxBlocks;
     monitor_reset(&liveMon);
     monSlotId = 0xFFFFFFFF;               // restart FT8 collection at the next slot start
     Serial.println("[AUD] Web audio off: FT8 decoding resumed");
   }
+#endif
 }
 
 #if HAS_FT4
@@ -1215,13 +1230,13 @@ bool ft8TickWaterfall() {
 
     // In non-digital mode (FM / AM / SSB Voice), wrap monitor blocks continuously so waterfall never pauses
     // (also while web audio holds part of the buffer: FT8 cannot decode then, so just keep scrolling)
-    bool scrollOnly = !digActive || ft4Mode || webAudRing;
+    bool scrollOnly = !digActive || ft4Mode || webAudBorrowed;
     if (scrollOnly && liveMon.wf.num_blocks >= liveMon.wf.max_blocks) {
       monitor_reset(&liveMon);
     }
 
     // Feed live 960-sample frame into FT8 STFT waterfall if slot hasn't finished yet
-    if ((!slotDecoded || webAudRing) && liveMon.wf.num_blocks < liveMon.wf.max_blocks) {
+    if ((!slotDecoded || webAudBorrowed) && liveMon.wf.num_blocks < liveMon.wf.max_blocks) {
       int blockIdx = liveMon.wf.num_blocks;
       monitor_process(&liveMon, dspFrame);
       pushMonitorRowToWaterfalls(&liveMon, blockIdx);
@@ -1237,7 +1252,7 @@ bool ft8TickWaterfall() {
   }
 
   // Trigger live FT8 LDPC decoding at 84 blocks (13.44s) so the ~1.07s decode finishes at ~14.51s (before :00.0s of next slot)
-  if (digActive && !ft4Mode && !slotDecoded && !webAudRing) {
+  if (digActive && !ft4Mode && !slotDecoded && !webAudBorrowed) {
     if (liveMon.wf.num_blocks >= 84 || ((slotSec == 13 && subMs >= 440 || slotSec >= 14) && liveMon.wf.num_blocks >= 55)) {
       slotDecoded = true;
       int cnt = ft8DecodeFromMonitor(&liveMon, false);

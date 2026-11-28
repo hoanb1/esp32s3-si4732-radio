@@ -1386,7 +1386,7 @@ static int buildStatusJson(char *json, size_t cap)
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
     "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"heap_largest\":%u,\"heap_min\":%u,\"msg_count\":%lu,"
-    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_spikes\":%lu,\"adc_raw\":[%d,%d,%d],\"tx\":%s,\"adc_pin\":%d,\"dig_ok\":%s}",
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_spikes\":%lu,\"adc_raw\":[%d,%d,%d],\"tx\":%s,\"adc_pin\":%d,\"dig_ok\":%s,\"wa_pause\":%s}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1409,7 +1409,8 @@ static int buildStatusJson(char *json, size_t cap)
     audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
     (unsigned long)audioDigitalFrames(), audioDigitalPeak(true),
     (unsigned long)adcSamples, (unsigned long)adcBad, (unsigned long)adcSpikes, adcMean, adcMin, adcMax,
-    HAS_TX ? "true" : "false", (int)FT8_ADC_PIN, DIG_PIN_BCK >= 0 ? "true" : "false"
+    HAS_TX ? "true" : "false", (int)FT8_ADC_PIN, DIG_PIN_BCK >= 0 ? "true" : "false",
+    FT8_WEB_AUDIO_BORROWS ? "true" : "false"
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;
