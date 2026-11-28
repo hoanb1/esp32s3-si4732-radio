@@ -184,11 +184,8 @@ static bool settingsAvailable(int idx)
   }
 }
 
-static bool bandAvailable(int idx)
-{
-  // FT8/FT4 stay on the amateur bands that have FT8/FT4 frequencies
-  return(!isDigitalMode() || (idx >= FT8_FIRST_BAND && idx <= FT8_LAST_BAND));
-}
+// Every band is always selectable: changeBand() adjusts the mode to suit the band
+static bool bandAvailable(int idx) { return(true); }
 
 // Index of the |enc|-th available item from idx in direction of enc, wrapping around;
 // enc = 0 moves to the nearest available item if idx itself is unavailable
@@ -808,11 +805,12 @@ void doAgc(int16_t enc)
   rx.setAutomaticGainControl(disableAgc, agcNdx);
 }
 
-// Non-FM selectable modes on LCD Mode menu: 0=LSB, 1=USB, 2=AM, 3=FT8, 4=FT4
-static const char * const hfModeMenuDesc[5] = { "LSB", "USB", "AM", "FT8", "FT4" };
+// LCD Mode menu: 0=LSB, 1=USB, 2=AM, 3=FT8, 4=FT4, 5=FM
+static const char * const modeMenuDesc[6] = { "LSB", "USB", "AM", "FT8", "FT4", "FM" };
 
-static int getHfModeMenuIdx()
+static int getModeMenuIdx()
 {
+  if (currentMode == FM) return 5;
   if (currentMode == USB) {
     if (ft8GetDigitalMode() == FT8_DIG_FT8) return 3;
     if (ft8GetDigitalMode() == FT8_DIG_FT4) return 4;
@@ -822,40 +820,115 @@ static int getHfModeMenuIdx()
   return 0; // LSB
 }
 
-void doMode(int16_t enc)
+//
+// Band and mode switching rules, shared by the encoder, serial and web controls.
+// FM exists only on the VHF band and all other modes only outside it: picking a band
+// switches to a mode it allows, picking a mode moves to a band that allows it.
+//
+static const int VHF_BAND_IDX = 0;
+static const int ALL_BAND_IDX = 1;
+static int lastHfBand = -1;   // Band to return to when leaving FM
+
+static bool isHamBand(int idx) { return(idx >= FT8_FIRST_BAND && idx <= FT8_LAST_BAND); }
+
+static void saveBandState()
 {
-  // This is our current mode for the current band
-  currentMode = bands[bandIdx].bandMode;
+  bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
+  bands[bandIdx].bandMode = currentMode;
+  if (bandIdx != VHF_BAND_IDX) lastHfBand = bandIdx;
+}
 
-  // Cannot change away from FM mode on VHF band
-  if(currentMode==FM) return;
+static void digitalOff()
+{
+  ft8SetDigitalMode(FT8_DIG_OFF);
+  if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
+}
 
-  int mIdx = wrap_range(getHfModeMenuIdx(), enc, 0, 4);
-  if (mIdx == 3 || mIdx == 4) {
-    uint8_t dig = (mIdx == 4) ? FT8_DIG_FT4 : FT8_DIG_FT8;
-    // Off the amateur bands there is no FT8/FT4 traffic: go to the nearest amateur band's FT8/FT4 frequency
-    bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
-    if (bandIdx < FT8_FIRST_BAND || bandIdx > FT8_LAST_BAND)
-      ft8TuneBandDigitalFreq(ft8NearestBand(currentFrequency + currentBFO / 1000), dig);
-    else
-      ft8TuneBandDigitalFreq(bandIdx, dig);
+static void setBandMode(int idx, uint8_t mode)
+{
+  if (bands[idx].bandMode == mode) return;
+  bands[idx].bandMode = mode;
+  bands[idx].currentStepIdx = defaultStepIdx[mode];
+  bands[idx].bandwidthIdx = defaultBwIdx[mode];
+}
+
+void changeBand(int idx, bool drawLoadingSSB)
+{
+  if (idx < 0 || idx >= getTotalBands()) return;
+
+  uint8_t dig = ft8GetDigitalMode();
+  uint8_t mode = currentMode;
+  bool cw = mode == USB && bands[bandIdx].bandwidthIdx == 0;
+  saveBandState();
+
+  // FT8/FT4 are kept between the amateur bands and switched off elsewhere
+  if (dig != FT8_DIG_OFF) {
+    if (isHamBand(idx)) {
+      ft8TuneBandDigitalFreq(idx, dig);
+      return;
+    }
+    digitalOff();
+  }
+
+  // The all-band receiver keeps the current mode; FM is not valid there
+  if (idx == ALL_BAND_IDX) {
+    setBandMode(idx, mode == FM ? AM : mode);
+    if (cw) bands[idx].bandwidthIdx = 0;
+  }
+
+  selectBand(idx, drawLoadingSSB);
+  ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
+}
+
+void changeMode(uint8_t mode, bool cw, bool drawLoadingSSB)
+{
+  if (mode > AM) return;
+  if (cw) mode = USB;
+
+  digitalOff();
+  saveBandState();
+
+  int idx = bandIdx;
+  if (mode == FM)
+    idx = VHF_BAND_IDX;
+  else if (idx == VHF_BAND_IDX)
+    idx = lastHfBand >= 0 ? lastHfBand : cw ? 20 : mode == AM ? 16 : 22; // 40M, MW2, 20M
+
+  setBandMode(idx, mode);
+  if (cw)
+    bands[idx].bandwidthIdx = 0;   // CW = USB with the narrowest (0.5k) filter
+  else if ((mode == LSB || mode == USB) && bands[idx].bandwidthIdx == 0)
+    bands[idx].bandwidthIdx = defaultBwIdx[mode];
+
+  selectBand(idx, drawLoadingSSB);
+}
+
+void changeDigitalMode(uint8_t dig)
+{
+  if (dig != FT8_DIG_FT8 && dig != FT8_DIG_FT4) {
+    digitalOff();
     return;
   }
 
-  ft8SetDigitalMode(FT8_DIG_OFF);
+  // Off the amateur bands there is no FT8/FT4 traffic: go to a nearby amateur band
+  int idx = bandIdx;
+  if (idx == VHF_BAND_IDX)
+    idx = isHamBand(lastHfBand) ? lastHfBand : 22; // 20M
+  else if (!isHamBand(idx))
+    idx = ft8NearestBand(currentFrequency + currentBFO / 1000);
 
-  if (mIdx == 0) currentMode = LSB;
-  else if (mIdx == 1) currentMode = USB;
-  else currentMode = AM;
+  saveBandState();
+  ft8TuneBandDigitalFreq(idx, dig);
+}
 
-  // Save current band settings
-  bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
-  bands[bandIdx].currentStepIdx = defaultStepIdx[currentMode];
-  bands[bandIdx].bandwidthIdx = defaultBwIdx[currentMode];
-  bands[bandIdx].bandMode = currentMode;
+void doMode(int16_t enc)
+{
+  int mIdx = wrap_range(getModeMenuIdx(), enc, 0, LAST_ITEM(modeMenuDesc));
 
-  // Enable the new band
-  selectBand(bandIdx);
+  if (mIdx == 3 || mIdx == 4)
+    changeDigitalMode(mIdx == 4 ? FT8_DIG_FT4 : FT8_DIG_FT8);
+  else
+    changeMode(mIdx == 0 ? LSB : mIdx == 1 ? USB : mIdx == 2 ? AM : FM, false, true);
 }
 
 void doSquelch(int16_t enc)
@@ -878,22 +951,7 @@ void doSoftMute(int16_t enc)
 
 void doBand(int16_t enc)
 {
-  // Save current band settings
-  bands[bandIdx].currentFreq = currentFrequency + currentBFO / 1000;
-  bands[bandIdx].bandMode = currentMode;
-
-  // FT8/FT4 cycle through the amateur bands and keep the digital mode
-  if (isDigitalMode()) {
-    ft8TuneBandDigitalFreq(stepAvailable(bandIdx, enc, getTotalBands(), bandAvailable), ft8GetDigitalMode());
-    return;
-  }
-
-  // Change band
-  bandIdx = wrap_range(bandIdx, enc, 0, LAST_ITEM(bands));
-
-  // Enable the new band
-  selectBand(bandIdx);
-  ft8CheckFrequencyDigitalMode(bands[bandIdx].currentFreq, bands[bandIdx].bandMode);
+  changeBand(wrap_range(bandIdx, enc, 0, LAST_ITEM(bands)), true);
 }
 
 void doBandwidth(int16_t enc)
@@ -1186,19 +1244,11 @@ static void drawMode(int x, int y, int sx)
 {
   drawCommon(menu[MENU_MODE], x, y, sx, true);
 
-  if (currentMode == FM) {
-    drawZoomedMenu("FM");
-    spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);
-    spr.setTextDatum(MC_DATUM);
-    spr.drawString("FM", 40+x+(sx/2), 64+y, 2);
-    return;
-  }
-
-  int count = 5;
-  int mIdx = getHfModeMenuIdx();
+  int count = ITEM_COUNT(modeMenuDesc);
+  int mIdx = getModeMenuIdx();
   for(int i=-2 ; i<3 ; i++)
   {
-    const char *label = hfModeMenuDesc[abs((mIdx+count+i)%count)];
+    const char *label = modeMenuDesc[abs((mIdx+count+i)%count)];
     if(i==0) {
       drawZoomedMenu(label);
       spr.setTextColor(TH.menu_hl_text, TH.menu_hl_bg);

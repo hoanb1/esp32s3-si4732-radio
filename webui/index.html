@@ -238,7 +238,7 @@ td.act button:hover{background:var(--red);color:#fff}
     <div class="ch"><h2>Quick</h2></div>
     <div class="row">
       <span class="note" style="width:5.5rem">Bandwidth</span>
-      <select id="bwSel" class="f1" onchange="sendCtrl('bw_set',{idx:this.value})"></select>
+      <select id="bwSel" class="f1" onchange="this.blur();sendCtrl('bw_set',{idx:this.value})"></select>
       <button class="s" onclick="sendCtrl('bw',{val:1})" title="Next bandwidth">Next</button>
     </div>
     <div class="row">
@@ -502,7 +502,8 @@ function S(id, prop, v) { const e = $(id); if (e && e.style[prop] !== v) e.style
 // Leave sliders alone while the user is dragging them
 function V(id, v) { const e = $(id); if (e && document.activeElement !== e && e.value !== String(v)) e.value = v; }
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const BANDS = ["VHF FM (64–108 MHz)", "ALL HF (150–30000 kHz)", "11M SW (25600–26100 kHz)", "13M SW (21500–21900 kHz)", "15M BC (18900–19100 kHz)", "16M SW (17480–18000 kHz)", "19M SW (15100–15900 kHz)", "22M SW (13570–13870 kHz)", "25M SW (11600–12200 kHz)", "31M SW (9200–9900 kHz)", "41M SW (7200–7500 kHz)", "49M SW (5900–6200 kHz)", "60M SW (4700–5100 kHz)", "75M SW (3900–4000 kHz)", "90M SW (3200–3400 kHz)", "MW1 LW/MW (150–1800 kHz)", "MW2 Medium wave (531–1701 kHz)", "MW3 North America (1700–3500 kHz)", "160M Ham (1800–2000 kHz)", "80M Ham (3500–4000 kHz)", "40M Ham (7000–7300 kHz)", "30M Ham (10000–10200 kHz)", "20M Ham (14000–14400 kHz)", "17M Ham (18000–18200 kHz)", "15M Ham (21000–21500 kHz)", "12M Ham (24800–25000 kHz)", "10M Ham (28000–29700 kHz)", "CB 27 MHz (25000–30000 kHz)"];
+// Same order and limits as bands[] in ats-mini/Menu.cpp
+const BANDS = ["VHF FM (64–108 MHz)", "ALL HF (150–30000 kHz)", "11M SW (25600–26100 kHz)", "13M SW (21500–21900 kHz)", "15M BC (18900–19100 kHz)", "16M SW (17400–18100 kHz)", "19M SW (15100–15900 kHz)", "22M SW (13500–13900 kHz)", "25M SW (11000–13000 kHz)", "31M SW (9000–11000 kHz)", "41M SW (7000–9000 kHz)", "49M SW (5000–7000 kHz)", "60M SW (4000–5100 kHz)", "75M SW (3500–4000 kHz)", "90M SW (3000–3500 kHz)", "MW3 SW (1700–3500 kHz)", "MW2 MW (495–1701 kHz)", "MW1 LW/MW (150–1800 kHz)", "160M Ham (1800–2000 kHz)", "80M Ham (3500–4000 kHz)", "40M Ham (7000–7300 kHz)", "30M Ham (10000–10200 kHz)", "20M Ham (14000–14400 kHz)", "17M Ham (18000–18200 kHz)", "15M Ham (21000–21500 kHz)", "12M Ham (24800–25000 kHz)", "10M Ham (28000–29700 kHz)", "CB 27 MHz (25000–28000 kHz)"];
 let curStatus = { mode: 'FM', mode_id: 0, raw_freq: 9990, band_min: 6400, band_max: 10800 };
 let trafficCache = [], bookmarksCache = [];
 let webAudioOn = false, audioCtx = null, lastMsgCount = -1;
@@ -657,7 +658,8 @@ function changeVol(delta) {
   T('volText', v);
   sendCtrl('volume', { val: v });
 }
-function selectBandId(b) { sendCtrl('band', { id: b }); }
+// Blur after choosing: status updates skip a focused select, which would then show a stale band
+function selectBandId(b) { $('dialBandSelect').blur(); sendCtrl('band', { id: b }); }
 const agcText = agc => agc === 0 ? 'AGC auto' : `ATT ${agc - 1} dB`;
 
 function renderBandwidthButtons(modeId, activeIdx) {

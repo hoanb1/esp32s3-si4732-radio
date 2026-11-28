@@ -124,6 +124,9 @@ void doCal(int16_t enc);
 void doStep(int16_t enc);
 void doMode(int16_t enc);
 void doBand(int16_t enc);
+void changeBand(int idx, bool drawLoadingSSB);
+void changeMode(uint8_t mode, bool cw, bool drawLoadingSSB);   // FM, LSB, USB, AM
+void changeDigitalMode(uint8_t dig);                           // FT8_DIG_*
 bool tuneToMemory(const Memory *memory);
 
 #endif // MENU_H

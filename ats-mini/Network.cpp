@@ -858,46 +858,16 @@ static void runControlAction(const ControlRequest &cr)
     } else if (action == "adc_auto") {
       ft8SetAdcAuto(getParamStr("val").toInt() != 0);
     } else if (action == "mode") {
-      int m = getParamStr("mode").toInt();
+      int m = getParamStr("mode").toInt();   // 0=FM 1=LSB 2=USB 3=AM 4=CW
       if (m >= 0 && m <= 4) {
-        ft8SetDigitalMode(FT8_DIG_OFF);
-        if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
-        if (m == 4) {
-          // CW mode = USB + 0.5kHz narrow filter (ssbBandwidths[0] = "0.5k")
-          if (bandIdx == 0) bandIdx = 20; // Default 40M
-          bands[bandIdx].bandMode = USB;
-          bands[bandIdx].bandwidthIdx = 0;
-          currentMode = USB;
-          selectBand(bandIdx, false);
-        } else {
-          if (m == FM && bandIdx != 0) {
-            bandIdx = 0;
-          } else if (m != FM && bandIdx == 0) {
-            bandIdx = (m == AM) ? 16 : 22; // Default MW2 for AM or 20M for USB/LSB
-          }
-          if ((m == USB || m == LSB) && bands[bandIdx].bandwidthIdx == 0) {
-            bands[bandIdx].bandwidthIdx = 4; // Restore 3.0kHz SSB filter when leaving CW
-          }
-          bands[bandIdx].bandMode = (uint8_t)m;
-          currentMode = (uint8_t)m;
-          selectBand(bandIdx, false);
-        }
+        changeMode(m == 4 ? USB : (uint8_t)m, m == 4, false);
         prefsRequestSave(SAVE_ALL);
       }
     } else if (action == "dig_mode") {
       int dm = getParamStr("val").toInt();
       if (dm >= 0 && dm <= 2) {
-        if (dm == FT8_DIG_FT8 || dm == FT8_DIG_FT4) {
-          if (bandIdx < 18 || bandIdx > 26) {
-            bandIdx = 22; // Default 20M amateur band
-          }
-          ft8TuneBandDigitalFreq(bandIdx, (uint8_t)dm);
-          prefsRequestSave(SAVE_ALL);
-        } else {
-          ft8SetDigitalMode(FT8_DIG_OFF);
-          if (uiLayoutIdx == UI_FT8) uiLayoutIdx = UI_DEFAULT;
-          prefsRequestSave(SAVE_SETTINGS);
-        }
+        changeDigitalMode((uint8_t)dm);
+        prefsRequestSave(dm == FT8_DIG_FT8 || dm == FT8_DIG_FT4 ? SAVE_ALL : SAVE_SETTINGS);
       }
     } else if (action == "freq") {
       double f = getParamStr("freq").toDouble();
@@ -1190,12 +1160,7 @@ static void runControlAction(const ControlRequest &cr)
     } else if (action == "band") {
       int bId = getParamStr("id").toInt();
       if (bId >= 0 && bId < getTotalBands()) {
-        if (bId >= 18 && bId <= 26 && ft8GetDigitalMode() != FT8_DIG_OFF) {
-          ft8TuneBandDigitalFreq(bId, ft8GetDigitalMode());
-        } else {
-          selectBand((uint8_t)bId, false);
-          ft8CheckFrequencyDigitalMode(currentFrequency, currentMode);
-        }
+        changeBand(bId, false);
         prefsRequestSave(SAVE_ALL);
       }
     }
