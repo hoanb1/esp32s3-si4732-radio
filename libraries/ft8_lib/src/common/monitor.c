@@ -118,7 +118,8 @@ void monitor_init(monitor_t* me, const monitor_config_t* cfg)
 
     // Allocate enough blocks to fit the 85-block (13.6s) FT8 capture window in memory
     int max_blocks = (int)(slot_time / symbol_period);
-    if (max_blocks > 85) max_blocks = 85;
+    // FT4 keeps its whole 7.5 s slot (156 short symbols, narrow rows); only boards that init FT4 pay for it
+    if (cfg->protocol != FTX_PROTOCOL_FT4 && max_blocks > 85) max_blocks = 85;
     // Keep only FFT bins in the specified frequency range (f_min/f_max)
     me->min_bin = (int)(cfg->f_min * symbol_period);
     me->max_bin = (int)(cfg->f_max * symbol_period) + 1;

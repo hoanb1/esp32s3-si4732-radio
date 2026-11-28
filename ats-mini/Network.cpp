@@ -820,10 +820,12 @@ static void runControlAction(const ControlRequest &cr)
       ssbPpmSave();
       rxSetFrequency(currentFrequency);
       if (isSSB()) applySSBBfo();
+#if HAS_TX
     } else if (action == "si5351") {
       // Bench test: si5351&clk=2&hz=32768 (hz=0 = off); no clk = only scan the bus and init
       if (getParamStr("clk").length()) si5351Set((uint8_t)getParamStr("clk").toInt(), (uint32_t)getParamStr("hz").toInt());
       else si5351Probe();
+#endif
     } else if (action == "ext_ref") {
       // Si5351 CLK2 as the SI4732 reference clock (crystal removed): saved, applied by a restart
       extRefEnable(getParamStr("val").toInt() != 0);
@@ -840,12 +842,14 @@ static void runControlAction(const ControlRequest &cr)
       for (int i = 0; i < 2000; i++) { int v = analogRead(34); if (v < lo) lo = v; if (v > hi2) hi2 = v; }
       ft8AddLog("[PIN34] high %d of 4000 reads, average %u mV, ADC min %d max %d", hi, (unsigned)(mv / 16), lo, hi2);
 #endif
+#if DIG_PIN_BCK >= 0
     } else if (action == "audio_in") {
       // Audio input: val=1 Si4732 digital I2S (needs the Si5351 reference + wires DCLK/DFS/DOUT), val=0 analog ADC; saved, restart
       audioDigitalSet(getParamStr("val").toInt() != 0);
       Serial.println("[AUDIO] input setting saved, restarting");
       delay(300);
       ESP.restart();
+#endif
     } else if (action == "adc_auto") {
       ft8SetAdcAuto(getParamStr("val").toInt() != 0);
     } else if (action == "mode") {
@@ -1382,7 +1386,7 @@ static int buildStatusJson(char *json, size_t cap)
     "\"synced\":%s,\"sync_src\":\"%s\",\"slot\":%u,\"decoding\":%s,"
     "\"last_duration_ms\":%lu,\"volume\":%u,\"mute\":%s,\"web_audio\":%s,"
     "\"adc_auto\":%s,\"rx_ppm\":%.1f,\"audio_level\":%u,\"heap_free\":%u,\"heap_largest\":%u,\"heap_min\":%u,\"msg_count\":%lu,"
-    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_raw\":[%d,%d,%d]}",
+    "\"adc_slot\":%lu,\"adc_slot_raw\":%lu,\"adc_slot_tail\":%u,\"dig_want\":%s,\"dig_run\":%s,\"dig_frames\":%lu,\"dig_peak\":%d,\"adc_samples\":%lu,\"adc_bad\":%lu,\"adc_raw\":[%d,%d,%d],\"tx\":%s,\"adc_pin\":%d,\"dig_ok\":%s}",
     freqStr, (unsigned int)currentFrequency, unit, getCurrentBand()->bandName, bandIdx,
     (unsigned int)getCurrentBand()->minimumFreq, (unsigned int)getCurrentBand()->maximumFreq,
     ft8GetDisplayModeDesc(), (unsigned int)currentMode, (unsigned int)ft8GetDigitalMode(), (int)currentBFO, (int)cal,
@@ -1404,7 +1408,8 @@ static int buildStatusJson(char *json, size_t cap)
     (unsigned long)adcSlot, (unsigned long)adcSlotRaw, (unsigned int)adcSlotTail,
     audioDigitalWanted() ? "true" : "false", audioDigitalRunning() ? "true" : "false",
     (unsigned long)audioDigitalFrames(), audioDigitalPeak(true),
-    (unsigned long)adcSamples, (unsigned long)adcBad, adcMean, adcMin, adcMax
+    (unsigned long)adcSamples, (unsigned long)adcBad, adcMean, adcMin, adcMax,
+    HAS_TX ? "true" : "false", (int)FT8_ADC_PIN, DIG_PIN_BCK >= 0 ? "true" : "false"
   );
   if (len < 0) len = 0;
   if (len >= (int)cap) len = cap - 1;
@@ -1499,7 +1504,7 @@ static void wsTick()
   // Status JSON and new waterfall rows, every 500 ms
   if (now - lastStatusMs >= 500) {
     lastStatusMs = now;
-    static char json[1024];
+    static char json[1280];
     int len = buildStatusJson(json, sizeof(json));
     // The status frame doubles as the page's heartbeat: a page that misses it falls back to HTTP polling,
     // which costs far more heap than the frame. So it gets a much lower reserve than the waterfall, and a
@@ -1633,7 +1638,7 @@ static void webInit()
 
   // /api/status - Real-time radio, FT8 slot, and WiFi status
   server.on("/api/status", HTTP_GET, [] (AsyncWebServerRequest *request) {
-    static char json[1024];
+    static char json[1280];
     int len = buildStatusJson(json, sizeof(json));
     AsyncWebServerResponse *response = new FlashResponse(200, "application/json", (const uint8_t *)json, (size_t)len);
     response->addHeader("Cache-Control", "no-store");

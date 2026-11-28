@@ -32,7 +32,7 @@ static volatile uint16_t adcLastGood = 0;
 #include <websdr_test1.h>
 
 #define FT8_SAMPLE_RATE     6000
-#define FT8_ADC_RATE        16000 // GPIO34 sampled by a hardware timer (80 MHz / 5 / 1000), resampled 3/8 to 6 kHz
+#define FT8_ADC_RATE        16000 // FT8_ADC_PIN sampled by a hardware timer (80 MHz / 5 / 1000), resampled 3/8 to 6 kHz
 #define FT8_RS_UP           3
 #define FT8_RS_DOWN         8
 #define FT8_RS_TAPS         96    // taps per polyphase branch (prototype = 288 taps at 48 kHz)
@@ -60,7 +60,7 @@ volatile uint16_t g_latestVbatRaw = 2400;
 // (FPU loads from IRAM raise LoadStoreError).
 static void *iramAlloc(size_t bytes) {
   void *p = heap_caps_malloc(bytes, MALLOC_CAP_EXEC | MALLOC_CAP_32BIT);   // IRAM only
-  if (!p) p = heap_caps_malloc(bytes, MALLOC_CAP_32BIT);
+  if (!p) p = heap_caps_malloc(bytes, MALLOC_CAP_32BIT | MALLOC_CAP_INTERNAL);   // the ISR writes here: never PSRAM
   if (p) for (size_t i = 0; i < bytes / 4; i++) ((volatile uint32_t *)p)[i] = 0;
   return p;
 }
@@ -124,6 +124,9 @@ static float lastBlockRms = 10.0f;
 static uint8_t ft8AudioLevel = 0;
 
 // FT8 DSP Monitor (allocated once in ft8Init)
+#if HAS_FT4
+static monitor_t ft4Mon;
+#endif
 static monitor_t liveMon;
 static bool monInitialized = false;
 extern "C" {
@@ -623,6 +626,11 @@ void ft8Init() {
 
   monitor_init(&liveMon, &cfg);
   monInitialized = true;
+#if HAS_FT4
+  cfg.protocol = FTX_PROTOCOL_FT4;
+  monitor_init(&ft4Mon, &cfg);
+  if (!ft4Mon.wf.mag) Serial.println("[FT4] waterfall allocation failed");
+#endif
   Serial.printf("[FT8] DSP Monitor ready: wf.mag=%p (%dx%d, time_osr=%d), free_heap=%u (8bit=%u)\r\n",
                 liveMon.wf.mag, liveMon.wf.max_blocks, liveMon.wf.num_bins,
                 liveMon.wf.time_osr, (unsigned int)ESP.getFreeHeap(),
@@ -824,7 +832,7 @@ static void extractSenderCallsign(const char *msgText, char *outCall, size_t max
   }
 }
 
-// Run FT8 Costas sync search + LDPC decoding on the current waterfall in `mon`
+// Run Costas sync search + LDPC decoding (FT8 or FT4, per mon->wf.protocol) on the current waterfall in `mon`
 static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
   if (!mon || !mon->wf.mag || mon->wf.num_blocks < 40) return 0;
 
@@ -847,7 +855,8 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
   snprintf(timeStr, sizeof(timeStr), "%02u:%02u:%02u", utcH, utcM, utcS);
 
   int topScore = (numCandidates > 0) ? candidates[0].score : 0;
-  uint16_t topFreqHz = (numCandidates > 0) ? (uint16_t)roundf((mon->min_bin + candidates[0].freq_offset) * 6.25f) : 0;
+  const float binHz = 1.0f / mon->symbol_period;   // 6.25 Hz (FT8) or 20.83 Hz (FT4)
+  uint16_t topFreqHz = (numCandidates > 0) ? (uint16_t)roundf((mon->min_bin + candidates[0].freq_offset) * binHz) : 0;
   int minLdpcErr = 999;
   uint16_t bestErrFreqHz = 0;
   float bestErrDt = 0.0f;
@@ -855,7 +864,8 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
 
   for (int i = 0; i < numCandidates; i++) {
     // Never exceed 1050 ms (live) or 1400 ms (test) so decoding never starves Web UI or next FT8 slot
-    if (millis() - t0 > (isTest ? 1400UL : 1050UL)) break;
+    // (FT4 starts decoding at 6.14 s of its 7.5 s slot, so it gets less)
+    if (millis() - t0 > (isTest ? 1400UL : mon->wf.protocol == FTX_PROTOCOL_FT4 ? 800UL : 1050UL)) break;
     numTried++;
 
     const ftx_candidate_t *cand = &candidates[i];
@@ -870,8 +880,8 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
     if (tc > ldpcMaxUs) ldpcMaxUs = tc;
     if (status.ldpc_errors < minLdpcErr) {
       minLdpcErr = status.ldpc_errors;
-      bestErrFreqHz = (uint16_t)roundf((mon->min_bin + cand->freq_offset + (float)cand->freq_sub / mon->wf.freq_osr) * 6.25f);
-      bestErrDt = (cand->time_offset + (float)cand->time_sub / mon->wf.time_osr) * 0.16f - (isTest ? 0.0f : 0.5f);
+      bestErrFreqHz = (uint16_t)roundf((mon->min_bin + cand->freq_offset + (float)cand->freq_sub / mon->wf.freq_osr) * binHz);
+      bestErrDt = (cand->time_offset + (float)cand->time_sub / mon->wf.time_osr) * mon->symbol_period - (isTest ? 0.0f : 0.5f);
       bestErrScore = cand->score;
     }
     if (!ok) {
@@ -901,8 +911,8 @@ static int ft8DecodeFromMonitor(monitor_t *mon, bool isTest) {
     // SNR in 2500 Hz from the re-encoded tones along the decoded path (WSJT-X style)
     int snrDb = (int)lroundf(ftx_message_snr(&mon->wf, cand, &msg));
 
-    float dtSec = (cand->time_offset + (float)cand->time_sub / mon->wf.time_osr) * 0.16f - (isTest ? 0.0f : 0.5f);
-    uint16_t freqHz = (uint16_t)roundf((mon->min_bin + cand->freq_offset + (float)cand->freq_sub / mon->wf.freq_osr) * 6.25f);
+    float dtSec = (cand->time_offset + (float)cand->time_sub / mon->wf.time_osr) * mon->symbol_period - (isTest ? 0.0f : 0.5f);
+    uint16_t freqHz = (uint16_t)roundf((mon->min_bin + cand->freq_offset + (float)cand->freq_sub / mon->wf.freq_osr) * binHz);
 
     char senderCall[16];
     bool isCQ = false;
@@ -1010,6 +1020,47 @@ static void webAudioService() {
   }
 }
 
+#if HAS_FT4
+#define FT4_BLOCK_SAMPLES   288     // one FT4 symbol (48 ms) at 6 kHz
+#define FT4_SLOT_SAMPLES    45000   // 7.5 s
+#define FT4_DECODE_BLOCKS   128     // 6.14 s: transmissions end by ~5.6 s
+
+// Cuts one 960-sample block (number blockIndex of its 15 s slot) into FT4 symbols, restarting at each
+// 7.5 s boundary, and decodes once per half slot. A half with a missed block is skipped. True after a decode.
+static bool ft4Feed(const float *frame, uint32_t slot, uint16_t blockIndex) {
+  static float sym[FT4_BLOCK_SAMPLES];
+  static uint32_t curHalf = 0xFFFFFFFF, nextPos = 0;
+  static int fill = 0;
+  static bool usable = false, decoded = false;
+  if (!ft4Mon.wf.mag) return false;
+  for (int i = 0; i < FT8_BLOCK_SAMPLES; i++) {
+    uint32_t n = (uint32_t)blockIndex * FT8_BLOCK_SAMPLES + i;
+    if (n >= 2 * FT4_SLOT_SAMPLES) break;
+    uint32_t half = slot * 2 + n / FT4_SLOT_SAMPLES, pos = n % FT4_SLOT_SAMPLES;
+    if (half != curHalf) {
+      curHalf = half;
+      usable = (pos == 0);
+      decoded = false;
+      nextPos = 0;
+      fill = 0;
+      monitor_reset(&ft4Mon);
+    }
+    if (pos != nextPos) usable = false;
+    nextPos = pos + 1;
+    if (!usable || decoded) continue;
+    sym[fill++] = frame[i];
+    if (fill == FT4_BLOCK_SAMPLES) {
+      fill = 0;
+      if (ft4Mon.wf.num_blocks < ft4Mon.wf.max_blocks) monitor_process(&ft4Mon, sym);
+    }
+  }
+  if (!usable || decoded || ft4Mon.wf.num_blocks < FT4_DECODE_BLOCKS) return false;
+  decoded = true;
+  ft8DecodeFromMonitor(&ft4Mon, false);
+  return true;
+}
+#endif
+
 bool ft8TickWaterfall() {
   if (!monInitialized) ft8Init();
   webAudioService();
@@ -1030,6 +1081,7 @@ bool ft8TickWaterfall() {
   ft8GetCurrentUTC(&h, &m, &s, &subMs);
   uint8_t slotSec = s % 15;
   bool digActive = (ft8DigitalMode != FT8_DIG_OFF) && (currentMode == USB || currentMode == LSB);
+  bool ft4Mode = HAS_FT4 && digActive && ft8DigitalMode == FT8_DIG_FT4;
 
 
   // Drain any pending 160ms ADC blocks from the lock-free ring buffer
@@ -1038,6 +1090,9 @@ bool ft8TickWaterfall() {
 
     // A block from a new slot starts a new FT8 collection; block 0 begins exactly at the slot start
     uint32_t blkSlot = adcBlockSlot[rBuf];
+#if HAS_FT4
+    uint16_t blkIndex = adcBlockIndex[rBuf];
+#endif
     if (blkSlot != monSlotId) {
       // Reload at most once per 4 slots: a reload resets the SI4732 volume, so reloading every slot kept the ADC level low.
       // GPIO34 normally sits only ~30..90 counts above the ADC floor, so only a dead input (mean ~0) counts as lost bias;
@@ -1133,7 +1188,7 @@ bool ft8TickWaterfall() {
 
     // In non-digital mode (FM / AM / SSB Voice), wrap monitor blocks continuously so waterfall never pauses
     // (also while web audio holds part of the buffer: FT8 cannot decode then, so just keep scrolling)
-    bool scrollOnly = !digActive || webAudRing;
+    bool scrollOnly = !digActive || ft4Mode || webAudRing;
     if (scrollOnly && liveMon.wf.num_blocks >= liveMon.wf.max_blocks) {
       monitor_reset(&liveMon);
     }
@@ -1148,10 +1203,14 @@ bool ft8TickWaterfall() {
         needRedraw = true;
       }
     }
+#if HAS_FT4
+    // After the FT8 waterfall: an FT4 decode reuses the dspFrame memory
+    if (ft4Mode && ft4Feed(dspFrame, blkSlot, blkIndex)) needRedraw = true;
+#endif
   }
 
   // Trigger live FT8 LDPC decoding at 84 blocks (13.44s) so the ~1.07s decode finishes at ~14.51s (before :00.0s of next slot)
-  if (digActive && !slotDecoded && !webAudRing) {
+  if (digActive && !ft4Mode && !slotDecoded && !webAudRing) {
     if (liveMon.wf.num_blocks >= 84 || ((slotSec == 13 && subMs >= 440 || slotSec >= 14) && liveMon.wf.num_blocks >= 55)) {
       slotDecoded = true;
       int cnt = ft8DecodeFromMonitor(&liveMon, false);

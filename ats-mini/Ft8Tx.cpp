@@ -32,6 +32,58 @@
 
 void ft8GetCurrentUTC(uint8_t *h, uint8_t *m, uint8_t *s, uint16_t *msOut);   // Layout-FT8.cpp
 
+static portMUX_TYPE txWebMux = portMUX_INITIALIZER_UNLOCKED;
+// WSPR spots decoded off-radio (tools/wspr_rx.py posts them): newest kept for the web card
+#define WSPR_RX_MAX 10
+static char wsprRx[WSPR_RX_MAX][60];
+static uint8_t wsprRxHead = 0, wsprRxCount = 0;
+static void wsprRxAdd(const String &line) {
+  char b[60];
+  size_t n = 0;
+  for (size_t i = 0; i < line.length() && n < sizeof(b) - 1; i++) {
+    char c = line[i];
+    if (isalnum((unsigned char)c) || c == ' ' || c == '/' || c == '.' || c == ':' || c == '+' || c == '-' || c == '<' || c == '>') b[n++] = c;
+  }
+  b[n] = 0;
+  if (!n) return;
+  portENTER_CRITICAL(&txWebMux);
+  strlcpy(wsprRx[wsprRxHead], b, sizeof(wsprRx[0]));
+  wsprRxHead = (wsprRxHead + 1) % WSPR_RX_MAX;
+  if (wsprRxCount < WSPR_RX_MAX) wsprRxCount++;
+  portEXIT_CRITICAL(&txWebMux);
+}
+
+static void wsprRxJson(String &out) {
+  if (wsprRxCount) {
+    out += ",\"wspr_rx\":[";
+    for (uint8_t i = 0; i < wsprRxCount; i++) {
+      uint8_t k = (wsprRxHead + WSPR_RX_MAX - 1 - i) % WSPR_RX_MAX;   // newest first
+      out += i ? ",\"" : "\"";
+      out += wsprRx[k];
+      out += "\"";
+    }
+    out += "]";
+  }
+}
+
+// Callsign: 3..10 of A-Z 0-9 /, with a digit; grid: AA00..RR99
+static bool validCall(const char *c) {
+  size_t n = strlen(c);
+  bool digit = false;
+  if (n < 3 || n > 10) return false;
+  for (size_t i = 0; i < n; i++) {
+    if (isdigit((unsigned char)c[i])) digit = true;
+    else if (!isupper((unsigned char)c[i]) && c[i] != '/') return false;
+  }
+  return digit;
+}
+static bool validGrid(const char *g) {
+  return strlen(g) == 4 && g[0] >= 'A' && g[0] <= 'R' && g[1] >= 'A' && g[1] <= 'R' &&
+         isdigit((unsigned char)g[2]) && isdigit((unsigned char)g[3]);
+}
+
+#if HAS_TX
+
 #define TX_XTAL_HZ   40000000.0
 #define TX_VCO_MAX   500e6
 #define TX_TONE_HZ   6.25
@@ -505,22 +557,6 @@ static void txLoad() {
   p.end();
 }
 
-// Callsign: 3..10 of A-Z 0-9 /, with a digit; grid: AA00..RR99
-static bool validCall(const char *c) {
-  size_t n = strlen(c);
-  bool digit = false;
-  if (n < 3 || n > 10) return false;
-  for (size_t i = 0; i < n; i++) {
-    if (isdigit((unsigned char)c[i])) digit = true;
-    else if (!isupper((unsigned char)c[i]) && c[i] != '/') return false;
-  }
-  return digit;
-}
-static bool validGrid(const char *g) {
-  return strlen(g) == 4 && g[0] >= 'A' && g[0] <= 'R' && g[1] >= 'A' && g[1] <= 'R' &&
-         isdigit((unsigned char)g[2]) && isdigit((unsigned char)g[3]);
-}
-
 static bool txSetStation(const char *call, const char *grid) {
   char c[sizeof(myCall)], g[sizeof(myGrid)];
   strlcpy(c, call, sizeof(c));
@@ -969,7 +1005,6 @@ void ft8TxCommand(const char *args) {
 #define TX_WEBQ 4
 static char txWebQ[TX_WEBQ][48];
 static volatile uint8_t txWebHead = 0, txWebTail = 0;
-static portMUX_TYPE txWebMux = portMUX_INITIALIZER_UNLOCKED;
 
 static void txWebPush(const char *line) {
   portENTER_CRITICAL(&txWebMux);
@@ -1012,25 +1047,6 @@ void ft8TxPoll() {
   }
 }
 
-// WSPR spots decoded off-radio (tools/wspr_rx.py posts them): newest kept for the web card
-#define WSPR_RX_MAX 10
-static char wsprRx[WSPR_RX_MAX][60];
-static uint8_t wsprRxHead = 0, wsprRxCount = 0;
-static void wsprRxAdd(const String &line) {
-  char b[60];
-  size_t n = 0;
-  for (size_t i = 0; i < line.length() && n < sizeof(b) - 1; i++) {
-    char c = line[i];
-    if (isalnum((unsigned char)c) || c == ' ' || c == '/' || c == '.' || c == ':' || c == '+' || c == '-' || c == '<' || c == '>') b[n++] = c;
-  }
-  b[n] = 0;
-  if (!n) return;
-  portENTER_CRITICAL(&txWebMux);
-  strlcpy(wsprRx[wsprRxHead], b, sizeof(wsprRx[0]));
-  wsprRxHead = (wsprRxHead + 1) % WSPR_RX_MAX;
-  if (wsprRxCount < WSPR_RX_MAX) wsprRxCount++;
-  portEXIT_CRITICAL(&txWebMux);
-}
 
 static String txStatusJson() {
   char b[260];
@@ -1061,16 +1077,7 @@ static String txStatusJson() {
     out += "\"";
   }
   out += "]";
-  if (wsprRxCount) {
-    out += ",\"wspr_rx\":[";
-    for (uint8_t i = 0; i < wsprRxCount; i++) {
-      uint8_t k = (wsprRxHead + WSPR_RX_MAX - 1 - i) % WSPR_RX_MAX;   // newest first
-      out += i ? ",\"" : "\"";
-      out += wsprRx[k];
-      out += "\"";
-    }
-    out += "]";
-  }
+  wsprRxJson(out);
   out += "}";
   return out;
 }
@@ -1130,3 +1137,91 @@ void ft8TxRegisterWeb(AsyncWebServer &server) {
     request->send(200, "application/json", txStatusJson());
   });
 }
+
+#else   // !HAS_TX: receive-only board. Only the station settings (callsign, grid: PSK reporter, map) and
+        // the WSPR spots posted by an off-radio decoder remain; no transmit code is compiled in.
+
+static char myCall[12] = "";
+static char myGrid[5] = "";
+
+static void stationLoad() {
+  static bool loaded = false;
+  if (loaded) return;
+  loaded = true;
+  Preferences p;
+  if (!p.begin("ft8tx", true, STORAGE_PARTITION)) return;
+  strlcpy(myCall, p.getString("call", "").c_str(), sizeof(myCall));
+  strlcpy(myGrid, p.getString("grid", "").c_str(), sizeof(myGrid));
+  p.end();
+}
+
+static bool stationSet(String call, String grid) {
+  call.trim(); call.toUpperCase();
+  grid.trim(); grid.toUpperCase();
+  if (call.length() >= sizeof(myCall) || grid.length() >= sizeof(myGrid) ||
+      !validCall(call.c_str()) || !validGrid(grid.c_str())) {
+    Serial.println("[STATION] Invalid callsign or grid");
+    return false;
+  }
+  stationLoad();
+  strlcpy(myCall, call.c_str(), sizeof(myCall));
+  strlcpy(myGrid, grid.c_str(), sizeof(myGrid));
+  Preferences p;
+  if (!p.begin("ft8tx", false, STORAGE_PARTITION)) return false;
+  p.putString("call", myCall);
+  p.putString("grid", myGrid);
+  p.end();
+  return true;
+}
+
+// Serial Kn<call> <grid>; K alone prints the station
+void ft8TxCommand(const char *args) {
+  stationLoad();
+  while (*args == ' ') args++;
+  if (*args == 'n') {
+    char call[12] = "", grid[5] = "";
+    if (sscanf(args + 1, "%11s %4s", call, grid) == 2) stationSet(call, grid);
+  }
+  Serial.printf("[STATION] %s %s (receive-only build)\r\n", myCall, myGrid);
+}
+
+bool ft8TxBusy() { return false; }
+void ft8TxOnDecode(const char *, int) {}
+void ft8TxSlotDone() {}
+void ft8TxPoll() { stationLoad(); }
+bool ft8TxRadioDown() { return false; }
+const char *ft8TxCallsign() { stationLoad(); return myCall; }
+const char *ft8TxGrid() { stationLoad(); return myGrid; }
+
+static String stationJson() {
+  stationLoad();
+  String out;
+  out.reserve(96 + WSPR_RX_MAX * 64);
+  out = "{\"tx\":false,\"call\":\"";
+  out += myCall;
+  out += "\",\"grid\":\"";
+  out += myGrid;
+  out += "\"";
+  wsprRxJson(out);
+  out += "}";
+  return out;
+}
+
+void ft8TxRegisterWeb(AsyncWebServer &server) {
+  server.on("/api/ft8tx", HTTP_ANY, [] (AsyncWebServerRequest *request) {
+    auto param = [request](const char *name) -> String {
+      if (request->hasParam(name, true)) return request->getParam(name, true)->value();
+      if (request->hasParam(name)) return request->getParam(name)->value();
+      return String();
+    };
+    String action = param("action");
+    if (action == "save") {
+      if (param("call").length() && param("grid").length()) stationSet(param("call"), param("grid"));
+    } else if (action == "wsprspot") {
+      wsprRxAdd(param("s"));
+    }
+    request->send(200, "application/json", stationJson());
+  });
+}
+
+#endif  // HAS_TX

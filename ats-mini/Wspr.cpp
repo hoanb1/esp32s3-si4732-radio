@@ -1,4 +1,7 @@
 #include "Wspr.h"
+#include "Board.h"
+
+#if HAS_TX   // transmit encoder only
 
 #include <ctype.h>
 #include <string.h>
@@ -89,3 +92,5 @@ bool wsprEncode(const char *call, const char *grid, int dbm, uint8_t symbols[WSP
   for (int i = 0; i < WSPR_NN; i++) symbols[i] = syncVec[i] + 2 * d[i];
   return true;
 }
+
+#endif

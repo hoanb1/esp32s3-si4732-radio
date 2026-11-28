@@ -35,6 +35,7 @@
 
 // Features
 #define HAS_FT8_ADC   1             // Capture on ADC2 (shared with WiFi; refused reads are counted in adc_bad)
+#define HAS_FT4       1             // Second monitor for FT4 decoding
 #define HAS_APLL_TX   0             // ESP32 APLL RF output (classic ESP32 only)
 #define HAS_TX        0             // Si5351 CLK2 / PA transmit path not fitted yet
 #define TX_RELAY_PIN  -1
@@ -72,6 +73,7 @@
 
 // Features
 #define HAS_FT8_ADC   1
+#define HAS_FT4       0             // No RAM for a second (FT4) monitor
 #define HAS_APLL_TX   1
 #define HAS_TX        1
 #define TX_RELAY_PIN  26            // T/R relay module, active high

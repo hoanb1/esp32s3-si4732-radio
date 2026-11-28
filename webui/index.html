@@ -13,6 +13,8 @@ body{font:14px/1.4 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;backgrou
 .mono{font-family:ui-monospace,'Cascadia Mono',Consolas,'Courier New',monospace}
 .muted{color:var(--muted)}
 .hidden{display:none!important}
+body.notx .txonly{display:none!important}
+body:not(.notx) .rxonly{display:none}
 .sm{font-size:.76rem}
 /* Sticky top: status bar + tabs */
 #top{position:sticky;top:0;z-index:10;background:var(--bg);border-bottom:1px solid var(--border)}
@@ -158,7 +160,7 @@ td.act button:hover{background:var(--red);color:#fff}
 .wslots input[type=password]{flex:0 1 110px}
 </style>
 </head>
-<body>
+<body class="notx">
 <div id="top">
   <div id="bar">
     <h1>ATS-Mini</h1>
@@ -305,9 +307,9 @@ td.act button:hover{background:var(--red);color:#fff}
   </div>
   <div class="col">
    <div class="card" id="txCard">
-    <div class="ch"><h2>QSO / Transmit</h2><span class="row"><span class="badge" id="txBadge">loading…</span></span></div>
-    <div class="plan" id="txPlan">Loading transmitter status…</div>
-    <div class="row">
+    <div class="ch"><h2><span class="txonly">QSO / Transmit</span><span class="rxonly">FT8 bands</span></h2><span class="row txonly"><span class="badge" id="txBadge">loading…</span></span></div>
+    <div class="plan txonly" id="txPlan">Loading transmitter status…</div>
+    <div class="row txonly">
       <button class="pri" id="txCqBtn" disabled onclick="txAction('cq')" title="Call CQ every other slot, then run the QSO automatically">Call CQ</button>
       <button class="dng" onclick="txAction('stop')" title="Stop the QSO and any transmission now">Stop</button>
       <label class="sw tx" id="txAutoArm" title="Answers CQs by itself. After two quiet minutes it calls CQ once. Stops after 10 QSOs or 30 minutes. Off after every reboot."><input type="checkbox" id="txAuto" onchange="setAuto(this.checked)"><span id="txAutoText">Auto QSO</span></label>
@@ -318,17 +320,17 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="note">Band</span>
       <button onclick="txBand(7074)">40</button><button onclick="txBand(10136)">30</button><button onclick="txBand(14074)">20</button><button onclick="txBand(18100)">17</button><button onclick="txBand(21074)">15</button><button onclick="txBand(24915)">12</button><button onclick="txBand(28074)">10</button>
     </div>
-    <div class="row">
+    <div class="row txonly">
       <input type="text" id="txMsg" class="f1" maxlength="37" placeholder="free message for the next slot" style="text-transform:uppercase" onkeydown="if(event.key==='Enter')$('txSendBtn').click()">
       <button id="txSendBtn" disabled onclick="txAction('send',{msg:$('txMsg').value})">Send</button>
     </div>
-    <div class="note">Or press Answer on a CQ in the decoded list.</div>
-    <div class="logs mono" id="txEvents" style="min-height:44px;max-height:130px">No transmissions yet</div>
+    <div class="note txonly">Or press Answer on a CQ in the decoded list.</div>
+    <div class="logs mono txonly" id="txEvents" style="min-height:44px;max-height:130px">No transmissions yet</div>
    </div>
    <div class="card" id="wsprCard">
-    <div class="ch"><h2>WSPR transmit</h2><span class="row"><span class="badge" id="wsprBadge">idle</span></span></div>
-    <div class="plan" id="wsprPlan">Loading…</div>
-    <div class="row">
+    <div class="ch"><h2><span class="txonly">WSPR transmit</span><span class="rxonly">WSPR receive</span></h2><span class="row txonly"><span class="badge" id="wsprBadge">idle</span></span></div>
+    <div class="plan txonly" id="wsprPlan">Loading…</div>
+    <div class="row txonly">
       <span class="note">Power</span>
       <select id="wsprDbm"><option value="0">0 dBm</option><option value="7">7 dBm</option><option value="10" selected>10 dBm</option><option value="13">13 dBm</option><option value="17">17 dBm</option><option value="20">20 dBm</option><option value="23">23 dBm</option></select>
       <span class="note">Times</span>
@@ -339,9 +341,9 @@ td.act button:hover{background:var(--red);color:#fff}
     </div>
     <div class="row"><button onclick="wsprTune()" title="Dial 14096 kHz USB: WSPR appears at about 1100 Hz">Tune 20 m WSPR (receive)</button><span class="note">receive decoder: tools/wspr_rx.py</span></div>
     <div class="logs mono" id="wsprRx" style="min-height:44px;max-height:150px">No WSPR spots received yet (time, SNR, dT, kHz, call, grid, dBm)</div>
-    <div class="note">20 m WSPR: centre 14.0971 MHz (dial 14.0956 USB + 1500 Hz). Needs the Si5351, the T/R relay and a low-pass filter. Each message is about 111 s; spots appear on <a href="https://wsprnet.org/drupal/wsprnet/spots" target="_blank" rel="noopener">wsprnet.org</a> a few minutes later.</div>
+    <div class="note txonly">20 m WSPR: centre 14.0971 MHz (dial 14.0956 USB + 1500 Hz). Needs the Si5351, the T/R relay and a low-pass filter. Each message is about 111 s; spots appear on <a href="https://wsprnet.org/drupal/wsprnet/spots" target="_blank" rel="noopener">wsprnet.org</a> a few minutes later.</div>
    </div>
-   <div class="card">
+   <div class="card txonly">
     <div class="ch"><h2>PSKReporter: heard me</h2><span class="row"><span class="badge" id="heardBadge">not checked</span><a class="note" href="https://pskreporter.info/pskmap.html" target="_blank" rel="noopener">pskreporter.info</a></span></div>
     <div class="row"><button class="s" id="heardBtn" onclick="heardCheck(true)">Check now</button><span class="note" id="heardNext"></span></div>
     <div class="tbl" style="max-height:200px"><table>
@@ -366,7 +368,7 @@ td.act button:hover{background:var(--red);color:#fff}
     </span>
   </div>
   <div id="stationMap"><svg id="mapSvg" xmlns="http://www.w3.org/2000/svg"><g id="mapWorld"></g><g id="mapGridG"></g><g id="mapLines"></g><g id="mapDots"></g><g id="mapHeard"></g></svg><div class="map-note" id="mapNote">Loading map…</div><div class="map-btns"><button onclick="mapZoom(1.6)" title="Zoom in">+</button><button onclick="mapZoom(1/1.6)" title="Zoom out">−</button><button onclick="mapFit()" title="Fit stations">⤢</button></div><div class="map-pop hidden" id="mapPop"></div></div>
-  <div class="note">SNR:<span class="legend-dot" style="background:#e0fbff"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#00838f"></span>-13…-18<span class="legend-dot" style="background:#4a6380"></span>below -18<span class="legend-dot" style="background:none;border:2px solid #ff9800;width:7px;height:7px"></span>heard me (PSKReporter)</div>
+  <div class="note">SNR:<span class="legend-dot" style="background:#e0fbff"></span>≥ 0 dB<span class="legend-dot" style="background:#00e5ff"></span>-1…-12<span class="legend-dot" style="background:#00838f"></span>-13…-18<span class="legend-dot" style="background:#4a6380"></span>below -18<span class="txonly"><span class="legend-dot" style="background:none;border:2px solid #ff9800;width:7px;height:7px"></span>heard me (PSKReporter)</span></div>
  </div>
 
 </main>
@@ -387,14 +389,14 @@ td.act button:hover{background:var(--red);color:#fff}
       <span class="note">Cal <b id="calVal" class="mono">0 Hz</b></span></div>
     <div class="fr"><span class="lb" title="SI4732 crystal correction (same as serial J)">RX crystal</span><input type="number" id="rxPpm" step="0.1" min="-1500" max="1500"> ppm <button onclick="sendCtrl('rx_ppm',{val:$('rxPpm').value})">Set</button></div>
     <div class="fr"><span class="lb">Audio from Si4732</span>
-      <select id="audIn" class="f1" onchange="setAudIn(this.value)"><option value="0">Analog – line out → ADC GPIO34</option><option value="1">Digital – I2S (DCLK 19, DFS 22, DOUT → 34)</option></select></div>
+      <select id="audIn" class="f1" onchange="setAudIn(this.value)"><option value="0" id="audAna">Analog – line out → ADC GPIO34</option><option value="1" id="audDig">Digital – I2S (DCLK 19, DFS 22, DOUT → 34)</option></select></div>
     <div class="fr"><span class="lb"></span><span id="audInMsg" class="f1" style="font-size:12px;opacity:.7"></span></div>
     <div class="note">AGC / attenuation is in the Quick row on the main page.</div>
    </div>
 
    <div class="card">
     <div class="ch"><h2>FT8 decoder &amp; time</h2></div>
-    <div class="fr"><span class="lb" title="GPIO34 level: the Radio volume slider in FT8/FT4">Decoder level</span>
+    <div class="fr"><span class="lb" title="ADC input level: the Radio volume slider in FT8/FT4">Decoder level</span>
       <div class="seg f1"><button id="adcManBtn" onclick="sendCtrl('adc_auto',{val:0})">Manual</button><button id="adcAutoBtn2" onclick="sendCtrl('adc_auto',{val:1})">Auto</button></div></div>
     <div class="row">
       <button onclick="sendCtrl('decode')" title="Decode the built-in WebSDR test vector">Test decode</button>
@@ -405,28 +407,28 @@ td.act button:hover{background:var(--red);color:#fff}
    </div>
 
    <div class="card">
-    <div class="ch"><h2>FT8 transmit station</h2><span class="note" id="txSaveMsg"></span></div>
+    <div class="ch"><h2><span class="txonly">FT8 transmit station</span><span class="rxonly">Station</span></h2><span class="note" id="txSaveMsg"></span></div>
     <div class="fr"><span class="lb">Callsign</span><input type="text" id="txCall" maxlength="10" placeholder="your call" style="width:110px;text-transform:uppercase">
       <span class="lb" style="flex-basis:auto">Grid</span><input type="text" id="txGrid" maxlength="4" placeholder="AA00" style="width:70px;text-transform:uppercase"></div>
-    <div class="fr"><span class="lb">Audio</span><input type="number" id="txAudio" min="200" max="2900" step="10"> Hz
+    <div class="fr txonly"><span class="lb">Audio</span><input type="number" id="txAudio" min="200" max="2900" step="10"> Hz
       <span class="lb" style="flex-basis:auto">Crystal</span><input type="number" id="txPpm" step="0.1"> ppm</div>
-    <div class="fr"><span class="lb">TX offset</span><select id="txOff"><option value="1">On (random each TX)</option><option value="0">Off (fixed Audio)</option></select>
+    <div class="fr txonly"><span class="lb">TX offset</span><select id="txOff"><option value="1">On (random each TX)</option><option value="0">Off (fixed Audio)</option></select>
       <input type="number" id="txOLo" min="200" max="2850" step="10" style="width:70px"> – <input type="number" id="txOHi" min="200" max="2850" step="10" style="width:70px"> Hz
       <span class="note" id="txPick"></span></div>
-    <div class="fr"><span class="lb">TX source</span>
+    <div class="fr txonly"><span class="lb">TX source</span>
       <select id="txSrc" class="f1" onchange="renderTx(txState)"><option value="0">Si5351 CLK2 – any band, with PA + relay</option><option value="1">ESP32 GPIO (APLL) – 80 m bench</option></select></div>
-    <div class="fr" id="txDrvRow"><span class="lb">TX power</span>
+    <div class="fr txonly" id="txDrvRow"><span class="lb">TX power</span>
       <select id="txDrv" class="f1"><option value="0">Low – 2 mA (≈1 mW, for the PA)</option><option value="1">Medium – 4 mA (≈2.5 mW)</option><option value="2">High – 6 mA (≈5 mW)</option><option value="3">Max – 8 mA (≈10 mW)</option></select></div>
-    <div class="fr" id="txPinRow"><span class="lb">Output pin</span>
+    <div class="fr txonly" id="txPinRow"><span class="lb">Output pin</span>
       <select id="txPin" class="f1"><option value="0">GPIO0 – MCLK, exact tones (antenna + LPF)</option><option value="16">GPIO16 – BCK, backlight wire (bench tests)</option></select></div>
     <div class="fr">
-      <label class="sw tx" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">Enable TX</span></label>
+      <label class="sw tx txonly" title="Nothing is transmitted unless this is on. Off after every reboot; turning it off stops a transmission at once."><input type="checkbox" id="txEnable" onchange="txAction('enable',{on:this.checked?1:0})"><span id="txArmText">Enable TX</span></label>
       <button class="pri" onclick="txSave()">Save station</button>
     </div>
-    <div class="fr" id="txSiRow" style="display:none"><span class="lb">Si5351 + relay</span>
+    <div class="fr txonly" id="txSiRow" style="display:none"><span class="lb">Si5351 + relay</span>
       <button onclick="txRelayTest()" title="Closes the T/R relay 5 times for 5 s, no RF. Receive is cut while it is closed.">Test relay (5 x 5 s)</button>
       <span class="note" id="txRelayMsg"></span></div>
-    <div class="note" id="txOutNote">Tones come from Si5351 CLK2 (any band 1.8-30 MHz): CLK2 &rarr; LPF &rarr; PA &rarr; T/R relay (GPIO26) &rarr; antenna. A low-pass filter after the PA is required.</div>
+    <div class="note txonly" id="txOutNote">Tones come from Si5351 CLK2 (any band 1.8-30 MHz): CLK2 &rarr; LPF &rarr; PA &rarr; T/R relay (GPIO26) &rarr; antenna. A low-pass filter after the PA is required.</div>
    </div>
 
    <div class="card">
@@ -738,6 +740,7 @@ async function fetchStatus() {
   applyStatus(d);
 }
 
+let hasTx = false;
 function applyStatus(d) {
   setOnline(true);
   curStatus = d;
@@ -745,6 +748,11 @@ function applyStatus(d) {
   const isFt4 = mode === 'FT4', dig = mode === 'FT8' || isFt4;
   const wsprView = mode === 'USB' && parseFloat(d.freq_khz) >= 14095 && parseFloat(d.freq_khz) <= 14097;   // WSPR 20 m: keep the transmit section
   document.body.classList.toggle('dig', dig || wsprView);
+  // firmware capability: a receive-only build reports tx:false and every .txonly element stays hidden
+  if (hasTx !== (d.tx !== false)) { hasTx = d.tx !== false; document.body.classList.toggle('notx', !hasTx); renderTrafficTable(); }
+  const adcPin = d.adc_pin >= 0 && d.adc_pin !== undefined ? d.adc_pin : 34;
+  T('audAna', 'Analog – line out → ADC GPIO' + adcPin);
+  $('audDig').hidden = $('audDig').disabled = d.dig_ok === false;
 
   T('boxLocalTime', d.local_time || '--:--');
   T('hdrSum', `${d.freq_khz} ${d.unit || 'kHz'} · ${mode}`);
@@ -783,7 +791,7 @@ function applyStatus(d) {
   if (d.brt !== undefined) { T('brtValTxt', d.brt); V('brtSlider', d.brt); }
   if (d.theme_name) T('themeNameTxt', d.theme_name);
 
-  T('volLbl', dig ? 'Decoder level (GPIO34)' : 'Volume');
+  T('volLbl', dig ? 'Decoder level (GPIO' + adcPin + ')' : 'Volume');
   T('volNote', dig && d.web_audio ? 'decoding paused (web audio) ·' : '');
   V('volSlider', d.volume);
   if ($('volSlider') !== document.activeElement) T('volText', d.volume);
@@ -963,7 +971,7 @@ function renderTrafficTable() {
   }
   $('trafficBody').innerHTML = rows.map(m => {
     const isCq = (m.msg || '').startsWith('CQ ');
-    return `<tr${isCq ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrColor(m.snr)};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}${isCq && m.call && m.call !== txState.call ? ` <button class="s" data-answer="${esc(m.call)}" ${txState.enabled ? '' : 'disabled '}title="Answer this CQ from the ESP32 (needs TX enabled in Settings)">Answer</button>` : ''}</td></tr>`;
+    return `<tr${isCq ? ' class="cq"' : ''}><td class="mono">${esc(m.time)}</td><td class="mono" style="color:${snrColor(m.snr)};font-weight:700">${m.snr > 0 ? '+' : ''}${m.snr}</td><td class="mono">${Number(m.dt).toFixed(1)}</td><td class="mono">${m.freq}</td><td><span class="call mono" data-call="${esc(m.call)}">${esc(m.call) || '--'}</span></td><td class="mono">${esc(m.msg)}${hasTx && isCq && m.call && m.call !== txState.call ? ` <button class="s" data-answer="${esc(m.call)}" ${txState.enabled ? '' : 'disabled '}title="Answer this CQ from the ESP32 (needs TX enabled in Settings)">Answer</button>` : ''}</td></tr>`;
   }).join('');
 }
 $('trafficBody').addEventListener('click', e => {
@@ -1556,6 +1564,11 @@ function renderTx(st) {
   const enabledChanged = !!txState.enabled !== !!st.enabled;
   txState = st;
   if (enabledChanged) renderTrafficTable();   // its Answer buttons follow the TX switch
+  if (st.tx === false) {   // receive-only: just the station settings and the WSPR spots
+    if (!txFormLoaded && !txDirty) { $('txCall').value = st.call; $('txGrid').value = st.grid; txFormLoaded = true; }
+    wsprRxRender(st);
+    return;
+  }
   if (!txFormLoaded && !txDirty) {
     $('txCall').value = st.call; $('txGrid').value = st.grid; $('txAudio').value = st.audio; $('txOff').value = st.offset ? '1' : '0'; $('txOLo').value = st.olo; $('txOHi').value = st.ohi;
     $('txPin').value = String(st.pin); $('txSrc').value = String(st.src); $('txDrv').value = String(st.drv); $('txPpm').value = st.ppm;
@@ -1611,6 +1624,9 @@ function wsprRender(st) {
     : `${st.call} ${st.grid} · 14.0971 MHz · T/R relay ${st.relay ? 'TX' : 'RX'}` + (st.enabled ? '' : ' · turn Enable TX on'));
   C('wsprPlan', ok ? 'plan' : 'plan warn');
   $('wsprBtn').disabled = !ok || !st.enabled || busy;
+  wsprRxRender(st);
+}
+function wsprRxRender(st) {
   const rx = (st.wspr_rx || []).join('\n') || 'No WSPR spots received yet (time, SNR, dT, kHz, call, grid, dBm)';
   if ($('wsprRx').textContent !== rx) $('wsprRx').textContent = rx;
 }
@@ -1642,7 +1658,8 @@ async function txBand(khz) {
   await sendCtrl('freq', { freq: khz, unit: 'khz' });
   await new Promise(r => setTimeout(r, 2500));
   try { await txFetch(); } catch (e) {}
-  const ok = txState.offset ? (txState.rf || 0) > khz * 1000 : Math.abs((txState.rf || 0) - (khz * 1000 + (parseInt($('txAudio').value) || 1500))) < 1;
+  const ok = !hasTx ? Math.abs(parseFloat(curStatus.freq_khz) - khz) < 0.5
+    : txState.offset ? (txState.rf || 0) > khz * 1000 : Math.abs((txState.rf || 0) - (khz * 1000 + (parseInt($('txAudio').value) || 1500))) < 1;
   T('txNote', ok ? khz + ' kHz ready' : 'tune failed, check the radio');
   setTimeout(() => T('txNote', ''), 4000);
 }
@@ -1772,7 +1789,7 @@ function renderHeardMap() {
   });
 }
 setInterval(() => {
-  if (!isDigital() || document.hidden) return;
+  if (!hasTx || !isDigital() || document.hidden) return;
   // 5 minutes after the ESP32 sent a CQ, ask who heard it
   const cq = (txState.events || []).find(e => /TX CQ/.test(e));
   if (heardLastCq === null) heardLastCq = cq || '';
